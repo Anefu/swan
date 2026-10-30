@@ -1,0 +1,13 @@
+{
+  "name": "persona-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @ph/server --filter @ph/web dev",
+    "build": "pnpm --filter @ph/web build",
+    "start": "pnpm --filter @ph/server start",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@10.17.1",
+  "engines": { "node": ">=22.12" }
+}

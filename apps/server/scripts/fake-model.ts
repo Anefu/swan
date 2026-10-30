@@ -1,0 +1,78 @@
+// Scripted OpenAI-compatible model for exercising the harness without an API key.
+//
+//   pnpm --filter @ph/server exec tsx scripts/fake-model.ts        # listens on 127.0.0.1:8099
+//
+// Add to ~/.persona-harness/config.yaml:   providers: { fake: { type: openai, baseURL: http://127.0.0.1:8099/v1 } }
+// and set a persona's model to { provider: fake, id: scripted }.
+//
+// Each user message picks a script by keyword (see SCRIPTS); every model turn after it plays the
+// next step. Steps are tool calls or a final text reply.
+import http from "node:http";
+
+type Step = { text?: string; tool?: string; args?: Record<string, unknown> };
+
+const SCRIPTS: Record<string, Step[]> = {
+  isolation: [
+    { text: "Checking what the sandbox can see.", tool: "bash", args: { command: "id; echo; ls -la /workspace /workspace/*; echo; ls /Users 2>&1; ls ~ 2>&1 | head; cat /etc/hostname" } },
+    { tool: "bash", args: { command: "curl -s -m 8 -o /dev/null -w 'example.com via proxy: %{http_code}\\n' https://example.com; curl -s -m 5 --noproxy '*' https://1.1.1.1 >/dev/null 2>&1 && echo 'direct: LEAK' || echo 'direct (no proxy): blocked'; getent hosts example.com && echo 'dns: LEAK' || echo 'dns: none'" } },
+    { tool: "bash", args: { command: "env | grep -E '^(DEMO_TOKEN|HTTPS_PROXY)=' | sed -E 's/(:\\/\\/[^:]+:)[^@]+@/\\1***@/'" } },
+    { text: "Isolation checks done." },
+  ],
+  inject: [
+    { text: "Calling an echo service with the placeholder token.", tool: "bash", args: { command: "curl -s -m 15 -H \"Authorization: Bearer $DEMO_TOKEN\" https://httpbin.org/headers" } },
+    { text: "Done — the response above shows what the upstream received (long secrets are redacted back to the placeholder)." },
+  ],
+  write: [
+    { tool: "write_file", args: { path: "/workspace/demo/hello.txt", content: "written from the sandbox\n" } },
+    { tool: "bash", args: { command: "cat /workspace/demo/hello.txt && rm /workspace/demo/hello.txt && echo removed" } },
+    { text: "Wrote, read back and removed the file." },
+  ],
+  skill: [
+    { tool: "load_skill", args: { name: "repo-tour" } },
+    { tool: "bash", args: { command: "bash /skills/repo-tour/scripts/summarize.sh /workspace/demo" } },
+    { text: "That is the repo tour." },
+  ],
+  slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
+};
+
+type Msg = { role: string; content?: string | null; tool_calls?: unknown[] };
+
+function pick(messages: Msg[]): Step {
+  let lastUser = -1;
+  messages.forEach((m, i) => {
+    if (m.role === "user") lastUser = i;
+  });
+  const text = String(messages[lastUser]?.content ?? "").toLowerCase();
+  const key = Object.keys(SCRIPTS).find((k) => text.includes(k));
+  if (!key) return { text: `Scripted model. Say one of: ${Object.keys(SCRIPTS).join(", ")}.` };
+  const done = messages.slice(lastUser + 1).filter((m) => m.role === "assistant").length;
+  return SCRIPTS[key][done] ?? { text: "(script finished)" };
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method === "GET" && req.url?.endsWith("/models")) {
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [{ id: "scripted", object: "model" }] }));
+    return;
+  }
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", async () => {
+    const { messages } = JSON.parse(body || "{}") as { messages: Msg[] };
+    const step = pick(messages ?? []);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const send = (delta: unknown, finish: string | null = null) =>
+      res.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
+    if (step.text) {
+      for (const word of step.text.split(/(?<= )/)) {
+        send({ content: word });
+        await new Promise((r) => setTimeout(r, 15));
+      }
+    }
+    if (step.tool) {
+      send({ tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: "function", function: { name: step.tool, arguments: JSON.stringify(step.args ?? {}) } }] });
+      send({}, "tool_calls");
+    } else send({}, "stop");
+    res.end("data: [DONE]\n\n");
+  });
+});
+server.listen(8099, "127.0.0.1", () => console.log("fake model on http://127.0.0.1:8099/v1"));

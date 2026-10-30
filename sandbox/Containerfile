@@ -1,0 +1,36 @@
+# Sandbox image for persona-harness sessions (and the relay).
+# Built by the harness with its local egress CA baked in; the tag includes the CA fingerprint.
+FROM docker.io/library/node:22-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl file git jq less openssh-client procps python3 python3-pip \
+      python3-venv ripgrep socat tree unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m pip install --no-cache-dir --break-system-packages uv \
+ && git config --system safe.directory '*' \
+ && git config --system init.defaultBranch main
+
+# Trust the harness CA (used only for hosts that need credential injection).
+COPY harness-ca.crt /usr/local/share/ca-certificates/persona-harness.crt
+RUN update-ca-certificates
+
+# The node image ships uid 1000 as "node"; rename it so prompts and paths read naturally.
+RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
+ && mkdir -p /workspace /skills && chown agent:agent /workspace
+
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/persona-harness.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    UV_NATIVE_TLS=1 \
+    NODE_USE_ENV_PROXY=1 \
+    npm_config_update_notifier=false \
+    npm_config_fund=false \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+USER agent
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

@@ -1,0 +1,28 @@
+name: GitHub helper
+description: Talks to GitHub through an MCP server; the token stays outside the sandbox
+model:
+  provider: anthropic
+  id: claude-opus-5-5
+  effort: medium
+instructions: |
+  You help with GitHub issues and pull requests. Ask before creating or changing anything.
+folders:
+  - path: ~/Documents/persona-harness/examples/workspace
+    mount: /workspace/demo
+    mode: ro
+skills: []
+mcpServers:
+  # stdio server: runs inside the sandbox via npx and only ever sees a placeholder token.
+  github:
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "{{secret:GITHUB_TOKEN}}"
+credentials: [GITHUB_TOKEN]
+network:
+  allow: [registry.npmjs.org]
+permissions:
+  default: ask
+  allow: [read_file, list_dir, glob, grep, "mcp__github__get_*", "mcp__github__list_*", "mcp__github__search_*"]
+  ask: [bash, "mcp__github__create_*", "mcp__github__update_*", "mcp__github__add_*"]
+  deny: ["mcp__github__delete_*", "mcp__github__merge_*", "mcp__github__push_*"]

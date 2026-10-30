@@ -1,0 +1,25 @@
+name: Demo
+description: Small sandboxed workspace to try the harness
+model:
+  provider: anthropic
+  id: claude-opus-5-5
+  effort: high
+instructions: |
+  You are a careful software engineer. Explain what you are about to do before risky steps.
+folders:
+  - path: ~/Documents/persona-harness/examples/workspace
+    mount: /workspace/demo
+    mode: rw
+skills: [repo-tour]
+mcpServers: {}
+credentials: []
+network:
+  allow: [pypi.org, files.pythonhosted.org, registry.npmjs.org]
+permissions:
+  default: ask
+  allow: [read_file, list_dir, glob, grep, load_skill, "bash(ls*)", "bash(cat *)", "bash(git status*)", "bash(git diff*)", "bash(git log*)"]
+  ask: [bash, write_file, edit_file]
+  deny: []
+sandbox:
+  cpus: 2
+  memory: 2g
