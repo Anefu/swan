@@ -1,0 +1,5 @@
+#!/bin/sh
+# Reference connection wrapper for the AWS stub. Swan runs it with its own working directory,
+# so resolve everything relative to this file.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$DIR/node_modules/.bin/tsx" "$DIR/src/wrapper.ts" "$@"
