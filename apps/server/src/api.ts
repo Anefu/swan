@@ -5,7 +5,8 @@ import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
+import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
+import type { AttachmentStore } from "./attachments.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { MemoryStore } from "./memory.js";
 import type { UsageLedger } from "./usage.js";
@@ -34,6 +35,7 @@ export interface ApiDeps {
   memory: MemoryStore;
   usage: UsageLedger;
   catalog: ModelCatalog;
+  attachments: AttachmentStore;
 }
 
 class HttpError extends Error {
@@ -68,7 +70,7 @@ export class Hub {
 }
 
 export async function startApi(d: ApiDeps, hub: Hub) {
-  const app = Fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 });
+  const app = Fastify({ logger: false, bodyLimit: 30 * 1024 * 1024 }); // base64 attachments up to 20 MB
   await app.register(websocket);
   // Accept an empty JSON body (clients often send the header on bodiless POSTs).
   app.removeContentTypeParser("application/json");
@@ -233,8 +235,36 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     return { session: s.summary, items: s.items };
   });
   app.get("/api/sessions/:id/tools", async (req: P) => session(req.params.id).tools());
-  app.post("/api/sessions/:id/messages", async (req: FastifyRequest<{ Params: { id: string }; Body: { text: string } }>) => {
-    await session(req.params.id).sendMessage(String(req.body?.text ?? ""));
+  app.post("/api/sessions/:id/attachments", async (req: FastifyRequest<{ Params: { id: string }; Body: { name: string; mediaType: string; data: string } }>) => {
+    session(req.params.id);
+    return d.attachments.save(req.params.id, req.body ?? ({} as never));
+  });
+  app.get("/api/personas/:id/attachments", async (req: P) => {
+    persona(req.params.id);
+    const out: (AttachmentMeta & { sessionId: string; itemId: string; ts: string })[] = [];
+    for (const sum of d.sessions.list(req.params.id)) {
+      for (const it of d.sessions.get(sum.id)?.items ?? []) {
+        if (it.kind === "user" && it.attachments) for (const a of it.attachments) out.push({ ...a, sessionId: sum.id, itemId: it.id, ts: it.ts });
+      }
+    }
+    return out.sort((a, b) => b.ts.localeCompare(a.ts));
+  });
+  app.get("/api/sessions/:id/attachments/:attId/file", async (req: P<{ id: string; attId: string }>, reply) => {
+    session(req.params.id);
+    const { meta, data } = await d.attachments.get(req.params.id, req.params.attId);
+    // Only images and PDFs render inline; anything else (HTML, SVG, scripts) downloads, so an
+    // uploaded file can never run inside Swan's own origin.
+    const inline = meta.kind === "image" || meta.kind === "pdf";
+    return reply
+      .header("content-type", inline ? meta.mediaType : "application/octet-stream")
+      .header("content-disposition", `${inline ? "inline" : "attachment"}; filename="${meta.name.replace(/"/g, "")}"`)
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
+      .header("cache-control", "private, max-age=3600")
+      .send(data);
+  });
+  app.post("/api/sessions/:id/messages", async (req: FastifyRequest<{ Params: { id: string }; Body: { text: string; attachments?: string[] } }>) => {
+    await session(req.params.id).sendMessage(String(req.body?.text ?? ""), Array.isArray(req.body?.attachments) ? req.body.attachments.map(String) : []);
     return { ok: true };
   });
   app.post("/api/sessions/:id/interrupt", async (req: P) => {

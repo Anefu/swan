@@ -19,8 +19,10 @@ credentials it may use, a network allowlist and tool permissions.
 | One conversation per persona | Long conversations roll over into new context epochs with a structured checkpoint; nothing is rewritten, and `history_search` recovers older turns |
 | Memory | Persona-private records (preferences, decisions, observations, procedures, episodes) the agent reads and proposes through host-side tools; `/dream` consolidates them |
 | Slash commands | `/dream`, `/stop`, `/usage`, plus `/<skill>` for every skill on the persona |
-| Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, checkpoint, dream), context occupancy, estimated cost where rates are known |
-| UI | Swan: persona dropdown, one conversation column, Settings (persona and global) and Memory & Usage panes, Network activity view |
+| Sub-agents | An `agent` tool runs focused sub-loops (in parallel when the model calls it several times) with the same sandbox and permissions |
+| Attachments | Paperclip, paste or drag-and-drop; files are copied into the sandbox at `/home/agent/attachments/`, images and PDFs also go to the model |
+| Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, subagent, checkpoint, dream), context occupancy, estimated cost where rates are known |
+| UI | Swan: persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |
 
 Design and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -65,6 +67,7 @@ Vite prints its port (5173, or the next free one).
 | `sessions/<id>.json` | Transcripts; a stopped session resumes when you message it |
 | `audit/egress-YYYY-MM-DD.jsonl` | Every outbound request: host, path, decision, credential names (never values) |
 | `audit/usage-YYYY-MM-DD.jsonl` | Every model request: persona, purpose, tokens, estimated cost or Copilot credits |
+| `attachments/<session>/` | Uploaded attachments and their metadata |
 | `memory/<persona>.json` | Persona memory records, change history and checkpoints; never mounted into a sandbox |
 | `ca/` | Local CA used to terminate TLS for credential hosts; trusted only inside the sandbox image |
 | `copilot-runtime/` | Working and state directory of the Copilot SDK runtime (copilot provider only) |

@@ -1,5 +1,7 @@
 import type {
   ApprovalBody,
+  AttachmentMeta,
+  PersonaAttachment,
   ChatItem,
   Checkpoint,
   Effort,
@@ -161,7 +163,8 @@ export const api = {
     request<SessionSummary>("POST", "/api/sessions", title ? { personaId, title } : { personaId }),
   session: (id: string) => request<{ session: SessionSummary; items: ChatItem[] }>("GET", `/api/sessions/${enc(id)}`),
   sessionTools: (id: string) => request<ToolSummary[]>("GET", `/api/sessions/${enc(id)}/tools`),
-  sendMessage: (id: string, text: string) => request<Ok>("POST", `/api/sessions/${enc(id)}/messages`, { text }),
+  sendMessage: (id: string, text: string, attachments?: string[]) =>
+    request<Ok>("POST", `/api/sessions/${enc(id)}/messages`, attachments && attachments.length ? { text, attachments } : { text }),
   interrupt: (id: string) => request<Ok>("POST", `/api/sessions/${enc(id)}/interrupt`),
   approve: (id: string, toolUseId: string, body: ApprovalBody) =>
     request<Ok>("POST", `/api/sessions/${enc(id)}/approvals/${enc(toolUseId)}`, body),
@@ -207,7 +210,50 @@ export const api = {
   memoryHistory: (personaId: string) => request<MemoryChange[]>("GET", `/api/personas/${enc(personaId)}/memory-history`),
   checkpoint: (personaId: string) => request<Checkpoint | null>("GET", `/api/personas/${enc(personaId)}/checkpoint`),
 
+  personaAttachments: (personaId: string) => request<PersonaAttachment[]>("GET", `/api/personas/${enc(personaId)}/attachments`),
+
   usage: (personaId: string, period: "today" | "all") =>
     request<UsageReport>("GET", `/api/usage?personaId=${enc(personaId)}&period=${period}`),
   allowance: (provider: string) => request<ProviderAllowance>("GET", `/api/providers/${enc(provider)}/allowance`),
 };
+
+/** Upload one attachment with progress (fetch cannot report upload progress). */
+export function uploadAttachment(
+  sessionId: string,
+  body: { name: string; mediaType: string; data: string },
+  onProgress: (fraction: number) => void,
+): { promise: Promise<AttachmentMeta>; abort: () => void } {
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise<AttachmentMeta>((resolve, reject) => {
+    xhr.open("POST", `/api/sessions/${encodeURIComponent(sessionId)}/attachments`);
+    xhr.setRequestHeader("x-ph-token", apiToken);
+    xhr.setRequestHeader("content-type", "application/json");
+    xhr.setRequestHeader("accept", "application/json");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* not JSON */
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data) resolve(data as AttachmentMeta);
+      else {
+        const msg =
+          data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `Upload failed (HTTP ${xhr.status})`;
+        reject(new ApiError(msg, xhr.status, false));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError("Upload failed: cannot reach the Swan server", 0, true));
+    xhr.onabort = () => reject(new ApiError("Upload cancelled", 0, false));
+    xhr.send(JSON.stringify(body));
+  });
+  return { promise, abort: () => xhr.abort() };
+}
+
+/** Inline URL for an attachment's bytes (images and PDFs open inline; others download). */
+export function attachmentFileUrl(sessionId: string, attachmentId: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/file?token=${encodeURIComponent(apiToken)}`;
+}

@@ -6,7 +6,7 @@ import { sessionStatusLine } from "../status";
 import { cls, useNow } from "../util";
 import { Composer } from "./Composer";
 import { IconArrowRight, IconWarning } from "./icons";
-import { AssistantText, Dots, HarnessReceipt, NoticeLine, Thinking, ToolGroup, ToolLine, UserMessage } from "./Items";
+import { AgentLine, AssistantText, Dots, HarnessReceipt, NoticeLine, Thinking, ToolGroup, ToolLine, UserMessage } from "./Items";
 import { Spinner } from "./ui";
 
 /** Remembered scroll offsets per persona. */
@@ -37,6 +37,9 @@ export function Conversation() {
   const contentRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
   const oldestPendingId = useMemo(() => {
     for (const it of items) if (it.kind === "tool_call" && it.status === "pending_approval") return it.id;
@@ -158,7 +161,38 @@ export function Conversation() {
   }
 
   return (
-    <div className="convo">
+    <div
+      className="convo"
+      onDragEnter={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDragging(true);
+      }}
+      onDragOver={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!hasFiles(e)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragging(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length) actions.addAttachments(persona.id, files);
+      }}
+    >
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          <span>Drop files to attach them to your next message</span>
+        </div>
+      )}
       <div className="convo-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="column" ref={contentRef}>
           <h1 className="convo-title">{title}</h1>
@@ -216,7 +250,17 @@ export function Conversation() {
   );
 }
 
-function renderItems(items: ChatItem[], sid: string, persona: Parameters<typeof ToolLine>[0]["persona"], oldestPendingId: string | null) {
+function renderItems(all: ChatItem[], sid: string, persona: Parameters<typeof ToolLine>[0]["persona"], oldestPendingId: string | null) {
+  // Sub-agent calls (parentId) leave the main flow and render under their agent line.
+  const childrenOf = new Map<string, ToolItem[]>();
+  const items: ChatItem[] = [];
+  for (const it of all) {
+    if (it.kind === "tool_call" && it.parentId) {
+      const list = childrenOf.get(it.parentId) ?? [];
+      list.push(it as ToolItem);
+      childrenOf.set(it.parentId, list);
+    } else items.push(it);
+  }
   const out: ReactNode[] = [];
   let i = 0;
   while (i < items.length) {
@@ -224,18 +268,33 @@ function renderItems(items: ChatItem[], sid: string, persona: Parameters<typeof 
     if (it.kind === "tool_call") {
       const run: ToolItem[] = [];
       while (i < items.length && items[i].kind === "tool_call") run.push(items[i++] as ToolItem);
-      if (run.length >= 2 && run.every((t) => FINISHED.has(t.status))) {
-        out.push(<ToolGroup key={`g-${run[0].id}`} items={run} sessionId={sid} persona={persona} />);
+      const settled = (t: ToolItem) =>
+        FINISHED.has(t.status) && !(childrenOf.get(t.id) ?? []).some((c) => !FINISHED.has(c.status));
+      if (run.length >= 2 && run.every(settled)) {
+        out.push(<ToolGroup key={`g-${run[0].id}`} items={run} sessionId={sid} persona={persona} childrenOf={childrenOf} />);
       } else {
         for (const t of run)
-          out.push(<ToolLine key={t.id} item={t} sessionId={sid} persona={persona} promptOpen={t.id === oldestPendingId} />);
+          out.push(
+            t.name === "agent" ? (
+              <AgentLine
+                key={t.id}
+                item={t}
+                sessionId={sid}
+                persona={persona}
+                subItems={childrenOf.get(t.id) ?? []}
+                oldestPendingId={oldestPendingId}
+              />
+            ) : (
+              <ToolLine key={t.id} item={t} sessionId={sid} persona={persona} promptOpen={t.id === oldestPendingId} />
+            ),
+          );
       }
       continue;
     }
     const next = items[i + 1];
     switch (it.kind) {
       case "user":
-        out.push(<UserMessage key={it.id} item={it} />);
+        out.push(<UserMessage key={it.id} item={it} sessionId={sid} />);
         break;
       case "assistant_text":
         out.push(<AssistantText key={it.id} item={it} />);

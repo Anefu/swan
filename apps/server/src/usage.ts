@@ -4,7 +4,7 @@ import type { UsageReport, UsageTotals } from "@ph/shared";
 import { paths } from "./settings.js";
 import { TypedEmitter, nowIso, randomId } from "./util.js";
 
-export type UsagePurpose = "foreground" | "checkpoint" | "dream";
+export type UsagePurpose = "foreground" | "subagent" | "checkpoint" | "dream";
 
 export interface UsageEvent {
   id: string;

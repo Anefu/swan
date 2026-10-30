@@ -63,6 +63,9 @@ const SettingsSchema = z.object({
   bashTimeoutMs: z.number().int().default(120_000),
   contextLimitTokens: z.number().int().default(200_000), // assumed model context when the provider does not say
   rolloverAt: z.number().min(0.3).max(0.95).default(0.75), // share of the context that triggers a new epoch
+  // What opens a new epoch: "full" structured checkpoint + recent events, "minimal" continuity
+  // checkpoint + short tail, or "retrieval" (a continuation pointer only; the agent pulls history).
+  rolloverStrategy: z.enum(["full", "minimal", "retrieval"]).default("full"),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

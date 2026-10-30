@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ApprovalBody, ChatItem, Checkpoint, FolderMount, PendingApproval, ServerEvent, SessionStatus, SessionSummary, SlashCommand, ToolCallStatus, ToolSummary } from "@ph/shared";
+import type { AttachmentMeta } from "@ph/shared";
+import type { AttachmentStore } from "../attachments.js";
 import type { MemoryStore } from "../memory.js";
 import type { PersonaStore } from "../personas.js";
 import type { EgressProxy } from "../proxy/egress.js";
@@ -14,7 +16,10 @@ import { SessionMcp } from "./mcp.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { PermissionPolicy } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
-import { builtinTools, skillTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
+import { z } from "zod";
+import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
+
+const MAX_SUBAGENT_TURNS = 60;
 
 export interface SessionDeps {
   settings: Settings;
@@ -26,6 +31,7 @@ export interface SessionDeps {
   providers: ProviderRegistry;
   memory: MemoryStore;
   usage: UsageLedger;
+  attachments: AttachmentStore;
   broadcast: (ev: ServerEvent) => void;
   onApprovalsChanged: () => void;
 }
@@ -103,6 +109,9 @@ function systemPrompt(o: {
     "- Some tool calls require the user's approval. If a call is denied, adjust your plan instead of retrying the same call.",
     "- The user may send a new message while you work; it arrives with your tool results. Take it into account before your next step.",
     "",
+    "# Working in parallel",
+    "You can delegate with the `agent` tool: it starts a sub-agent with your tools, sandbox and permissions, which works on its own and returns a report. When a task splits into independent parts (reading several areas of a codebase, researching several sources, checking separate hypotheses, editing unrelated files), launch several `agent` calls in the same response so they run in parallel, then combine their reports. Give each sub-agent a complete, self-contained brief: it does not see this conversation. Do small or tightly coupled work yourself.",
+    "",
     "# Memory",
     "This is one long-running conversation. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
   );
@@ -122,7 +131,7 @@ function systemPrompt(o: {
 const itemLine = (it: ChatItem): string => {
   switch (it.kind) {
     case "user":
-      return `[${it.id}] User: ${it.text}`;
+      return `[${it.id}] User: ${it.text}${it.attachments?.length ? ` [attached: ${it.attachments.map((a) => a.name).join(", ")}]` : ""}`;
     case "assistant_text":
       return `[${it.id}] Assistant: ${it.text}`;
     case "tool_call":
@@ -161,7 +170,7 @@ export class Session {
   private liveTools = new Map<string, ToolDef>();
   private workdir = "/workspace";
   private starting: Promise<void> | null = null;
-  private queue: { text: string; receiptId?: string }[] = [];
+  private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[] }[] = [];
   private loopRunning = false;
   private dreaming = false;
   private abort: AbortController | null = null;
@@ -477,6 +486,7 @@ export class Session {
       ...builtinTools(),
       ...(cfg.skills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
+      this.agentTool(),
       ...(await this.mcp.tools()),
     ];
     this.liveTools = new Map(tools.map((t) => [t.name, t]));
@@ -634,12 +644,17 @@ export class Session {
     const since = old.startedAt;
     const epochItems = this.items.filter((it) => it.ts >= since);
     const transcript = truncateMiddle(epochItems.map(itemLine).filter(Boolean).join("\n\n"), 150_000);
+    const strategy = this.deps.settings.rolloverStrategy;
+    const ask =
+      strategy === "minimal"
+        ? `Write a SMALL continuity checkpoint as JSON with exactly these keys: "objective" (the active goal), "constraints" (explicit user constraints, verbatim), "openQuestions" (unfinished work, one line each), "completed" (artifact references only: file paths, commits, URLs), "nextAction" (one concrete next step), "sources" (event ids to retrieve for details). Do not summarise rationale, attempts or tool output: the agent will retrieve those from history. Arrays of strings except objective and nextAction.`
+        : `Write the checkpoint for ALL unfinished work as JSON with exactly these keys: "objective" (the user's goal and acceptance criteria), "constraints" (explicit user constraints, verbatim where possible), "decisions" (with rationale), "completed" (work done, with file paths/artifacts), "failures" (what failed and test evidence), "openQuestions", "nextAction" (one concrete next step), "sources" (event ids that support the above). Arrays of strings except objective and nextAction.`;
     let cp: Checkpoint | null = null;
-    for (let attempt = 0; attempt < 2 && !cp; attempt++) {
+    for (let attempt = 0; attempt < 2 && !cp && strategy !== "retrieval"; attempt++) {
       try {
         const { text } = await this.auxCall(
           "You write checkpoints that let an agent continue a long task in a fresh context. Output only one JSON object, no prose.",
-          `Previous checkpoint (may be null):\n${JSON.stringify(prev)}\n\nEvents since then (ids in brackets):\n${transcript}\n\nWrite the checkpoint for ALL unfinished work as JSON with exactly these keys: "objective" (the user's goal and acceptance criteria), "constraints" (explicit user constraints, verbatim where possible), "decisions" (with rationale), "completed" (work done, with file paths/artifacts), "failures" (what failed and test evidence), "openQuestions", "nextAction" (one concrete next step), "sources" (event ids that support the above). Arrays of strings except objective and nextAction.`,
+          `Previous checkpoint (may be null):\n${JSON.stringify(prev)}\n\nEvents since then (ids in brackets):\n${transcript}\n\n${ask}`,
           "checkpoint",
         );
         const j = parseJson(text);
@@ -663,11 +678,11 @@ export class Session {
       }
     }
     if (cp) await this.deps.memory.addCheckpoint(this.personaId, cp);
-    else this.notice("warn", "Could not write a structured checkpoint; the new context carries the recent conversation instead. Earlier turns stay searchable with history_search.");
+    else if (strategy !== "retrieval") this.notice("warn", "Could not write a structured checkpoint; the new context carries the recent conversation instead. Earlier turns stay searchable with history_search.");
 
     // The carried tail gets at most a quarter of the context (about 3.5 characters per token).
-    const tailChars = Math.min(16_000, Math.floor(this.deps.settings.contextLimitTokens * 0.25 * 3.5));
-    const tail = truncateMiddle(this.items.slice(-24).map(itemLine).filter(Boolean).join("\n\n"), tailChars);
+    const tailChars = Math.min(strategy === "full" ? 16_000 : 4_000, Math.floor(this.deps.settings.contextLimitTokens * 0.25 * 3.5));
+    const tail = truncateMiddle(this.items.slice(strategy === "full" ? -24 : -6).map(itemLine).filter(Boolean).join("\n\n"), tailChars);
     const parts = [`[Carried over from earlier in this conversation — context ${old.n + 1} starts here (${reason}).]`];
     if (cp) {
       const list = (h: string, xs: string[]) => (xs.length ? `${h}:\n${xs.map((x) => `- ${x}`).join("\n")}` : "");
@@ -683,10 +698,20 @@ export class Session {
         cp.sources.length ? `Sources: ${cp.sources.join(", ")}` : "",
       );
     }
-    parts.push("## Most recent events", tail, "[End of carried-over context.]");
+    if (strategy === "retrieval") {
+      const lastUser = [...this.items].reverse().find((it) => it.kind === "user");
+      parts.push(
+        "Earlier turns of this conversation are no longer in your context; nothing has been summarised. Before continuing, use history_search and history_read to recover what you need verbatim: the user's goal, their constraints and corrections, and the state of unfinished work.",
+        lastUser ? `The latest user message is event ${lastUser.id}.` : "",
+        "[End of carried-over context.]",
+      );
+    } else parts.push("## Most recent events", tail, "Earlier details (rationale, attempts, tool output) are in history: use history_search / history_read rather than guessing.", "[End of carried-over context.]");
     this.carry = parts.filter(Boolean).join("\n\n");
     await this.openEpoch();
-    r.done(cp ? `Context ${old.n + 1}: checkpoint saved (${reason})` : `Context ${old.n + 1}: recent events carried over (${reason})`, cp ? "done" : "error");
+    r.done(
+      strategy === "retrieval" ? `Context ${old.n + 1}: history pointer only (${reason})` : cp ? `Context ${old.n + 1}: ${strategy} checkpoint saved (${reason})` : `Context ${old.n + 1}: recent events carried over (${reason})`,
+      cp || strategy === "retrieval" ? "done" : "error",
+    );
     await this.persist();
   }
 
@@ -719,20 +744,43 @@ export class Session {
     ];
   }
 
-  async sendMessage(text: string) {
+  async sendMessage(text: string, attachmentIds: string[] = []) {
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("empty message");
-    if (trimmed.startsWith("/")) return this.command(trimmed);
-    this.enqueue(trimmed, trimmed);
+    if (!trimmed && !attachmentIds.length) throw new Error("empty message");
+    if (trimmed.startsWith("/") && !attachmentIds.length) return this.command(trimmed);
+    if (attachmentIds.length > 20) throw new Error("at most 20 attachments per message");
+    const files = await Promise.all(attachmentIds.map((id) => this.deps.attachments.get(this.id, id)));
+    if (!files.length) return this.enqueue(trimmed, trimmed);
+    // Images reach the model as images and PDFs as documents; every file is also in the sandbox.
+    const blocks: ContentBlockParam[] = [];
+    for (const f of files) {
+      if (f.meta.kind === "image") blocks.push({ type: "image", source: { type: "base64", media_type: f.meta.mediaType as "image/png", data: f.data.toString("base64") } });
+      else if (f.meta.kind === "pdf") blocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data.toString("base64") }, title: f.meta.name });
+    }
+    const list = files.map((f) => `- ${f.meta.name} (${f.meta.mediaType}, ${f.meta.size} bytes) at ${f.meta.sandboxPath}`).join("\n");
+    blocks.push({ type: "text", text: `${trimmed || "(see attachments)"}\n\nAttached files, also available in the sandbox:\n${list}` });
+    this.enqueue(trimmed, blocks, files);
   }
 
-  private enqueue(display: string, content: string) {
-    this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: display });
+  /** Copy attachments into the running container so tools can open them. */
+  private async placeFiles(files: { meta: AttachmentMeta; data: Buffer }[] | undefined) {
+    if (!files?.length || !this.container) return;
+    for (const f of files) {
+      const r = await this.deps.runtime.exec(this.container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && base64 -d > "$1"', "sh", f.meta.sandboxPath], {
+        input: f.data.toString("base64"),
+        timeoutMs: 60_000,
+      });
+      if (r.code !== 0) this.notice("warn", `Could not copy ${f.meta.name} into the sandbox: ${r.stderr.trim()}`);
+    }
+  }
+
+  private enqueue(display: string, content: string | ContentBlockParam[], files?: { meta: AttachmentMeta; data: Buffer }[]) {
+    this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: display, ...(files?.length ? { attachments: files.map((f) => f.meta) } : {}) });
     if (this.summary.title === "New conversation" || this.summary.title === "New session")
       this.summary = { ...this.summary, title: display.replace(/\s+/g, " ").slice(0, 60) };
     const steering = this.loopRunning;
     const receiptId = steering ? this.receipt("steer", "Queued", "Will steer the next step").id : undefined;
-    this.queue.push({ text: content, receiptId });
+    this.queue.push({ text: content, receiptId, files });
     this.touch();
     if (!this.loopRunning) void this.runLoop();
   }
@@ -802,6 +850,7 @@ export class Session {
         if (q.receiptId) this.finishReceipt(q.receiptId, "Read before the next step", "done");
         this.touch();
         await this.prepareEpoch();
+        await this.placeFiles(q.files);
         this.pushUser(q.text);
         await this.agentTurns();
       }
@@ -931,7 +980,12 @@ export class Session {
       // Steering: messages that arrived while tools ran ride along with their results.
       if (this.queue.length && !ac.signal.aborted) {
         const steer = this.queue.splice(0);
-        results.push({ type: "text", text: `New message from the user while you were working:\n\n${steer.map((q) => q.text).join("\n\n")}` });
+        results.push({ type: "text", text: "New message from the user while you were working:" });
+        for (const q of steer) {
+          await this.placeFiles(q.files);
+          if (typeof q.text === "string") results.push({ type: "text", text: q.text });
+          else results.push(...q.text);
+        }
         for (const q of steer) if (q.receiptId) this.finishReceipt(q.receiptId, "Read before the next step", "done");
       }
       e.messages.push({ role: "user", content: results });
@@ -992,7 +1046,7 @@ export class Session {
     };
   }
 
-  private toolCtx(signal: AbortSignal): ToolContext {
+  private toolCtx(signal: AbortSignal, toolUseId: string): ToolContext {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     return {
       runtime: this.deps.runtime,
@@ -1003,7 +1057,65 @@ export class Session {
       bashTimeoutMs: this.deps.settings.bashTimeoutMs,
       skills: this.deps.skills,
       personaSkills: cfg?.skills ?? [],
+      toolUseId,
     };
+  }
+
+  /** The `agent` tool: a sub-agent with this epoch's tools (minus `agent`), sandbox and rules. */
+  private agentTool(): ToolDef {
+    return zodTool({
+      name: "agent",
+      description:
+        "Start a sub-agent for one self-contained task and get back its report. It has your tools, sandbox, network and permission rules but not this conversation, so the prompt must contain everything it needs. Call it several times in one response to run independent tasks in parallel.",
+      schema: z.object({
+        description: z.string().min(1).max(80).describe("3-6 word label shown to the user"),
+        prompt: z.string().min(1).describe("Complete brief: the goal, relevant paths and facts, and what to report back"),
+      }),
+      preview: (i) => i.description,
+      primaryArg: (i) => i.description,
+      run: (i, ctx) => this.runSubagent(i.prompt, ctx.toolUseId, ctx.signal),
+    });
+  }
+
+  private async runSubagent(prompt: string, parentId: string, signal: AbortSignal): Promise<ToolOutput> {
+    const e = this.epoch!;
+    const cfg = this.deps.personas.get(this.personaId)?.config;
+    const tools: ToolDef[] = e.frozen.tools
+      .filter((f) => f.name !== "agent")
+      .map((f) => {
+        const live = this.liveTools.get(f.name);
+        return live ? { ...live, description: f.description, inputSchema: f.inputSchema } : this.unavailableTool(f);
+      });
+    const system = `${e.frozen.system}\n\n# You are a sub-agent\nAnother agent delegated one task to you. Work on it independently with your tools; you cannot ask the user questions. Finish with a concise report of what you found or changed (paths, commands, results, open issues): that report is all the other agent will see.`;
+    const messages: MessageParam[] = [{ role: "user", content: prompt }];
+    const subId = `${this.id}:sub:${parentId}`;
+    let report = "";
+    const noop = { onBlockStart: () => {}, onDelta: () => {}, onBlockStop: () => {} };
+    try {
+      for (let turn = 0; turn < MAX_SUBAGENT_TURNS; turn++) {
+        if (signal.aborted) return { text: "Sub-agent interrupted.", isError: true };
+        const result = await this.deps.providers.runTurn(
+          e.model.provider,
+          { model: e.model.id, system, tools, messages, maxTokens: cfg?.model?.maxTokens ?? DEFAULT_MAX_TOKENS, effort: cfg?.model?.effort, signal, sessionId: subId },
+          noop,
+        );
+        this.recordUsage(result, "subagent", e.model.provider, e.model.id);
+        if (result.stopReason === "refusal") return { text: result.notice ?? "The sub-agent's model declined the task.", isError: true };
+        if (result.stopReason === "max_tokens" && result.toolUses.length) return { text: `${report}\n[sub-agent hit its output limit mid tool call]`.trim(), isError: true };
+        messages.push({ role: "assistant", content: result.content });
+        const text = result.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+        if (text) report = text;
+        if (result.stopReason === "pause_turn") continue;
+        if (!result.toolUses.length) break;
+        messages.push({ role: "user", content: await this.runTools(result.toolUses, signal, parentId) });
+      }
+    } catch (err) {
+      if (signal.aborted) return { text: "Sub-agent interrupted.", isError: true };
+      return { text: `Sub-agent failed: ${err instanceof ProviderError ? err.message : errMsg(err)}`, isError: true };
+    } finally {
+      this.deps.providers.releaseSession(subId);
+    }
+    return { text: truncateMiddle(report || "(the sub-agent finished without a report)", this.deps.settings.toolOutputLimit) };
   }
 
   private policy() {
@@ -1011,12 +1123,12 @@ export class Session {
     return new PermissionPolicy(cfg?.permissions ?? { default: "ask", allow: [], ask: [], deny: [] }, this.summary.allowances);
   }
 
-  private runTools(toolUses: ToolUse[], signal: AbortSignal) {
+  private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string) {
     const policy = this.policy();
-    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal)));
+    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, parentId)));
   }
 
-  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal): Promise<ContentBlockParam> {
+  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal, parentId?: string): Promise<ContentBlockParam> {
     const frozenDef = this.epoch?.frozen.tools.find((t) => t.name === tu.name);
     const tool = this.liveTools.get(tu.name) ?? (frozenDef ? this.unavailableTool(frozenDef) : undefined);
     const item: Extract<ChatItem, { kind: "tool_call" }> = {
@@ -1028,6 +1140,7 @@ export class Session {
       input: tu.input,
       inputPreview: "",
       status: "running",
+      ...(parentId ? { parentId } : {}),
     };
     let added = false;
     const show = () => {
@@ -1063,6 +1176,8 @@ export class Session {
     let perm = policy.evaluate(tool, v.value);
     // Memory and history reads are allowed unless a rule says otherwise.
     if (perm.rule.startsWith("default") && MEMORY_READ_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "memory read" };
+    // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
+    if (perm.rule.startsWith("default") && tool.name === "agent") perm = { mode: "allow", rule: "sub-agent" };
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
     if (perm.mode === "ask") {
       item.status = "pending_approval";
@@ -1095,7 +1210,7 @@ export class Session {
     const started = Date.now();
     let out: ToolOutput;
     try {
-      out = await tool.run(v.value, this.toolCtx(signal));
+      out = await tool.run(v.value, this.toolCtx(signal, tu.id));
     } catch (e) {
       out = { text: `Tool failed: ${errMsg(e)}`, isError: true };
     }
@@ -1215,6 +1330,7 @@ export class SessionManager {
     if (!s) return;
     await s.stop();
     await s.deleteFile();
+    await this.deps.attachments.removeSession(id);
     this.sessions.delete(id);
     this.deps.broadcast({ type: "session.deleted", sessionId: id });
   }

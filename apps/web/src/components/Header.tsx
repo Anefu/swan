@@ -2,59 +2,17 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
-import { IconCheck, IconChevronDown, IconDoc, IconPersonaAdd, IconSearch, IconSettings, IconTrend } from "./icons";
+import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch } from "./icons";
 import { Kbd, MOD } from "./ui";
 
 export function Header() {
-  const { state, actions } = useStore();
-  const dock = state.ui.dock;
-  const settingsDirty = Object.values(state.drafts).some((d) => JSON.stringify(d.base) !== JSON.stringify(d.draft) || d.newId);
+  const { state } = useStore();
   return (
     <header className="app-header">
       <span className="wordmark" aria-label="Swan">
         Swan
       </span>
       {state.personas.length > 0 && <PersonaMenu />}
-      <div className="grow" />
-      <nav className="header-nav" aria-label="Panels">
-        <button
-          type="button"
-          id="trigger-settings"
-          className={cls("hbtn", dock === "settings" && "is-on")}
-          aria-pressed={dock === "settings"}
-          onClick={() => actions.toggleDock("settings")}
-        >
-          <IconSettings size={18} />
-          <span>Settings</span>
-          {settingsDirty && (
-            <span className="hbtn-note">
-              <span className="dot attention" aria-hidden="true" />
-              Unsaved
-            </span>
-          )}
-        </button>
-        <button
-          type="button"
-          id="trigger-memory"
-          className={cls("hbtn", dock === "memory" && "is-on")}
-          aria-pressed={dock === "memory"}
-          disabled={!state.selectedPersonaId}
-          onClick={() => actions.toggleDock("memory")}
-        >
-          <IconDoc size={18} />
-          <span>Memory &amp; Usage</span>
-        </button>
-        <button
-          type="button"
-          id="trigger-network"
-          className={cls("hbtn", dock === "network" && "is-on")}
-          aria-pressed={dock === "network"}
-          onClick={() => actions.toggleDock("network")}
-        >
-          <IconTrend size={18} />
-          <span>Network activity</span>
-        </button>
-      </nav>
     </header>
   );
 }
@@ -133,6 +91,7 @@ function PersonaMenu() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setActive((a) => (a + 1) % count);
@@ -158,7 +117,8 @@ function PersonaMenu() {
   };
 
   return (
-    <div className="persona-menu">
+    // Keys are handled on the wrapper so they work even before focus has moved into the list.
+    <div className="persona-menu" onKeyDown={onKeyDown}>
       <button
         ref={triggerRef}
         type="button"
@@ -172,7 +132,7 @@ function PersonaMenu() {
         <IconChevronDown size={14} />
       </button>
       {open && (
-        <div ref={popRef} className="popover persona-pop" onKeyDown={onKeyDown}>
+        <div ref={popRef} className="popover persona-pop">
           {showSearch && (
             <label className="search-field">
               <IconSearch size={16} />

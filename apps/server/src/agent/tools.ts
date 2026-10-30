@@ -20,6 +20,7 @@ export interface ToolContext {
   bashTimeoutMs: number;
   skills: SkillRegistry;
   personaSkills: string[];
+  toolUseId: string;
 }
 
 export interface ToolDef {

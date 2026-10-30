@@ -173,7 +173,12 @@ class OpenAIProvider implements Provider {
         out.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
       } else {
         const texts: string[] = [];
+        const images: OpenAI.Chat.ChatCompletionContentPartImage[] = [];
         for (const b of m.content ?? []) {
+          if (b.type === "image" && b.source.type === "base64") {
+            images.push({ type: "image_url", image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } });
+            continue;
+          }
           if (b.type === "tool_result") {
             const content =
               typeof b.content === "string"
@@ -182,7 +187,8 @@ class OpenAIProvider implements Provider {
             out.push({ role: "tool", tool_call_id: b.tool_use_id, content: (b.is_error ? "ERROR: " : "") + content });
           } else if (b.type === "text") texts.push(b.text);
         }
-        if (texts.length) out.push({ role: "user", content: texts.join("\n") });
+        if (images.length) out.push({ role: "user", content: [...images, { type: "text", text: texts.join("\n") || "(image)" }] });
+        else if (texts.length) out.push({ role: "user", content: texts.join("\n") });
       }
     }
     return out;

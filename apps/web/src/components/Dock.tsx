@@ -3,9 +3,17 @@ import { useStore, type DockMode } from "../store";
 import { cls } from "../util";
 import { MemoryUsagePane } from "./MemoryUsagePane";
 import { NetworkPane } from "./NetworkPane";
+import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
 
 export const DOCK_MIN = 320;
+const DOCK_LABEL: Record<DockMode, string> = {
+  settings: "Settings",
+  memory: "Memory",
+  usage: "Usage",
+  network: "Network activity",
+  attachments: "Attachments",
+};
 export const DOCK_MAX = 560;
 
 export function useMediaQuery(q: string): boolean {
@@ -67,7 +75,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
       <aside
         className={cls("dock", overlay && "overlay", drag !== null && "dragging")}
         style={overlay ? undefined : { width: shown }}
-        aria-label={mode === "settings" ? "Settings" : mode === "memory" ? "Memory and usage" : "Network activity"}
+        aria-label={DOCK_LABEL[mode]}
         data-dock={mode}
       >
         {!overlay && (
@@ -90,10 +98,12 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
         )}
         {mode === "settings" ? (
           <SettingsPane onClose={close} />
-        ) : mode === "memory" ? (
-          <MemoryUsagePane onClose={close} />
-        ) : (
+        ) : mode === "memory" || mode === "usage" ? (
+          <MemoryUsagePane key={mode} mode={mode} onClose={close} />
+        ) : mode === "network" ? (
           <NetworkPane onClose={close} />
+        ) : (
+          <AttachmentsPane onClose={close} />
         )}
       </aside>
     </>

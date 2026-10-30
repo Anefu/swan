@@ -46,6 +46,13 @@ export function describeTool(item: ToolItem): ReceiptText {
     return { verb: "Called", target: `${server} › ${tool}${arg ? ` ${firstLine(arg, 50)}` : ""}`, result: null, icon: "plug" };
   }
   switch (tool) {
+    case "agent":
+      return {
+        verb: "Agent",
+        target: str(item.input, ["description"]) ?? item.inputPreview ?? "",
+        result: null,
+        icon: "sparkles",
+      };
     case "network_access":
       return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
     case "grep":
@@ -177,6 +184,7 @@ const NOUNS: Record<string, [string, string, string]> = {
   Called: ["called", "tool", "tools"],
   "Loaded skill": ["loaded", "skill", "skills"],
   Network: ["requested access to", "host", "hosts"],
+  Agent: ["ran", "agent", "agents"],
 };
 
 /** "Read 3 files, ran 2 commands" for a run of consecutive tool calls. */

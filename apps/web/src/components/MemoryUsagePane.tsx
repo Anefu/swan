@@ -10,12 +10,14 @@ import { Empty, Segmented, Spinner } from "./ui";
 /** Scroll offsets per persona and view, kept for the session. */
 const scrolls = new Map<string, number>();
 
-export function MemoryUsagePane({ onClose }: { onClose: () => void }) {
+/** Memory or Usage for the selected persona; each is its own rail entry and dock pane. */
+export function MemoryUsagePane({ mode, onClose }: { mode: "memory" | "usage"; onClose: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const bodyRef = useRef<HTMLDivElement>(null);
   const ps: MemoryPaneState = (persona && state.memoryPane[persona.id]) || DEFAULT_MEMORY_PANE;
-  const scrollKey = persona ? `${persona.id}:${ps.tab}:${ps.sub}` : "";
+  const scrollKey = persona ? `${persona.id}:${mode}:${mode === "memory" ? ps.sub : ""}` : "";
+  const title = mode === "memory" ? "Memory" : "Usage";
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -23,15 +25,23 @@ export function MemoryUsagePane({ onClose }: { onClose: () => void }) {
     el.scrollTop = scrolls.get(scrollKey) ?? 0;
   }, [scrollKey]);
 
+  const head = (
+    <div className="pane-head">
+      <h2>
+        {title}
+        {persona && <span className="pane-sub"> · {persona.name}</span>}
+      </h2>
+      <DecisionsShortcut className="compact" />
+      <button type="button" className="icon-btn" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}>
+        <IconX size={18} />
+      </button>
+    </div>
+  );
+
   if (!persona) {
     return (
       <div className="pane">
-        <div className="pane-head">
-          <h2>Memory &amp; Usage</h2>
-          <button type="button" className="icon-btn" aria-label="Close memory and usage" onClick={onClose}>
-            <IconX size={18} />
-          </button>
-        </div>
+        {head}
         <div className="pane-body">
           <Empty title="No persona selected" />
         </div>
@@ -42,27 +52,9 @@ export function MemoryUsagePane({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="pane">
-      <div className="pane-head">
-        <h2>{persona.name}</h2>
-        <DecisionsShortcut className="compact" />
-        <button type="button" className="icon-btn" aria-label="Close memory and usage" onClick={onClose}>
-          <IconX size={18} />
-        </button>
-      </div>
-      <div className="pane-tabs">
-        <Segmented
-          label="Memory and usage"
-          variant="tabs"
-          value={ps.tab}
-          onChange={(tab) => set({ tab })}
-          options={[
-            { value: "memory", label: "Memory" },
-            { value: "usage", label: "Usage" },
-          ]}
-        />
-      </div>
-      {ps.tab === "memory" && (
-        <div className="pane-tabs sub">
+      {head}
+      {mode === "memory" && (
+        <div className="pane-tabs">
           <Segmented
             label="Memory view"
             variant="tabs"
@@ -77,7 +69,7 @@ export function MemoryUsagePane({ onClose }: { onClose: () => void }) {
         </div>
       )}
       <div className="pane-body" ref={bodyRef} onScroll={(e) => scrolls.set(scrollKey, e.currentTarget.scrollTop)}>
-        {ps.tab === "usage" ? (
+        {mode === "usage" ? (
           <UsageView persona={persona} ps={ps} set={set} />
         ) : ps.sub === "saved" ? (
           <SavedMemory persona={persona} ps={ps} set={set} />
@@ -87,7 +79,7 @@ export function MemoryUsagePane({ onClose }: { onClose: () => void }) {
           <MemoryHistory persona={persona} />
         )}
       </div>
-      {ps.tab === "memory" && (
+      {mode === "memory" && (
         <div className="pane-foot quiet">
           <IconLock size={14} />
           <span>Private to {persona.name}</span>
@@ -720,7 +712,7 @@ function UsageView({ persona, ps, set }: { persona: PersonaSummary; ps: MemoryPa
                     <tbody>
                       {Object.entries(u.byPurpose).map(([k, t]) => (
                         <tr key={k}>
-                          <th scope="row">{k[0].toUpperCase() + k.slice(1)}</th>
+                          <th scope="row">{PURPOSE_LABEL[k] ?? k[0].toUpperCase() + k.slice(1)}</th>
                           <td>{fmtTokens(t.inputTokens)}</td>
                           <td>{fmtTokens(t.outputTokens)}</td>
                           <td>{t.costUsd === null ? "Unavailable" : fmtUsd(t.costUsd)}</td>
@@ -758,6 +750,15 @@ function UsageView({ persona, ps, set }: { persona: PersonaSummary; ps: MemoryPa
     </div>
   );
 }
+
+const PURPOSE_LABEL: Record<string, string> = {
+  foreground: "Conversation",
+  checkpoint: "Checkpoints",
+  extraction: "Memory extraction",
+  dream: "/dream",
+  dreaming: "/dream",
+  subagent: "Sub-agents",
+};
 
 function Totals({ t }: { t: UsageTotals }) {
   return (

@@ -108,7 +108,7 @@ export type ToolCallStatus =
   | "interrupted";
 
 export type ChatItem =
-  | { kind: "user"; id: string; ts: string; text: string }
+  | { kind: "user"; id: string; ts: string; text: string; attachments?: AttachmentMeta[] }
   | { kind: "assistant_text"; id: string; ts: string; text: string; streaming?: boolean }
   | { kind: "thinking"; id: string; ts: string; text: string; streaming?: boolean }
   | {
@@ -125,6 +125,7 @@ export type ChatItem =
       durationMs?: number;
       approvalReason?: string; // why it needs approval (matched rule)
       denyReason?: string;
+      parentId?: string; // set on calls made by a sub-agent: the id of its `agent` call
     }
   | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string }
   // One-line record of a harness action: /dream, a context rollover, a queued steering message.
@@ -273,6 +274,30 @@ export type ServerEvent =
   | { type: "approvals.updated"; approvals: PendingApproval[] } // every waiting call, all personas
   | { type: "usage.updated"; personaId: string }
   | { type: "memory.updated"; personaId: string };
+
+// ---------- Attachments ----------
+// POST /api/sessions/:id/attachments {name, mediaType, data (base64)} -> AttachmentMeta  (max 20 MB)
+// POST /api/sessions/:id/messages {text, attachments?: string[] (ids)}
+// Images go to the model as images, PDFs as documents; every attachment is also copied into the
+// sandbox at sandboxPath so tools can use it.
+
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number; // bytes
+  kind: "image" | "pdf" | "file";
+  sandboxPath: string; // e.g. /home/agent/attachments/report.pdf
+}
+
+// GET /api/personas/:id/attachments -> PersonaAttachment[] (newest first, every conversation of the persona)
+// GET /api/sessions/:id/attachments/:attId/file?token=… -> the bytes (images and PDFs inline, anything else as a download)
+
+export interface PersonaAttachment extends AttachmentMeta {
+  sessionId: string;
+  itemId: string; // the user message it was sent with
+  ts: string;
+}
 
 // ---------- Swan additions ----------
 // One ongoing conversation per persona. A conversation is a session the server picks or creates;

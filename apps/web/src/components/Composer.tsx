@@ -1,10 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Effort, ModelOption, PersonaSummary, SessionSummary, SlashCommand } from "@ph/shared";
 import { api } from "../api";
-import { usePendingApprovals, useStore } from "../store";
+import { usePendingApprovals, useStore, type DraftAttachment } from "../store";
 import { isWorking, plural } from "../status";
-import { ALL_EFFORTS, cls, EFFORT_LABEL } from "../util";
-import { IconArrowRight, IconSend, IconStop } from "./icons";
+import { ALL_EFFORTS, cls, EFFORT_LABEL, fmtBytes } from "../util";
+import { IconArrowRight, IconArrowUp, IconFile, IconPaperclip, IconStop, IconX } from "./icons";
 import { MOD, Spinner } from "./ui";
 
 const SWAN_COMMANDS: SlashCommand[] = [
@@ -90,12 +90,23 @@ export function Composer({
     ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
   }, [text]);
 
+  const atts = state.attachments[persona.id] ?? [];
+  const uploading = atts.some((a) => a.status === "uploading");
+  const failed = atts.some((a) => a.status === "error");
+  const ready = atts.filter((a) => a.status === "done" && a.meta);
+  const canSend = (!!text.trim() || ready.length > 0) && !uploading && !failed && !sending;
+  const blockReason = uploading ? "Waiting for uploads to finish" : failed ? "Remove the attachments that failed first" : null;
+
   const submit = async (raw: string) => {
     const value = raw.trim();
-    if (!value || sending) return;
-    if (value === "/usage") {
+    if (sending || (!value && ready.length === 0)) return;
+    if (blockReason) {
+      actions.toast("info", `${blockReason}.`);
+      return;
+    }
+    if (value === "/usage" && ready.length === 0) {
       setText("");
-      actions.openUsage(persona.id);
+      actions.openUsage();
       return;
     }
     if (!sessionId) {
@@ -103,10 +114,29 @@ export function Composer({
       return;
     }
     setSending(true);
-    const ok = await actions.sendMessage(sessionId, value);
+    const ok = await actions.sendMessage(
+      sessionId,
+      value,
+      ready.map((a) => a.meta!.id),
+    );
     setSending(false);
-    if (ok) setText("");
+    if (ok) {
+      setText("");
+      actions.clearAttachments(
+        persona.id,
+        ready.map((a) => a.key),
+      );
+    }
     taRef.current?.focus();
+  };
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.length === 0) return;
+    // Screenshots arrive as files only; keep normal text paste when text is present too.
+    if (!e.clipboardData.types.includes("text/plain")) e.preventDefault();
+    actions.addAttachments(persona.id, files);
   };
 
   const pick = (c: SlashCommand, run: boolean) => {
@@ -176,6 +206,13 @@ export function Composer({
         </div>
       )}
       <div className={cls("composer", text.startsWith("/") && "is-command")}>
+        {atts.length > 0 && (
+          <ul className="att-chips" aria-label="Attachments">
+            {atts.map((a) => (
+              <AttachmentChip key={a.key} a={a} onRemove={() => actions.removeAttachment(persona.id, a.key)} />
+            ))}
+          </ul>
+        )}
         <div className="composer-row">
           <label htmlFor="composer-input" className="sr-only">
             Message {persona.name}
@@ -188,6 +225,7 @@ export function Composer({
             placeholder={`Message ${persona.name}…  (/ for commands)`}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             role="combobox"
             aria-expanded={menuOpen}
             aria-controls={menuOpen ? menuId : undefined}
@@ -195,35 +233,105 @@ export function Composer({
             aria-autocomplete="list"
             spellCheck
           />
-          <button
-            type="button"
-            className="send-btn"
-            aria-label={working ? "Send (will steer the next step)" : "Send"}
-            title={working ? "Send. The agent uses it before its next decision." : "Send (Enter)"}
-            disabled={!text.trim() || sending}
-            onClick={() => void submit(text)}
-          >
-            {sending ? <Spinner size={16} /> : <IconSend size={20} />}
-          </button>
-          {working && sessionId && (
-            <button
-              type="button"
-              className="btn stop-btn"
-              title={`Stop now (${MOD}.)`}
-              onClick={() => void actions.interrupt(sessionId)}
-            >
-              <IconStop size={14} />
-              Stop
-            </button>
-          )}
         </div>
         <div className="composer-meta">
+          <button
+            type="button"
+            className="icon-btn sm attach-btn"
+            aria-label="Attach files"
+            title="Attach files (or paste, or drop them here)"
+            onClick={() => fileRef.current?.click()}
+          >
+            <IconPaperclip size={16} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length) actions.addAttachments(persona.id, files);
+              e.target.value = "";
+              taRef.current?.focus();
+            }}
+          />
           <ModelSelectors persona={persona} />
           <span className="grow" />
           <DecisionsShortcut />
+          <SendStopButton
+            hasText={!!text.trim() || atts.length > 0}
+            canSend={canSend}
+            blockReason={blockReason}
+            sending={sending || uploading}
+            working={working}
+            onSend={() => void submit(text)}
+            onStop={sessionId ? () => void actions.interrupt(sessionId) : undefined}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+/** One small round button: Send when there is a draft (queued as steering while the agent works), Stop when working with an empty draft. */
+function SendStopButton({
+  hasText,
+  canSend,
+  blockReason,
+  sending,
+  working,
+  onSend,
+  onStop,
+}: {
+  hasText: boolean;
+  canSend: boolean;
+  blockReason: string | null;
+  sending: boolean;
+  working: boolean;
+  onSend: () => void;
+  onStop?: () => void;
+}) {
+  const stop = working && !hasText && !!onStop;
+  if (stop) {
+    return (
+      <button type="button" className="round-btn stop" aria-label={`Stop (${MOD}.)`} title={`Stop (${MOD}.)`} onClick={onStop}>
+        <IconStop size={12} />
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="round-btn"
+      aria-label={blockReason ? `Send (${blockReason.toLowerCase()})` : working ? "Send; it steers the next step" : "Send"}
+      title={blockReason ?? (working ? "Send (Enter). The agent uses it before its next decision." : "Send (Enter)")}
+      disabled={!canSend}
+      onClick={onSend}
+    >
+      {sending ? <Spinner size={12} /> : <IconArrowUp size={16} />}
+    </button>
+  );
+}
+
+function AttachmentChip({ a, onRemove }: { a: DraftAttachment; onRemove: () => void }) {
+  const label = `${a.name}, ${fmtBytes(a.size)}${a.status === "uploading" ? ", uploading" : a.status === "error" ? `, failed: ${a.error}` : ""}`;
+  return (
+    <li className={cls("att-chip", a.status === "error" && "is-error")} title={a.meta?.sandboxPath ?? a.error ?? a.name}>
+      {a.previewUrl ? <img src={a.previewUrl} alt="" className="att-thumb" /> : <IconFile size={16} className="att-icon" />}
+      <span className="att-text">
+        <span className="att-name">{a.name}</span>
+        <span className={cls("att-meta", a.status === "error" && "tone-error")}>
+          {a.status === "error" ? a.error : a.status === "uploading" ? `${Math.round(a.progress * 100)}%` : fmtBytes(a.size)}
+        </span>
+      </span>
+      {a.status === "uploading" && <Spinner size={10} />}
+      <span className="sr-only">{label}</span>
+      <button type="button" className="icon-btn sm" aria-label={`Remove ${a.name}`} onClick={onRemove}>
+        <IconX size={12} />
+      </button>
+      {a.status === "uploading" && <span className="att-progress" style={{ width: `${Math.round(a.progress * 100)}%` }} aria-hidden="true" />}
+    </li>
   );
 }
 

@@ -10,19 +10,102 @@ import {
   TOOL_STATUS_TEXT,
   type ToolItem,
 } from "../receipts";
-import { useStore } from "../store";
-import { basename, cls, exitCode, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName } from "../util";
-import { IconChevronRight } from "./icons";
+import { attachmentFileUrl } from "../api";
+import { attachmentPreviews, useStore } from "../store";
+import { basename, cls, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
+import { IconChevronRight, IconFile } from "./icons";
 import { Markdown } from "./Markdown";
 import { CopyButton, Fold, Kbd, Spinner } from "./ui";
 
 // ---------- Messages ----------
 
-export function UserMessage({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
+export function UserMessage({ item, sessionId }: { item: Extract<ChatItem, { kind: "user" }>; sessionId?: string }) {
+  const atts = item.attachments ?? [];
+  const [preview, setPreview] = useState<{ url: string; name: string; trigger: HTMLElement | null } | null>(null);
+  // If the server cannot serve an image, fall back to this session's local copy, then to a file chip.
+  const [broken, setBroken] = useState<Set<string>>(() => new Set());
   return (
     <div className="msg-user" id={`item-${item.id}`}>
       <span className="sr-only">You said:</span>
-      <div className="user-block">{item.text}</div>
+      <div className="user-col">
+        {atts.length > 0 && (
+          <ul className="att-row" aria-label="Attachments">
+            {atts.map((a) => {
+              const remote = a.kind === "image" && sessionId && !broken.has(a.id) ? attachmentFileUrl(sessionId, a.id) : undefined;
+              const url = a.kind === "image" ? (remote ?? attachmentPreviews.get(a.id)) : undefined;
+              return (
+                <li key={a.id}>
+                  {url ? (
+                    <button
+                      type="button"
+                      className="att-thumb-btn"
+                      aria-label={`Preview ${a.name}`}
+                      title={`${a.name} · ${fmtBytes(a.size)} · ${a.sandboxPath}`}
+                      onClick={(e) => setPreview({ url, name: a.name, trigger: e.currentTarget })}
+                    >
+                      <img
+                        src={url}
+                        alt={a.name}
+                        onError={() => remote && setBroken((b) => new Set(b).add(a.id))}
+                      />
+                    </button>
+                  ) : (
+                    <span className="att-chip sent" tabIndex={0} title={`In the sandbox at ${a.sandboxPath}`}>
+                      <IconFile size={14} className="att-icon" />
+                      <span className="att-text">
+                        <span className="att-name">{a.name}</span>
+                        <span className="att-meta">
+                          {a.kind === "image" ? "Image" : a.kind === "pdf" ? "PDF" : "File"} · {fmtBytes(a.size)}
+                        </span>
+                      </span>
+                      <span className="sr-only">, in the sandbox at {a.sandboxPath}</span>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {item.text && <div className="user-block">{item.text}</div>}
+      </div>
+      {preview && (
+        <ImagePreview
+          url={preview.url}
+          name={preview.name}
+          onClose={() => {
+            const t = preview.trigger;
+            setPreview(null);
+            t?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ImagePreview({ url, name, onClose }: { url: string; name: string; onClose: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  return (
+    <div className="preview-overlay" role="dialog" aria-modal="true" aria-label={`Preview of ${name}`} onClick={onClose}>
+      <img src={url} alt={name} onClick={(e) => e.stopPropagation()} />
+      <div className="preview-bar">
+        <span>{name}</span>
+        <button ref={ref} type="button" className="btn sm" onClick={onClose}>
+          Close
+        </button>
+      </div>
     </div>
   );
 }
@@ -248,10 +331,21 @@ function Facts({ item }: { item: ToolItem }) {
 }
 
 /** Consecutive finished tool calls fold into one summary line. */
-export function ToolGroup({ items, sessionId, persona }: { items: ToolItem[]; sessionId: string; persona: PersonaSummary | null }) {
+export function ToolGroup({
+  items,
+  sessionId,
+  persona,
+  childrenOf,
+}: {
+  items: ToolItem[];
+  sessionId: string;
+  persona: PersonaSummary | null;
+  childrenOf: Map<string, ToolItem[]>;
+}) {
   const [open, setOpen] = useState(false);
   const failed = items.filter((i) => i.status === "error" || i.isError || i.status === "denied").length;
   const ms = items.reduce((a, i) => a + (i.durationMs ?? 0), 0);
+  // ms sums sequential and parallel calls alike; it is busy time, not wall time.
   return (
     <div className="line-item group" id={`item-${items[0].id}`}>
       <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -267,9 +361,13 @@ export function ToolGroup({ items, sessionId, persona }: { items: ToolItem[]; se
       </button>
       {open && (
         <div className="group-body">
-          {items.map((it) => (
-            <ToolLine key={it.id} item={it} sessionId={sessionId} persona={persona} promptOpen={false} />
-          ))}
+          {items.map((it) =>
+            it.name === "agent" ? (
+              <AgentLine key={it.id} item={it} sessionId={sessionId} persona={persona} subItems={childrenOf.get(it.id) ?? []} oldestPendingId={null} />
+            ) : (
+              <ToolLine key={it.id} item={it} sessionId={sessionId} persona={persona} promptOpen={false} />
+            ),
+          )}
         </div>
       )}
     </div>
@@ -585,6 +683,79 @@ function DecisionButtons({
       <button type="button" className="btn sm" disabled={busy !== null} onClick={() => setDenying(true)}>
         Deny
       </button>
+    </div>
+  );
+}
+
+// ---------- Sub-agents ----------
+
+/** An `agent` call: one line; its own tool calls and its report show indented when expanded. */
+export function AgentLine({
+  item,
+  sessionId,
+  persona,
+  subItems,
+  oldestPendingId,
+}: {
+  item: ToolItem;
+  sessionId: string;
+  persona: PersonaSummary | null;
+  subItems: ToolItem[];
+  oldestPendingId: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const now = useNow(1000);
+  const d = describeTool(item);
+  const pendingChild = subItems.some((c) => c.status === "pending_approval");
+  const expanded = open || pendingChild;
+  const running = item.status === "running" || item.status === "pending_approval";
+  const ms = item.durationMs ?? (running ? Math.max(0, now - Date.parse(item.ts)) : undefined);
+  const meta: string[] = [`${subItems.length} tool ${subItems.length === 1 ? "use" : "uses"}`];
+  if (ms !== undefined && Number.isFinite(ms)) meta.push(fmtDuration(ms));
+  const status = pendingChild ? "Decision needed" : TOOL_STATUS_TEXT[item.status];
+  const lastChild = subItems[subItems.length - 1];
+  return (
+    <div className={cls("line-item agent", pendingChild && "is-pending")} id={`item-${item.id}`}>
+      <button type="button" className="line" aria-expanded={expanded} onClick={() => setOpen(!open)}>
+        <ToolGlyph item={pendingChild ? { ...item, status: "pending_approval" } : item} />
+        <span className="line-verb">Agent</span>
+        <span className="line-target">{d.target}</span>
+        <span className="line-meta">· {meta.join(" · ")}</span>
+        {status && item.status !== "running" && (
+          <span className={cls("line-status", pendingChild || item.status === "pending_approval" ? "tone-attention" : item.status === "interrupted" ? "tone-muted" : "tone-error")}>
+            {status}
+          </span>
+        )}
+        {status && pendingChild && item.status === "running" && <span className="line-status tone-attention">{status}</span>}
+        <IconChevronRight className="chev" size={14} />
+      </button>
+      {!expanded && running && lastChild && (
+        <div className="agent-peek line-meta">
+          ⎿ {describeTool(lastChild).verb} {describeTool(lastChild).target}
+        </div>
+      )}
+      {expanded && (
+        <div className="group-body agent-body">
+          {subItems.length === 0 && <p className="line-meta">No tool calls yet.</p>}
+          {subItems.map((c) => (
+            <ToolLine key={c.id} item={c} sessionId={sessionId} persona={persona} promptOpen={c.id === oldestPendingId} />
+          ))}
+          {item.output !== undefined && open && (
+            <div className="agent-report">
+              <div className="section-label">
+                <span>Report</span>
+                <CopyButton text={item.output} label="Copy report" />
+              </div>
+              <div className="msg-model">
+                <Markdown text={item.output || "(empty)"} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {item.status === "pending_approval" && (
+        <ApprovalPrompt item={item} sessionId={sessionId} persona={persona} showInput={!open} />
+      )}
     </div>
   );
 }

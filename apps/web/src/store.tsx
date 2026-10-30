@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type {
   ApprovalBody,
+  AttachmentMeta,
   ChatItem,
   CredentialStatus,
   CredentialUpsert,
@@ -17,7 +18,7 @@ import type {
   SessionSummary,
   SkillSummary,
 } from "@ph/shared";
-import { api, ApiError, configureApi, probeToken, readToken, type ApiHealth } from "./api";
+import { api, ApiError, configureApi, probeToken, readToken, uploadAttachment, type ApiHealth } from "./api";
 import { errorMessage, isMissingEndpoint, loadPref, savePref } from "./util";
 import { EventSocket, wsUrl, type WsState } from "./ws";
 
@@ -25,7 +26,7 @@ import { EventSocket, wsUrl, type WsState } from "./ws";
 
 export type ServerState = "loading" | "ok" | "unreachable" | "unauthorized" | "no-token";
 export type ToastKind = "info" | "success" | "warn" | "error";
-export type DockMode = "settings" | "memory" | "network";
+export type DockMode = "settings" | "memory" | "usage" | "network" | "attachments";
 export const NEW_PERSONA = "__new__";
 
 export interface Toast {
@@ -47,7 +48,6 @@ export interface UiPrefs {
 }
 
 export interface MemoryPaneState {
-  tab: "memory" | "usage";
   sub: "saved" | "current" | "history";
   query: string;
   type: string;
@@ -57,7 +57,6 @@ export interface MemoryPaneState {
 }
 
 export const DEFAULT_MEMORY_PANE: MemoryPaneState = {
-  tab: "memory",
   sub: "saved",
   query: "",
   type: "",
@@ -76,6 +75,25 @@ export interface SettingsDraft {
   /** Model-provider keys removed from the loaded config; personas never need them. */
   removedKeys?: string[];
 }
+
+export interface DraftAttachment {
+  key: string;
+  name: string;
+  size: number;
+  mediaType: string;
+  status: "uploading" | "done" | "error";
+  progress: number;
+  meta?: AttachmentMeta;
+  error?: string;
+  /** Object URL for image thumbnails in this browser session. */
+  previewUrl?: string;
+}
+
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 20;
+
+/** Attachment id -> local object URL, so sent images can show a thumbnail in this browser session. */
+export const attachmentPreviews = new Map<string, string>();
 
 export interface NetworkFilters {
   query: string;
@@ -112,6 +130,7 @@ export interface State {
   drafts: Record<string, SettingsDraft>;
   memoryPane: Record<string, MemoryPaneState>;
   composer: Record<string, string>;
+  attachments: Record<string, DraftAttachment[]>;
   network: NetworkFilters;
   focusApproval: { sessionId: string; toolUseId: string; seq: number } | null;
   focusItem: { sessionId: string; itemId: string; seq: number } | null;
@@ -127,7 +146,7 @@ const SELECTION_KEY = "swan.persona.v1";
 const COMPOSER_KEY = "swan.composer.v1";
 const MAX_EGRESS = 2000;
 
-const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400, network: 400 } };
+const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400, usage: 400, network: 400, attachments: 400 } };
 
 function initState(): State {
   const token = readToken();
@@ -156,6 +175,7 @@ function initState(): State {
     drafts: {},
     memoryPane: {},
     composer: loadPref<Record<string, string>>(COMPOSER_KEY, {}),
+    attachments: {},
     network: { query: "", range: "today", onlyBlocked: false, expanded: null },
     focusApproval: null,
     focusItem: null,
@@ -202,6 +222,10 @@ type Action =
   | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
   | { type: "composer"; personaId: string; text: string }
   | { type: "network"; patch: Partial<NetworkFilters> }
+  | { type: "att.add"; personaId: string; att: DraftAttachment }
+  | { type: "att.update"; personaId: string; key: string; patch: Partial<DraftAttachment> }
+  | { type: "att.remove"; personaId: string; key: string }
+  | { type: "att.clear"; personaId: string; keys: string[] }
   | { type: "focus.approval"; sessionId: string; toolUseId: string }
   | { type: "focus.item"; sessionId: string; itemId: string }
   | { type: "personaMenu.open" }
@@ -394,6 +418,29 @@ function reducer(state: State, a: Action): State {
       return { ...state, composer: { ...state.composer, [a.personaId]: a.text } };
     case "network":
       return { ...state, network: { ...state.network, ...a.patch } };
+    case "att.add":
+      return { ...state, attachments: { ...state.attachments, [a.personaId]: [...(state.attachments[a.personaId] ?? []), a.att] } };
+    case "att.update": {
+      const list = state.attachments[a.personaId];
+      if (!list) return state;
+      return {
+        ...state,
+        attachments: { ...state.attachments, [a.personaId]: list.map((x) => (x.key === a.key ? { ...x, ...a.patch } : x)) },
+      };
+    }
+    case "att.remove":
+      return {
+        ...state,
+        attachments: { ...state.attachments, [a.personaId]: (state.attachments[a.personaId] ?? []).filter((x) => x.key !== a.key) },
+      };
+    case "att.clear":
+      return {
+        ...state,
+        attachments: {
+          ...state.attachments,
+          [a.personaId]: (state.attachments[a.personaId] ?? []).filter((x) => !a.keys.includes(x.key)),
+        },
+      };
     case "focus.approval":
       return {
         ...state,
@@ -415,6 +462,21 @@ function reducer(state: State, a: Action): State {
   }
 }
 
+let attachSeq = 0;
+const uploads = new Map<string, () => void>();
+
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const url = String(r.result ?? "");
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    r.onerror = () => reject(new Error("Could not read the file"));
+    r.readAsDataURL(file);
+  });
+}
+
 // ---------- Actions ----------
 
 export interface Actions {
@@ -432,7 +494,7 @@ export interface Actions {
   setSettingsScope(scope: "persona" | "swan"): void;
   setDraft(key: string, draft: SettingsDraft | null): void;
   setMemoryPane(personaId: string, patch: Partial<MemoryPaneState>): void;
-  openUsage(personaId: string): void;
+  openUsage(): void;
   setComposer(personaId: string, text: string): void;
   setNetwork(patch: Partial<NetworkFilters>): void;
   openPersonaMenu(): void;
@@ -444,7 +506,10 @@ export interface Actions {
   refreshProviders(): Promise<void>;
   refreshModels(): Promise<void>;
 
-  sendMessage(sessionId: string, text: string): Promise<boolean>;
+  sendMessage(sessionId: string, text: string, attachmentIds?: string[]): Promise<boolean>;
+  addAttachments(personaId: string, files: File[]): void;
+  removeAttachment(personaId: string, key: string): void;
+  clearAttachments(personaId: string, keys: string[]): void;
   interrupt(sessionId: string): Promise<void>;
   approve(sessionId: string, toolUseId: string, body: ApprovalBody): Promise<boolean>;
   removeAllowance(sessionId: string, rule: string): Promise<void>;
@@ -619,12 +684,52 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSettingsScope: (scope) => dispatch({ type: "settings.scope", scope }),
       setDraft: (key, draft) => dispatch({ type: "draft.set", key, draft }),
       setMemoryPane: (personaId, patch) => dispatch({ type: "memoryPane", personaId, patch }),
-      openUsage: (personaId) => {
-        dispatch({ type: "memoryPane", personaId, patch: { tab: "usage" } });
-        dispatch({ type: "dock", dock: "memory" });
-      },
+      openUsage: () => dispatch({ type: "dock", dock: "usage" }),
       setComposer: (personaId, text) => dispatch({ type: "composer", personaId, text }),
       setNetwork: (patch) => dispatch({ type: "network", patch }),
+      addAttachments: (personaId, files) => {
+        const sessionId = stateRef.current.conversations[personaId];
+        const existing = (stateRef.current.attachments[personaId] ?? []).length;
+        files.forEach((file, i) => {
+          attachSeq += 1;
+          const key = `a${attachSeq}`;
+          const mediaType = file.type || "application/octet-stream";
+          const previewUrl = mediaType.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+          const base: DraftAttachment = { key, name: file.name || "pasted file", size: file.size, mediaType, status: "uploading", progress: 0, previewUrl };
+          const fail = (error: string) => dispatch({ type: "att.add", personaId, att: { ...base, status: "error", error } });
+          if (existing + i >= MAX_ATTACHMENTS) return fail(`Only ${MAX_ATTACHMENTS} attachments per message`);
+          if (file.size > MAX_ATTACHMENT_BYTES) return fail("Larger than 20 MB");
+          if (!sessionId) return fail("The conversation is still opening");
+          dispatch({ type: "att.add", personaId, att: base });
+          const update = (patch: Partial<DraftAttachment>) => dispatch({ type: "att.update", personaId, key, patch });
+          void (async () => {
+            try {
+              const data = await readBase64(file);
+              const up = uploadAttachment(sessionId, { name: base.name, mediaType, data }, (f) => update({ progress: f }));
+              uploads.set(key, up.abort);
+              const meta = await up.promise;
+              if (previewUrl) attachmentPreviews.set(meta.id, previewUrl);
+              update({ status: "done", progress: 1, meta });
+            } catch (e) {
+              update({ status: "error", error: errorMessage(e) });
+            } finally {
+              uploads.delete(key);
+            }
+          })();
+        });
+      },
+      removeAttachment: (personaId, key) => {
+        const att = (stateRef.current.attachments[personaId] ?? []).find((x) => x.key === key);
+        uploads.get(key)?.();
+        if (att?.previewUrl && !(att.meta && attachmentPreviews.has(att.meta.id))) URL.revokeObjectURL(att.previewUrl);
+        if (att?.meta) {
+          const url = attachmentPreviews.get(att.meta.id);
+          if (url) URL.revokeObjectURL(url);
+          attachmentPreviews.delete(att.meta.id);
+        }
+        dispatch({ type: "att.remove", personaId, key });
+      },
+      clearAttachments: (personaId, keys) => dispatch({ type: "att.clear", personaId, keys }),
       openPersonaMenu: () => dispatch({ type: "personaMenu.open" }),
       jumpToApproval: (target) => {
         const s = stateRef.current;
@@ -648,9 +753,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshProviders,
       refreshModels,
 
-      sendMessage: async (sessionId, text) => {
+      sendMessage: async (sessionId, text, attachmentIds) => {
         try {
-          await api.sendMessage(sessionId, text);
+          await api.sendMessage(sessionId, text, attachmentIds);
           return true;
         } catch (e) {
           reportError(e, "Message not sent");

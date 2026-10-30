@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { ProviderRegistry } from "./agent/providers.js";
 import { SessionManager } from "./agent/session.js";
 import { Hub, startApi } from "./api.js";
+import { AttachmentStore } from "./attachments.js";
 import { ModelCatalog } from "./catalog.js";
 import { MemoryStore } from "./memory.js";
 import { PersonaStore } from "./personas.js";
@@ -52,10 +53,11 @@ async function main() {
   const usage = new UsageLedger();
   await usage.load();
   const catalog = new ModelCatalog(settings, secrets, providers);
+  const attachments = new AttachmentStore();
   // eslint-disable-next-line prefer-const
   let sessions: SessionManager;
   sessions = new SessionManager({
-    settings, runtime, proxy, secrets, personas, skills, providers, memory, usage,
+    settings, runtime, proxy, secrets, personas, skills, providers, memory, usage, attachments,
     broadcast: hub.broadcast,
     onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
   });
@@ -79,7 +81,7 @@ async function main() {
   runtime.on("status", (s) => hub.broadcast({ type: "runtime.status", runtime: s }));
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
-  await startApi({ settings, token, secrets, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog }, hub);
+  await startApi({ settings, token, secrets, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
   log.info("main", `harness home: ${paths.home}`);
 
   void runtime.init().then(() => runtime.removeOrphans());
