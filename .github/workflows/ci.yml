@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # The AWS CLI, kubectl and openssl on the runner image also run the stub's end-to-end tests.
+      - run: pnpm test
+      - run: pnpm build
+
+  sandbox-image:
+    name: Sandbox image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with a throwaway CA
+        run: |
+          mkdir -p /tmp/ctx
+          cp sandbox/Containerfile /tmp/ctx/Containerfile
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=ci" -keyout /tmp/ctx/ca.key -out /tmp/ctx/harness-ca.crt
+          podman build -t ph-sandbox-ci /tmp/ctx
+      - name: Runs as the unprivileged agent user with no network
+        run: |
+          out=$(podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges ph-sandbox-ci sh -c 'id -u; id -un; test -w /workspace && echo writable')
+          echo "$out"
+          test "$out" = "$(printf '1000\nagent\nwritable')"

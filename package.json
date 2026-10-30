@@ -6,8 +6,15 @@
     "dev": "pnpm -r --parallel --filter @ph/server --filter @ph/web dev",
     "build": "pnpm --filter @ph/web build",
     "start": "pnpm --filter @ph/server start",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "aws-stub": "pnpm --filter @ph/aws-stub start"
   },
   "packageManager": "pnpm@10.17.1",
-  "engines": { "node": ">=22.12" }
+  "engines": {
+    "node": ">=22.12"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
 }

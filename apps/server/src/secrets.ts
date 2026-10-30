@@ -38,8 +38,10 @@ function parseEnv(text: string): Map<string, string> {
     const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
     if (!m) continue;
     let v = m[2];
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
+    // A quoted value may be followed by a comment: KEY="a # b" # note
+    const quoted = /^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/.exec(v) ?? /^'([^']*)'\s*(?:#.*)?$/.exec(v);
+    if (quoted) {
+      v = quoted[1];
       if (m[2].startsWith('"')) v = v.replace(/\\n/g, "\n").replace(/\\"/g, '"');
     } else {
       v = v.replace(/\s+#.*$/, "");

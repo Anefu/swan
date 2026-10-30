@@ -24,7 +24,7 @@ credentials it may use, a network allowlist and tool permissions.
 | Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, subagent, checkpoint, dream), context occupancy, estimated cost where rates are known |
 | UI | Swan: persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |
 
-Design and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Design and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working on the code (people or agents): [AGENTS.md](AGENTS.md).
 
 ## Requirements
 
@@ -47,6 +47,12 @@ example personas, builds the sandbox image (about a minute) and starts the relay
 Add your Anthropic key to `~/.persona-harness/secrets.yaml` (`ANTHROPIC_API_KEY: { value: sk-ant-… }`)
 or from the Credentials page. Without one, the harness falls back to `$ANTHROPIC_API_KEY` or an
 `ant auth login` profile.
+
+Tests (no network, Podman or API keys needed):
+
+```bash
+pnpm typecheck && pnpm test
+```
 
 Development (server with auto-restart, plus Vite with HMR):
 
@@ -131,6 +137,8 @@ explains how to wire it up.
 apps/server     Node harness: agent loop, providers, MCP, sandbox runtime, egress proxy, API
 apps/web        React UI (Vite)
 packages/shared Wire protocol types shared by both
+packages/aws-sigv4  AWS Signature V4 signing and verification
+tools/aws-stub  Local AWS + Kubernetes stand-in and a reference connection wrapper (see its README)
 sandbox/        Containerfile for the session image
 examples/       Seed personas, skills, secrets template, demo workspace
 ```
