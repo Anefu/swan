@@ -197,7 +197,11 @@ export class EgressProxy extends TypedEmitter<Events> {
   }
 
   private decide(s: ProxySession, host: string, port: number): { ok: true; creds: string[] } | { ok: false; reason: string } {
-    if (!ALLOWED_PORTS.has(port)) return { ok: false, reason: `port ${port} not allowed` };
+    if (!ALLOWED_PORTS.has(port)) {
+      // Other ports only by an explicit host:port entry; always tunnelled, never credentialed.
+      if (s.allowHosts.some((p) => p.includes(":") && hostMatches(host, p.split(":")[0]) && Number(p.split(":")[1]) === port)) return { ok: true, creds: [] };
+      return { ok: false, reason: `port ${port} not allowed` };
+    }
     const creds = this.credsFor(s, host);
     if (creds.length === 0 && !hostMatchesAny(host, s.allowHosts)) return { ok: false, reason: "host not in persona allowlist" };
     return { ok: true, creds };
@@ -358,6 +362,7 @@ export class EgressProxy extends TypedEmitter<Events> {
     }
     const headers = this.buildUpstreamHeaders(req, ctx, used);
     const pathAndQuery = this.substitute(rawPath, ctx, used);
+    const body = await this.substitutedBody(req, ctx, used, headers);
     let bytesUp = 0;
     let bytesDown = 0;
     req.on("data", (c: Buffer) => (bytesUp += c.length));
@@ -382,8 +387,34 @@ export class EgressProxy extends TypedEmitter<Events> {
       else res.destroy();
       this.record({ ...base, status: 502, decision: used.size ? "injected" : "inspected", credentials: [...used], reason: errMsg(e), durationMs: Date.now() - started });
     });
-    req.pipe(upstream);
+    if (body) upstream.end(body);
+    else req.pipe(upstream);
   }
+
+  /**
+   * Opt-in (per credential, substituteInBody) placeholder swap in JSON or form bodies up to 1 MB with
+   * a declared length. Anything else streams through untouched.
+   */
+  private async substitutedBody(req: http.IncomingMessage, ctx: MitmContext, used: Set<string>, headers: http.OutgoingHttpHeaders): Promise<Buffer | null> {
+    const opted = ctx.creds.filter((n) => this.secrets.get(n)?.substituteInBody);
+    const len = Number(req.headers["content-length"] ?? NaN);
+    const ct = String(req.headers["content-type"] ?? "");
+    if (!opted.length || !Number.isFinite(len) || len > 1_000_000 || !/json|x-www-form-urlencoded/i.test(ct) || req.headers["content-encoding"]) return null;
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    let text = Buffer.concat(chunks).toString("utf8");
+    for (const [ph, name] of ctx.session.placeholders) {
+      if (!opted.includes(name) || !text.includes(ph)) continue;
+      const real = this.secrets.value(name);
+      if (real === undefined) continue;
+      text = text.split(ph).join(/json/i.test(ct) ? JSON.stringify(real).slice(1, -1) : encodeURIComponent(real));
+      used.add(name);
+    }
+    const out = Buffer.from(text, "utf8");
+    headers["content-length"] = String(out.length);
+    return out;
+  }
+
 
   private onMitmUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Buffer) {
     const ctx = this.mitmCtx.get(socket);

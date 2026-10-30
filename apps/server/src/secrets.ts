@@ -15,6 +15,7 @@ export interface SecretEntry {
   source: "yaml" | "env" | null;
   hosts: string[];
   inject?: { header: string; format: string };
+  substituteInBody?: boolean;
   fingerprint: string | null;
   updatedAt: string | null;
 }
@@ -25,6 +26,7 @@ const YamlEntry = z.union([
     value: z.string().optional(),
     hosts: z.array(z.string()).optional(),
     inject: z.object({ header: z.string(), format: z.string().default("{value}") }).optional(),
+    substituteInBody: z.boolean().optional(), // also swap placeholders in JSON/form request bodies (< 1 MB)
   }),
 ]);
 
@@ -95,6 +97,7 @@ export class SecretStore extends TypedEmitter<Events> {
           source: e.value !== undefined ? "yaml" : (prev?.source ?? null),
           hosts: e.hosts ?? prev?.hosts ?? [],
           inject: "inject" in e ? e.inject : undefined,
+          substituteInBody: "substituteInBody" in e ? e.substituteInBody : undefined,
           fingerprint: null,
           updatedAt: e.value !== undefined ? t : (prev?.updatedAt ?? null),
         });

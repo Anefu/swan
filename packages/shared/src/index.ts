@@ -1,7 +1,7 @@
 // Wire protocol shared by the harness server and the web UI.
 // REST carries commands and queries; one WebSocket (/api/ws) carries live events.
 
-export type ProviderType = "anthropic" | "openai";
+export type ProviderType = "anthropic" | "openai" | "copilot";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type FolderMode = "ro" | "rw";
 export type PermissionMode = "allow" | "ask" | "deny";
@@ -94,6 +94,9 @@ export interface SessionSummary {
   updatedAt: string;
   model: { provider: string; id: string };
   usage: Usage;
+  epoch: number; // current context epoch (starts at 1)
+  allowances: string[]; // "Allow until stopped" rules; cleared on stop, interrupt or restart
+  queued: number; // user messages waiting to steer the next model step
 }
 
 export type ToolCallStatus =
@@ -123,7 +126,9 @@ export type ChatItem =
       approvalReason?: string; // why it needs approval (matched rule)
       denyReason?: string;
     }
-  | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string };
+  | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string }
+  // One-line record of a harness action: /dream, a context rollover, a queued steering message.
+  | { kind: "receipt"; id: string; ts: string; action: "dream" | "rollover" | "steer" | "command"; title: string; detail: string; status: "running" | "done" | "error" };
 
 export type ApprovalDecision = "allow" | "allow_always" | "deny";
 
@@ -187,6 +192,19 @@ export interface ProviderStatus {
   baseURL?: string;
   apiKeySecret?: string;
   ready: boolean; // key present (or not needed)
+  detail?: string; // e.g. how to sign in when not ready
+}
+
+/** A model a provider offers (currently listed for Copilot only). */
+export interface ProviderModel {
+  id: string; // use as persona model.id
+  name: string;
+  enabled: boolean; // false when the user's plan or org policy has not enabled it
+  policyState?: string;
+  vision: boolean;
+  reasoningEfforts: Effort[];
+  maxPromptTokens?: number;
+  maxOutputTokens?: number;
 }
 
 // ---------- REST endpoints ----------
@@ -196,6 +214,7 @@ export interface ProviderStatus {
 // GET    /api/runtime                         -> RuntimeStatus
 // POST   /api/runtime/rebuild                 -> RuntimeStatus   (rebuild sandbox image)
 // GET    /api/providers                       -> ProviderStatus[]
+// GET    /api/providers/:name/models          -> ProviderModel[] (copilot providers)
 // GET    /api/personas                        -> PersonaSummary[]
 // POST   /api/personas            {id,yaml}   -> PersonaSummary
 // GET    /api/personas/:id/source             -> PersonaSource
@@ -246,4 +265,146 @@ export type ServerEvent =
   | { type: "item.added"; sessionId: string; item: ChatItem }
   | { type: "item.updated"; sessionId: string; item: ChatItem } // full replacement
   | { type: "item.delta"; sessionId: string; itemId: string; delta: string } // append to text
-  | { type: "egress"; event: EgressEvent };
+  | { type: "egress"; event: EgressEvent }
+  | { type: "approvals.updated"; approvals: PendingApproval[] } // every waiting call, all personas
+  | { type: "usage.updated"; personaId: string }
+  | { type: "memory.updated"; personaId: string };
+
+// ---------- Swan additions ----------
+// One ongoing conversation per persona. A conversation is a session the server picks or creates;
+// the UI addresses it by persona and never lists sessions.
+//
+// GET    /api/personas/:id/conversation        -> { session: SessionSummary, items: ChatItem[] } (creates if absent)
+// GET    /api/personas/:id/commands            -> SlashCommand[]
+// GET    /api/personas/:id/config              -> PersonaConfigView
+// PUT    /api/personas/:id/config  PersonaConfigView -> SaveResult (writes the YAML, keeps comments)
+// PUT    /api/personas/:id/model   {provider, id, effort?} -> PersonaSummary (composer selectors; next turn)
+// GET    /api/approvals                        -> PendingApproval[]
+// DELETE /api/sessions/:id/allowances          -> SessionSummary (reset all)
+// DELETE /api/sessions/:id/allowances/:rule    -> SessionSummary (rule URL-encoded)
+// GET    /api/models                           -> ModelOption[] (every provider's selectable models)
+// Messages starting with "/" are commands: /dream, /stop, /usage (UI only), /<skill> [text].
+//
+// Memory (persona-private):
+// GET    /api/personas/:id/memory?query=&type=&status=  -> MemoryRecord[]
+// POST   /api/personas/:id/memory     {content, type, pinned?}       -> MemoryRecord
+// PUT    /api/personas/:id/memory/:recordId {content?, type?}        -> MemoryRecord (new version)
+// POST   /api/personas/:id/memory/:recordId/:action  (pin|unpin|archive|forget) -> MemoryRecord
+// GET    /api/personas/:id/memory-history  -> MemoryChange[] (newest first)
+// GET    /api/personas/:id/checkpoint      -> Checkpoint | null (latest committed)
+//
+// Usage:
+// GET    /api/usage?personaId=&period=today|all -> UsageReport
+// GET    /api/providers/:name/allowance          -> ProviderAllowance
+
+export interface SlashCommand {
+  name: string; // without the slash
+  description: string;
+  source: "swan" | "skill";
+}
+
+export interface PendingApproval {
+  sessionId: string;
+  personaId: string;
+  toolUseId: string;
+  name: string;
+  inputPreview: string;
+  rule: string;
+  since: string;
+}
+
+export interface ModelOption {
+  provider: string;
+  providerType: ProviderType;
+  id: string;
+  label: string;
+  efforts: Effort[]; // empty when the model takes no effort setting
+  preview?: boolean; // e.g. GitHub Copilot
+  ready: boolean; // provider has credentials
+}
+
+export interface PersonaConfigView {
+  name: string;
+  description: string;
+  instructions: string;
+  folders: { path: string; mount?: string; mode: FolderMode }[];
+  networkAllow: string[]; // hostnames, *.domain, or host:port (always tunnelled)
+  credentials: string[];
+  permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
+  skills: string[];
+  mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON
+  memory: { autoBrief: boolean; briefTokens: number };
+}
+
+export interface SaveResult {
+  persona: PersonaSummary;
+  appliedNow: string[]; // e.g. "permissions", "network allowlist"
+  nextStart: string[]; // e.g. "folders" (next container start)
+}
+
+export type MemoryType = "preference" | "decision" | "observation" | "procedure" | "episode";
+export type MemoryOrigin = "user" | "observation" | "inference";
+export type MemoryStatus = "active" | "tentative" | "archived" | "forgotten";
+
+export interface MemoryRecord {
+  id: string;
+  version: number;
+  type: MemoryType;
+  content: string;
+  origin: MemoryOrigin;
+  status: MemoryStatus;
+  pinned: boolean;
+  sources: string[]; // chat item ids or "user"
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryChange {
+  id: string;
+  ts: string;
+  recordId: string;
+  action: "added" | "edited" | "pinned" | "unpinned" | "archived" | "forgotten" | "merged" | "dream";
+  summary: string;
+  by: "user" | "agent" | "dream";
+  before?: string;
+  after?: string;
+}
+
+export interface Checkpoint {
+  epoch: number;
+  createdAt: string;
+  objective: string;
+  constraints: string[];
+  decisions: string[];
+  completed: string[];
+  failures: string[];
+  openQuestions: string[];
+  nextAction: string;
+  sources: string[]; // chat item ids
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  costUsd: number | null; // null = cost unavailable for some requests
+  credits: number | null; // Copilot AI credits, when reported
+  requests: number;
+}
+
+export interface UsageReport {
+  personaId: string;
+  period: "today" | "all";
+  total: UsageTotals;
+  byPurpose: Record<string, UsageTotals>; // foreground, checkpoint, dream
+  context: { usedTokens: number; limitTokens: number; estimated: boolean; epoch: number } | null;
+  updatedAt: string;
+}
+
+export interface ProviderAllowance {
+  provider: string;
+  available: boolean;
+  detail: string; // "Unavailable for this connection" when not reported
+  usagePage?: string;
+  observedAt: string;
+}

@@ -40,7 +40,7 @@ const oneLine = (s: unknown, n = 120) => {
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 };
 
-function zodTool<S extends z.ZodObject>(def: {
+export function zodTool<S extends z.ZodObject>(def: {
   name: string;
   description: string;
   schema: S;

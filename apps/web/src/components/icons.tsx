@@ -112,3 +112,41 @@ export const IconCpu = make(
 export const IconUnplug = make(
   <path d="m19 5 3-3M2 22l3-3M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4ZM7.5 13.5 10 11M10.5 16.5 13 14M12 6l6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z" />,
 );
+
+// ---------- Swan ----------
+export const IconSettings = make(
+  <>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </>,
+);
+export const IconDoc = make(<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6" />);
+export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
+export const IconPencil = make(<path d="M4 20h4L19 9l-4-4L4 16z" />);
+export const IconSend = make(<path d="M4 12l16-8-6 16-2-7z" />);
+export const IconSearch = make(
+  <>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </>,
+);
+export const IconArrowLeft = make(<path d="M19 12H5M12 19l-7-7 7-7" />);
+export const IconArrowRight = make(<path d="M5 12h14M12 5l7 7-7 7" />);
+export const IconPin = make(<path d="M12 17v5M9 3h6l-1 6 4 4H6l4-4z" />);
+export const IconExternal = make(<path d="M7 17 17 7M8 7h9v9" />);
+export const IconChart = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
+export const IconRepeat = make(<path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" />);
+export const IconCornerDown = make(<path d="M15 10l5 5-5 5M4 4v7a4 4 0 0 0 4 4h12" />);
+export const IconSlash = make(<path d="M16 4 8 20" />);
+export const IconPersonaAdd = make(
+  <>
+    <circle cx="10" cy="8" r="4" />
+    <path d="M2 21a8 8 0 0 1 13-6.2M19 15v6M16 18h6" />
+  </>,
+);
+export const IconEye = make(
+  <>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </>,
+);

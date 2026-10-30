@@ -1,9 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import type { Effort, ProviderStatus, Usage } from "@ph/shared";
+import type { Effort, ProviderModel, ProviderStatus, Usage } from "@ph/shared";
 import type { SecretStore } from "../secrets.js";
 import type { ProviderConfig, Settings } from "../settings.js";
 import { errMsg } from "../util.js";
+import { CopilotProvider } from "./copilot.js";
 import type { ToolDef } from "./tools.js";
 
 // The canonical transcript is the Anthropic beta message format; other providers convert.
@@ -18,6 +19,7 @@ export interface TurnRequest {
   maxTokens: number;
   effort?: Effort;
   signal: AbortSignal;
+  sessionId?: string; // stateful providers (copilot) keep one runtime session per harness session
 }
 
 export interface TurnCallbacks {
@@ -39,15 +41,17 @@ export interface TurnResult {
   toolUses: ToolUse[];
   usage: Usage;
   notice?: string;
+  credits?: number; // provider billing units for this step (Copilot AI credits), when reported
 }
 
 export class ProviderError extends Error {}
 
-interface Provider {
+export interface Provider {
   runTurn(req: TurnRequest, cb: TurnCallbacks): Promise<TurnResult>;
 }
 
-// Models on the current API surface: adaptive thinking, effort, server-side compaction.
+// Models on the current API surface: adaptive thinking and effort. Context is managed by Swan's
+// own epochs and checkpoints, so provider-side compaction stays off.
 const MODERN = /^claude-(fable|mythos|opus|sonnet|haiku)-(5|4-[6-9])/;
 // Models that accept server-side refusal fallbacks with `fallbacks: "default"`.
 const FALLBACKS = /^claude-(fable-5-1|opus-5-5|opus-5|sonnet-5-5)$/;
@@ -70,7 +74,6 @@ class AnthropicProvider implements Provider {
     const modern = MODERN.test(req.model);
     const officialApi = !this.cfg.baseURL;
     const betas: Anthropic.Beta.AnthropicBeta[] = [];
-    if (modern) betas.push("compact-2026-01-12");
     const fallbacks = officialApi && FALLBACKS.test(req.model);
     if (fallbacks) betas.push("server-side-fallback-2026-07-01");
 
@@ -92,7 +95,6 @@ class AnthropicProvider implements Provider {
         ? {
             thinking: { type: "adaptive", display: "summarized" },
             output_config: { effort: req.effort ?? "high" },
-            context_management: { edits: [{ type: "compact_20260112" }] },
           }
         : {}),
       ...(fallbacks ? { fallbacks: "default" } : {}),
@@ -270,17 +272,54 @@ class OpenAIProvider implements Provider {
 }
 
 export class ProviderRegistry {
+  // Stateful providers live as long as the harness; the others are created per request.
+  private copilot = new Map<string, CopilotProvider>();
+
   constructor(
     private settings: Settings,
     private secrets: SecretStore,
   ) {}
 
+  /** The secret a provider reads: its apiKeySecret, or COPILOT_GITHUB_TOKEN for a copilot provider without one. */
+  private secretName(cfg: ProviderConfig): string | undefined {
+    return cfg.apiKeySecret ?? (cfg.type === "copilot" ? "COPILOT_GITHUB_TOKEN" : undefined);
+  }
+
+  // Provider keys are used host-side only; fall back to the harness's own environment.
+  private keyFor(cfg: ProviderConfig) {
+    const name = this.secretName(cfg);
+    return () => (name ? (this.secrets.value(name) ?? process.env[name]) : undefined);
+  }
+
+  private copilotProvider(name: string): CopilotProvider {
+    const cfg = this.settings.providers[name];
+    if (!cfg || cfg.type !== "copilot") throw new ProviderError(`"${name}" is not a copilot provider`);
+    let p = this.copilot.get(name);
+    if (!p) {
+      p = new CopilotProvider(name, cfg, this.keyFor(cfg));
+      this.copilot.set(name, p);
+    }
+    return p;
+  }
+
   private make(name: string): Provider {
     const cfg = this.settings.providers[name];
     if (!cfg) throw new ProviderError(`unknown provider "${name}"`);
-    // Provider keys are used host-side only; fall back to the harness's own environment.
-    const key = () => (cfg.apiKeySecret ? (this.secrets.value(cfg.apiKeySecret) ?? process.env[cfg.apiKeySecret]) : undefined);
-    return cfg.type === "anthropic" ? new AnthropicProvider(cfg, key) : new OpenAIProvider(cfg, key);
+    if (cfg.type === "copilot") return this.copilotProvider(name);
+    return cfg.type === "anthropic" ? new AnthropicProvider(cfg, this.keyFor(cfg)) : new OpenAIProvider(cfg, this.keyFor(cfg));
+  }
+
+  listModels(name: string): Promise<ProviderModel[]> {
+    return this.copilotProvider(name).listModels();
+  }
+
+  /** Free per-session provider state (the copilot runtime session). */
+  releaseSession(sessionId: string) {
+    for (const p of this.copilot.values()) void p.release(sessionId);
+  }
+
+  async shutdown() {
+    await Promise.all([...this.copilot.values()].map((p) => p.shutdown()));
   }
 
   runTurn(provider: string, req: TurnRequest, cb: TurnCallbacks) {
@@ -288,12 +327,21 @@ export class ProviderRegistry {
   }
 
   status(): ProviderStatus[] {
-    return Object.entries(this.settings.providers).map(([name, cfg]) => ({
-      name,
-      type: cfg.type,
-      baseURL: cfg.baseURL,
-      apiKeySecret: cfg.apiKeySecret,
-      ready: cfg.apiKeySecret ? !!(this.secrets.value(cfg.apiKeySecret) ?? process.env[cfg.apiKeySecret]) : true,
-    }));
+    return Object.entries(this.settings.providers).map(([name, cfg]) => {
+      const secret = this.secretName(cfg);
+      const hasKey = secret ? !!this.keyFor(cfg)() : true;
+      const ready = cfg.type === "copilot" ? hasKey || !!cfg.useLoggedInUser : hasKey;
+      return {
+        name,
+        type: cfg.type,
+        baseURL: cfg.baseURL,
+        apiKeySecret: secret,
+        ready,
+        detail:
+          cfg.type === "copilot" && !ready
+            ? `Add ${secret} (fine-grained PAT, "Copilot Requests" permission) on the Credentials page`
+            : undefined,
+      };
+    });
   }
 }

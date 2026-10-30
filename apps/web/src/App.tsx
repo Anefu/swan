@@ -1,49 +1,48 @@
 import { useEffect } from "react";
-import { ConnectionBanner, RuntimeBanner, ServerGate, Toasts } from "./components/Banners";
-import { ChatView } from "./components/ChatView";
-import { CredentialsView } from "./components/CredentialsView";
-import { NewPersonaDialog } from "./components/NewPersonaDialog";
-import { RightPanel } from "./components/RightPanel";
-import { Sidebar } from "./components/Sidebar";
-import { sessionsForPersona, useStore } from "./store";
-import { isEditableTarget } from "./util";
+import { ConnectionLine, RuntimeLine, ServerGate, Toasts } from "./components/Banners";
+import { Conversation } from "./components/Conversation";
+import { closeDockAndRestoreFocus, Dock, useMediaQuery } from "./components/Dock";
+import { FirstRun } from "./components/FirstRun";
+import { Header } from "./components/Header";
+import { NetworkView } from "./components/NetworkView";
+import { conversationSession, useStore } from "./store";
+import { isWorking } from "./status";
 
-function useGlobalShortcuts() {
+function useGlobalShortcuts(overlay: boolean) {
   const { actions } = useStore();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = actions.getState();
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === "\\") {
+      if (mod && !e.altKey && e.key.toLowerCase() === "k") {
+        if (s.personas.length === 0) return;
         e.preventDefault();
-        actions.setUi({ rightOpen: !s.ui.rightOpen });
-      } else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && s.selectedPersonaId) {
-        const list = sessionsForPersona(s, s.selectedPersonaId);
-        if (list.length === 0) return;
-        e.preventDefault();
-        const i = list.findIndex((x) => x.id === s.selectedSessionId);
-        const next = e.key === "ArrowDown" ? (i < 0 ? 0 : Math.min(list.length - 1, i + 1)) : i < 0 ? 0 : Math.max(0, i - 1);
-        actions.selectSession(list[next].id);
-      } else if (e.altKey && !mod && e.code === "KeyN" && s.selectedPersonaId) {
-        e.preventDefault();
-        const p = s.personas.find((x) => x.id === s.selectedPersonaId);
-        if (p && p.errors.length === 0) void actions.createSession(p.id);
-      } else if (e.key === "/" && !mod && !e.altKey && !isEditableTarget(e.target) && !document.querySelector(".modal")) {
-        const el = document.getElementById("composer-input");
-        if (el) {
+        actions.openPersonaMenu();
+      } else if (mod && e.key === ".") {
+        const session = conversationSession(s, s.selectedPersonaId);
+        if (session && isWorking(session)) {
           e.preventDefault();
-          el.focus();
+          void actions.interrupt(session.id);
+        }
+      } else if (e.key === "Escape" && !e.defaultPrevented) {
+        const dock = s.ui.dock;
+        if (!dock) return;
+        const inDock = (document.activeElement as HTMLElement | null)?.closest(".dock");
+        if (overlay || inDock) {
+          e.preventDefault();
+          closeDockAndRestoreFocus(dock, () => actions.openDock(null));
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [actions]);
+  }, [actions, overlay]);
 }
 
 export function App() {
   const { state } = useStore();
-  useGlobalShortcuts();
+  const overlay = useMediaQuery("(max-width: 1000px)");
+  useGlobalShortcuts(overlay);
 
   const gated = state.server === "no-token" || state.server === "unauthorized" || !state.loaded;
   if (gated) {
@@ -55,18 +54,27 @@ export function App() {
     );
   }
 
-  const showRight = state.ui.rightOpen && state.view === "chat";
+  const noPersonas = state.personas.length === 0;
+  const dock = state.ui.dock;
   return (
-    <div className={showRight ? "app with-right" : "app"}>
-      <Sidebar />
-      <main className="main">
-        <ConnectionBanner />
-        <RuntimeBanner />
-        <div className="main-body">{state.view === "credentials" ? <CredentialsView /> : <ChatView />}</div>
-      </main>
-      {showRight && <RightPanel />}
+    <div className="app">
+      <Header />
+      <div className="workspace">
+        <main className="main">
+          <ConnectionLine />
+          <RuntimeLine />
+          {noPersonas ? (
+            <FirstRun />
+          ) : (
+            <>
+              <Conversation hidden={state.view === "network"} />
+              {state.view === "network" && <NetworkView />}
+            </>
+          )}
+        </main>
+        {dock && <Dock mode={dock} overlay={overlay} />}
+      </div>
       <Toasts />
-      {state.dialog?.kind === "new-persona" && <NewPersonaDialog />}
     </div>
   );
 }

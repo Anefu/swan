@@ -4,7 +4,7 @@ import path from "node:path";
 import chokidar from "chokidar";
 import YAML from "yaml";
 import { z } from "zod";
-import type { FolderMount, McpServerSummary, PersonaSummary } from "@ph/shared";
+import type { Effort, FolderMount, McpServerSummary, PersonaConfigView, PersonaSummary, SaveResult } from "@ph/shared";
 import { SECRET_NAME, SECRET_REF, type SecretStore } from "./secrets.js";
 import { PH_HOME, paths, type Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
@@ -51,6 +51,12 @@ export const PersonaSchema = z.strictObject({
   credentials: z.array(z.string()).default([]),
   env: z.record(z.string(), z.string()).default({}),
   network: z.strictObject({ allow: z.array(z.string()).default([]) }).prefault({}),
+  memory: z
+    .strictObject({
+      autoBrief: z.boolean().default(true), // load saved memories at the start of each context
+      briefTokens: z.number().int().min(0).max(8000).default(1500),
+    })
+    .prefault({}),
   permissions: z
     .strictObject({
       default: z.enum(["allow", "ask", "deny"]).default("ask"),
@@ -177,7 +183,12 @@ export class PersonaStore extends TypedEmitter<Events> {
     for (const s of cfg.skills) if (!this.skills.get(s)) errors.push(`skill "${s}" not found`);
 
     const declared = new Set(cfg.credentials);
-    for (const c of cfg.credentials) if (!SECRET_NAME.test(c)) errors.push(`invalid credential name "${c}"`);
+    const providerKeys = new Set(Object.values(this.settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
+    for (const c of cfg.credentials) {
+      if (!SECRET_NAME.test(c)) errors.push(`invalid credential name "${c}"`);
+      // A model-provider key in the sandbox would let the agent spend the user's model budget.
+      if (providerKeys.has(c)) errors.push(`credential "${c}" is a model-provider key and stays host-side; remove it from credentials`);
+    }
     const checkRefs = (where: string, value: string) => {
       for (const m of value.matchAll(SECRET_REF)) {
         if (!declared.has(m[1])) errors.push(`${where} references {{secret:${m[1]}}} but it is not listed under credentials`);
@@ -190,7 +201,9 @@ export class PersonaStore extends TypedEmitter<Events> {
       else for (const [k, v] of Object.entries(srv.env)) checkRefs(`mcpServers.${name}.env.${k}`, v);
     }
     for (const h of cfg.network.allow) {
-      if (h.includes("/") || h.includes(":") || h === "*") errors.push(`network.allow entry "${h}" must be a hostname or *.domain`);
+      const m = /^([^:]+)(?::(\d{1,5}))?$/.exec(h);
+      if (!m || h.includes("/") || h === "*" || (m[2] && (Number(m[2]) < 1 || Number(m[2]) > 65535)))
+        errors.push(`network.allow entry "${h}" must be a hostname, *.domain or host:port`);
     }
     return { id, file, yaml, config: cfg, folders, errors };
   }
@@ -241,6 +254,65 @@ export class PersonaStore extends TypedEmitter<Events> {
     this.personas.set(id, { ...p, file });
     this.emit("changed");
     return this.personas.get(id)!;
+  }
+
+  configView(id: string): PersonaConfigView {
+    const p = this.personas.get(id);
+    if (!p?.config) throw new Error(`persona "${id}" is invalid; fix its YAML first`);
+    const c = p.config;
+    return {
+      name: c.name,
+      description: c.description,
+      instructions: c.instructions,
+      folders: c.folders.map((f) => ({ path: f.path, ...(f.mount ? { mount: f.mount } : {}), mode: f.mode })),
+      networkAllow: c.network.allow,
+      credentials: c.credentials,
+      permissions: c.permissions,
+      skills: c.skills,
+      mcpServers: c.mcpServers as Record<string, unknown>,
+      memory: c.memory,
+    };
+  }
+
+  /** Apply a form edit to the persona's YAML, keeping comments and keys the form does not cover. */
+  async saveConfig(id: string, v: PersonaConfigView): Promise<SaveResult> {
+    const p = this.personas.get(id);
+    if (!p) throw new Error("not found");
+    const before = p.config;
+    const doc = YAML.parseDocument(p.yaml);
+    doc.set("name", v.name);
+    doc.set("description", v.description);
+    doc.set("instructions", v.instructions);
+    doc.set("folders", doc.createNode(v.folders));
+    doc.setIn(["network", "allow"], doc.createNode(v.networkAllow));
+    doc.set("credentials", doc.createNode(v.credentials));
+    doc.set("permissions", doc.createNode(v.permissions));
+    doc.set("skills", doc.createNode(v.skills));
+    doc.set("mcpServers", doc.createNode(v.mcpServers));
+    doc.set("memory", doc.createNode(v.memory));
+    const saved = await this.save(id, doc.toString());
+    const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const appliedNow: string[] = [];
+    const nextStart: string[] = [];
+    if (!before || !eq(before.permissions, v.permissions)) appliedNow.push("permissions");
+    if (!before || !eq(before.network.allow, v.networkAllow)) appliedNow.push("network allowlist");
+    if (!before || !eq(before.credentials, v.credentials)) appliedNow.push("credentials (new ones from the next container start)");
+    if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
+    if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
+    if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
+      nextStart.push("folders, skills and MCP servers (next container start)");
+    return { persona: this.summary(saved), appliedNow, nextStart };
+  }
+
+  /** Composer model/effort selectors: saved to the persona, used from the next model turn. */
+  async setModel(id: string, m: { provider: string; id: string; effort?: Effort }) {
+    const p = this.personas.get(id);
+    if (!p) throw new Error("not found");
+    if (!this.settings.providers[m.provider]) throw new Error(`unknown provider "${m.provider}"`);
+    const doc = YAML.parseDocument(p.yaml);
+    const keep = p.config?.model?.maxTokens;
+    doc.set("model", doc.createNode({ provider: m.provider, id: m.id, ...(m.effort ? { effort: m.effort } : {}), ...(keep ? { maxTokens: keep } : {}) }));
+    return this.summary(await this.save(id, doc.toString()));
   }
 
   async remove(id: string): Promise<void> {

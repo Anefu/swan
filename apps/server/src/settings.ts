@@ -20,6 +20,8 @@ export const paths = {
   ca: path.join(PH_HOME, "ca"),
   build: path.join(PH_HOME, "build"),
   audit: path.join(PH_HOME, "audit"),
+  copilotRuntime: path.join(PH_HOME, "copilot-runtime"),
+  memory: path.join(PH_HOME, "memory"),
   apiToken: path.join(PH_HOME, "api-token"),
   webDist: path.join(REPO_ROOT, "apps/web/dist"),
   containerfile: path.join(REPO_ROOT, "sandbox/Containerfile"),
@@ -27,9 +29,11 @@ export const paths = {
 };
 
 const ProviderSchema = z.object({
-  type: z.enum(["anthropic", "openai"]),
+  type: z.enum(["anthropic", "openai", "copilot"]),
   baseURL: z.string().optional(),
   apiKeySecret: z.string().optional(), // name in the secrets store
+  // copilot only: fall back to the host's `copilot login` when no token is in the secrets store
+  useLoggedInUser: z.boolean().optional(),
 });
 
 const SettingsSchema = z.object({
@@ -49,6 +53,7 @@ const SettingsSchema = z.object({
     anthropic: { type: "anthropic", apiKeySecret: "ANTHROPIC_API_KEY" },
     openai: { type: "openai", baseURL: "https://api.openai.com/v1", apiKeySecret: "OPENAI_API_KEY" },
     local: { type: "openai", baseURL: "http://127.0.0.1:8080/v1" },
+    copilot: { type: "copilot", apiKeySecret: "COPILOT_GITHUB_TOKEN" },
   }),
   defaultModel: z
     .object({ provider: z.string(), id: z.string() })
@@ -56,6 +61,8 @@ const SettingsSchema = z.object({
   skillDirs: z.array(z.string()).default([]), // extra skill roots, e.g. ~/.claude/skills
   toolOutputLimit: z.number().int().default(30_000),
   bashTimeoutMs: z.number().int().default(120_000),
+  contextLimitTokens: z.number().int().default(200_000), // assumed model context when the provider does not say
+  rolloverAt: z.number().min(0.3).max(0.95).default(0.75), // share of the context that triggers a new epoch
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -69,13 +76,16 @@ providers:
   openai: { type: openai, baseURL: https://api.openai.com/v1, apiKeySecret: OPENAI_API_KEY }
   # Any OpenAI-compatible server (mlx_lm.server, Ollama, vLLM, LM Studio...)
   local: { type: openai, baseURL: http://127.0.0.1:8080/v1 }
+  # GitHub Copilot subscription, through the official Copilot SDK. COPILOT_GITHUB_TOKEN is a
+  # fine-grained PAT (personal account, "Copilot Requests" permission); classic ghp_ tokens fail.
+  copilot: { type: copilot, apiKeySecret: COPILOT_GITHUB_TOKEN }
 defaultModel: { provider: anthropic, id: claude-opus-5-5 }
 # Extra directories to load skills from (each child dir with a SKILL.md is a skill)
 skillDirs: []
 `;
 
 export async function ensureHome(): Promise<void> {
-  for (const d of [paths.home, paths.personas, paths.skills, paths.sessions, paths.ca, paths.build, paths.audit]) {
+  for (const d of [paths.home, paths.personas, paths.skills, paths.sessions, paths.ca, paths.build, paths.audit, paths.memory]) {
     await fs.mkdir(d, { recursive: true, mode: 0o700 });
   }
   await fs.chmod(paths.home, 0o700);

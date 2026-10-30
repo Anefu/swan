@@ -35,6 +35,7 @@ What runs where:
 | Component | Where | Sees secrets? |
 |---|---|---|
 | Agent loop, provider clients | host (harness) | yes (LLM API keys), never sent to the model |
+| Copilot SDK runtime (copilot provider) | host child process, own dir under PH_HOME, minimal env | yes (its GitHub token only) |
 | Built-in tools (bash, read/write/edit, glob, grep) | session container via `podman exec` | no |
 | stdio MCP servers | session container via `podman exec -i` | no — env holds placeholders |
 | http MCP servers | host (harness) | yes — headers resolved host-side |
@@ -125,7 +126,7 @@ session-scoped allow rule.
   good for prompt caching). The OpenAI adapter converts on the way out.
 - Anthropic requests: streaming, adaptive thinking with summarized display, `output_config.effort`,
   `eager_input_streaming` on every tool (inputs validated before execution), top-level prompt
-  caching, server-side compaction (`compact-2026-01-12`), and server-side refusal fallbacks
+  caching, Swan context epochs with checkpoints (not provider compaction), and server-side refusal fallbacks
   (`fallbacks: "default"`, `server-side-fallback-2026-07-01`) for models that support them.
 - Tools are frozen at session start (deterministic order) so the prefix stays cacheable.
 - Each assistant turn: stream → validate tool inputs → permission check (ask → UI approval) →
@@ -135,6 +136,25 @@ session-scoped allow rule.
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
 - Sessions persist to `~/.persona-harness/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
+
+## Copilot provider
+
+GitHub exposes Copilot models to third-party apps only through the Copilot SDK, which runs
+Copilot's own agent runtime. To keep the harness in charge of the loop:
+
+- The client runs in `mode: "empty"` with `availableTools: ["custom:*"]`, `systemMessage` replaced
+  by the harness prompt, infinite sessions off and custom instructions skipped. Any permission
+  request from the runtime is denied.
+- Harness tools are declared without handlers. The runtime emits `external_tool.requested`; the
+  adapter returns those as `tool_use`, the harness gates and runs them in the sandbox, and the next
+  turn answers them with `session.rpc.tools.handlePendingToolCall` (marked experimental in the SDK).
+- The adapter is stateful: one SDK session per harness session. Each turn checks that the
+  transcript extends what the runtime has seen (length + hash). If not, it rebuilds the session and
+  replays earlier turns as text, since the SDK cannot seed tool-call history.
+- The runtime gets an explicit minimal environment (no provider keys from the harness's env), and
+  its token comes only from `COPILOT_GITHUB_TOKEN` (or, with `useLoggedInUser`, the GitHub CLI login: SDK empty mode cannot see a `copilot login`).
+- Personas may not list any provider key under `credentials:`, so the egress proxy can never
+  inject it into sandbox traffic.
 
 ## Harness API hardening
 

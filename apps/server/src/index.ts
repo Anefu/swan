@@ -2,7 +2,10 @@ import { promises as fs } from "node:fs";
 import { ProviderRegistry } from "./agent/providers.js";
 import { SessionManager } from "./agent/session.js";
 import { Hub, startApi } from "./api.js";
+import { ModelCatalog } from "./catalog.js";
+import { MemoryStore } from "./memory.js";
 import { PersonaStore } from "./personas.js";
+import { UsageLedger } from "./usage.js";
 import { CertAuthority } from "./proxy/ca.js";
 import { EgressProxy } from "./proxy/egress.js";
 import { PodmanRuntime } from "./sandbox/podman.js";
@@ -45,7 +48,18 @@ async function main() {
   const runtime = new PodmanRuntime(settings, ca);
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
-  const sessions = new SessionManager({ settings, runtime, proxy, secrets, personas, skills, providers, broadcast: hub.broadcast });
+  const memory = new MemoryStore();
+  const usage = new UsageLedger();
+  await usage.load();
+  const catalog = new ModelCatalog(settings, secrets, providers);
+  // eslint-disable-next-line prefer-const
+  let sessions: SessionManager;
+  sessions = new SessionManager({
+    settings, runtime, proxy, secrets, personas, skills, providers, memory, usage,
+    broadcast: hub.broadcast,
+    onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
+  });
+  memory.on("changed", (personaId) => hub.broadcast({ type: "memory.updated", personaId }));
   await sessions.loadAll();
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
@@ -54,6 +68,7 @@ async function main() {
     hub.broadcast({ type: "credentials.updated", credentials: secrets.status(personas.usedBy()), changed });
     hub.broadcast({ type: "personas.updated", personas: personaSummaries() });
     sessions.onSecretsChanged(changed);
+    catalog.invalidate();
   });
   personas.on("changed", () => {
     hub.broadcast({ type: "personas.updated", personas: personaSummaries() });
@@ -64,7 +79,7 @@ async function main() {
   runtime.on("status", (s) => hub.broadcast({ type: "runtime.status", runtime: s }));
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
-  await startApi({ settings, token, secrets, personas, skills, runtime, proxy, providers, sessions }, hub);
+  await startApi({ settings, token, secrets, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog }, hub);
   log.info("main", `harness home: ${paths.home}`);
 
   void runtime.init().then(() => runtime.removeOrphans());
@@ -75,6 +90,7 @@ async function main() {
     stopping = true;
     log.info("main", "shutting down: stopping session containers");
     await sessions.shutdown().catch(() => {});
+    await providers.shutdown().catch(() => {});
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

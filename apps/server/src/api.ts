@@ -5,7 +5,10 @@ import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { ApprovalBody, ClientMessage, CredentialUpsert, FileEntry, ServerEvent } from "@ph/shared";
+import type { ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
+import type { ModelCatalog } from "./catalog.js";
+import type { MemoryStore } from "./memory.js";
+import type { UsageLedger } from "./usage.js";
 import type { ProviderRegistry } from "./agent/providers.js";
 import type { SessionManager } from "./agent/session.js";
 import { PERSONA_ID, type PersonaStore } from "./personas.js";
@@ -28,6 +31,9 @@ export interface ApiDeps {
   proxy: EgressProxy;
   providers: ProviderRegistry;
   sessions: SessionManager;
+  memory: MemoryStore;
+  usage: UsageLedger;
+  catalog: ModelCatalog;
 }
 
 class HttpError extends Error {
@@ -114,6 +120,10 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     return d.runtime.status;
   });
   app.get("/api/providers", async () => d.providers.status());
+  app.get("/api/providers/:name/models", async (req: P<{ name: string }>) => {
+    if (d.settings.providers[req.params.name]?.type !== "copilot") throw new HttpError(400, "model listing is available for copilot providers");
+    return d.providers.listModels(req.params.name);
+  });
 
   // ----- personas -----
   app.get("/api/personas", async () => d.personas.list().map((p) => d.personas.summary(p)));
@@ -247,6 +257,78 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     await d.sessions.remove(req.params.id);
     return { ok: true };
   });
+
+  // ----- Swan: one conversation per persona -----
+  app.get("/api/personas/:id/conversation", async (req: P) => {
+    const p = persona(req.params.id);
+    if (!p.config) throw new HttpError(400, `persona "${p.id}" is invalid: ${p.errors.join("; ")}`);
+    const s = d.sessions.conversation(p.id);
+    return { session: s.summary, items: s.items };
+  });
+  app.get("/api/personas/:id/commands", async (req: P) => {
+    persona(req.params.id);
+    return d.sessions.conversation(req.params.id).commands();
+  });
+  app.get("/api/personas/:id/config", async (req: P) => {
+    persona(req.params.id);
+    return d.personas.configView(req.params.id);
+  });
+  app.put("/api/personas/:id/config", async (req: FastifyRequest<{ Params: { id: string }; Body: PersonaConfigView }>) => {
+    persona(req.params.id);
+    return d.personas.saveConfig(req.params.id, req.body);
+  });
+  app.put("/api/personas/:id/model", async (req: FastifyRequest<{ Params: { id: string }; Body: { provider: string; id: string; effort?: Effort } }>) => {
+    persona(req.params.id);
+    if (!req.body?.provider || !req.body?.id) throw new HttpError(400, "provider and id are required");
+    return d.personas.setModel(req.params.id, req.body);
+  });
+  app.get("/api/models", async () => d.catalog.list());
+  app.get("/api/approvals", async () => d.sessions.pendingApprovals());
+  app.delete("/api/sessions/:id/allowances", async (req: P) => {
+    const s = session(req.params.id);
+    s.resetAllowances();
+    return s.summary;
+  });
+  app.delete("/api/sessions/:id/allowances/:rule", async (req: P<{ id: string; rule: string }>) => {
+    const s = session(req.params.id);
+    s.removeAllowance(decodeURIComponent(req.params.rule));
+    return s.summary;
+  });
+
+  // ----- memory (persona-private) -----
+  app.get("/api/personas/:id/memory", async (req: FastifyRequest<{ Params: { id: string }; Querystring: { query?: string; type?: string; status?: string } }>) => {
+    persona(req.params.id);
+    return d.memory.list(req.params.id, req.query);
+  });
+  app.post("/api/personas/:id/memory", async (req: FastifyRequest<{ Params: { id: string }; Body: { content: string; type: MemoryType; pinned?: boolean } }>) => {
+    persona(req.params.id);
+    return d.memory.add(req.params.id, { content: req.body?.content ?? "", type: req.body?.type, origin: "user", sources: ["user"], pinned: req.body?.pinned, by: "user" });
+  });
+  app.put("/api/personas/:id/memory/:recordId", async (req: FastifyRequest<{ Params: { id: string; recordId: string }; Body: { content?: string; type?: MemoryType } }>) => {
+    persona(req.params.id);
+    return d.memory.edit(req.params.id, req.params.recordId, req.body ?? {});
+  });
+  app.post("/api/personas/:id/memory/:recordId/:action", async (req: P<{ id: string; recordId: string; action: string }>) => {
+    persona(req.params.id);
+    const a = req.params.action;
+    if (a !== "pin" && a !== "unpin" && a !== "archive" && a !== "forget") throw new HttpError(400, "action must be pin, unpin, archive or forget");
+    return d.memory.act(req.params.id, req.params.recordId, a);
+  });
+  app.get("/api/personas/:id/memory-history", async (req: P) => {
+    persona(req.params.id);
+    return d.memory.history(req.params.id);
+  });
+  app.get("/api/personas/:id/checkpoint", async (req: P) => {
+    persona(req.params.id);
+    return d.memory.latestCheckpoint(req.params.id);
+  });
+
+  // ----- usage -----
+  app.get("/api/usage", async (req: FastifyRequest<{ Querystring: { personaId?: string; period?: string } }>) => {
+    const p = persona(req.query.personaId ?? "");
+    return d.usage.report(p.id, req.query.period === "all" ? "all" : "today");
+  });
+  app.get("/api/providers/:name/allowance", async (req: P<{ name: string }>) => d.catalog.allowance(req.params.name));
 
   app.get("/api/egress", async (req: FastifyRequest<{ Querystring: { sessionId?: string; limit?: string } }>) =>
     d.proxy.events(req.query.sessionId || undefined, Math.min(2000, Number(req.query.limit ?? 200) || 200)),

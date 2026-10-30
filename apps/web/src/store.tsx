@@ -4,46 +4,84 @@ import type {
   ChatItem,
   CredentialStatus,
   CredentialUpsert,
+  Effort,
   EgressEvent,
+  ModelOption,
+  PendingApproval,
+  PersonaConfigView,
   PersonaSummary,
   ProviderStatus,
   RuntimeStatus,
+  SaveResult,
   ServerEvent,
   SessionSummary,
+  SkillSummary,
 } from "@ph/shared";
 import { api, ApiError, configureApi, probeToken, readToken, type ApiHealth } from "./api";
-import { errorMessage, loadPref, savePref } from "./util";
+import { errorMessage, isMissingEndpoint, loadPref, savePref } from "./util";
 import { EventSocket, wsUrl, type WsState } from "./ws";
 
 // ---------- State ----------
 
 export type ServerState = "loading" | "ok" | "unreachable" | "unauthorized" | "no-token";
-export type RightTab = "workspace" | "tools" | "network" | "persona";
 export type ToastKind = "info" | "success" | "warn" | "error";
+export type DockMode = "settings" | "memory";
+export type MainView = "conversation" | "network";
+export const NEW_PERSONA = "__new__";
 
 export interface Toast {
   id: number;
   kind: ToastKind;
   text: string;
   title?: string;
-  icon?: "key";
 }
 
 export interface Transcript {
   items: ChatItem[];
-  /** ws = live snapshot; rest = fetched over HTTP; stale = no longer subscribed. */
+  /** ws = live snapshot; rest = fetched over HTTP; stale = no longer live. */
   source: "ws" | "rest" | "stale";
 }
 
 export interface UiPrefs {
-  rightOpen: boolean;
-  rightTab: RightTab;
-  rightWidth: number;
-  egressSessionOnly: boolean;
-  lastSession: Record<string, string>;
+  dock: DockMode | null;
+  widths: Record<DockMode, number>;
 }
 
-export type Dialog = { kind: "new-persona" } | null;
+export interface MemoryPaneState {
+  tab: "memory" | "usage";
+  sub: "saved" | "current" | "history";
+  query: string;
+  type: string;
+  status: string;
+  expanded: string | null;
+  period: "today" | "all";
+}
+
+export const DEFAULT_MEMORY_PANE: MemoryPaneState = {
+  tab: "memory",
+  sub: "saved",
+  query: "",
+  type: "",
+  status: "",
+  expanded: null,
+  period: "today",
+};
+
+export interface SettingsDraft {
+  base: PersonaConfigView;
+  draft: PersonaConfigView;
+  /** Only for a new persona. */
+  newId?: string;
+  result?: SaveResult | null;
+  error?: string | null;
+}
+
+export interface NetworkFilters {
+  query: string;
+  range: "hour" | "today" | "all";
+  onlyBlocked: boolean;
+  expanded: string | null;
+}
 
 export interface State {
   token: string | null;
@@ -54,37 +92,47 @@ export interface State {
   providers: ProviderStatus[];
   personas: PersonaSummary[];
   credentials: CredentialStatus[];
-  /** credential name -> epoch ms of the last hot reload that touched it */
   credentialFlash: Record<string, number>;
+  skills: SkillSummary[];
+  /** null = not loaded or the server has no /api/models. */
+  models: ModelOption[] | null;
+  /** null = the server has no /api/approvals; pending calls are derived from loaded transcripts. */
+  approvals: PendingApproval[] | null;
+  /** personaId -> sessionId of its one conversation */
+  conversations: Record<string, string>;
+  conversationError: Record<string, string>;
   sessions: Record<string, SessionSummary>;
   transcripts: Record<string, Transcript>;
   egress: EgressEvent[];
   selectedPersonaId: string | null;
-  selectedSessionId: string | null;
-  view: "chat" | "credentials";
+  view: MainView;
+  dockBeforeNetwork: DockMode | null;
+  settingsScope: "persona" | "swan";
+  /** Settings persona scope shows the new-persona draft instead of the selected persona. */
+  settingsNew: boolean;
+  drafts: Record<string, SettingsDraft>;
+  memoryPane: Record<string, MemoryPaneState>;
+  composer: Record<string, string>;
+  network: NetworkFilters;
+  focusApproval: { sessionId: string; toolUseId: string; seq: number } | null;
+  focusItem: { sessionId: string; itemId: string; seq: number } | null;
+  personaMenuSeq: number;
+  usageRev: Record<string, number>;
+  memoryRev: Record<string, number>;
   toasts: Toast[];
   ui: UiPrefs;
-  dialog: Dialog;
 }
 
-const PREFS_KEY = "ph.ui.v1";
-const SELECTION_KEY = "ph.selection.v1";
-export const MAX_EGRESS = 1000;
+const PREFS_KEY = "swan.ui.v1";
+const SELECTION_KEY = "swan.persona.v1";
+const COMPOSER_KEY = "swan.composer.v1";
+const MAX_EGRESS = 2000;
 
-const DEFAULT_UI: UiPrefs = {
-  rightOpen: true,
-  rightTab: "workspace",
-  rightWidth: 420,
-  egressSessionOnly: false,
-  lastSession: {},
-};
+const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400 } };
 
 function initState(): State {
   const token = readToken();
-  const sel = loadPref<{ personaId: string | null; sessionId: string | null }>(SELECTION_KEY, {
-    personaId: null,
-    sessionId: null,
-  });
+  const ui = loadPref(PREFS_KEY, DEFAULT_UI);
   return {
     token,
     server: token ? "loading" : "no-token",
@@ -95,15 +143,30 @@ function initState(): State {
     personas: [],
     credentials: [],
     credentialFlash: {},
+    skills: [],
+    models: null,
+    approvals: null,
+    conversations: {},
+    conversationError: {},
     sessions: {},
     transcripts: {},
     egress: [],
-    selectedPersonaId: sel.personaId,
-    selectedSessionId: sel.sessionId,
-    view: "chat",
+    selectedPersonaId: loadPref<{ id: string | null }>(SELECTION_KEY, { id: null }).id,
+    view: "conversation",
+    dockBeforeNetwork: null,
+    settingsScope: "persona",
+    settingsNew: false,
+    drafts: {},
+    memoryPane: {},
+    composer: loadPref<Record<string, string>>(COMPOSER_KEY, {}),
+    network: { query: "", range: "today", onlyBlocked: false, expanded: null },
+    focusApproval: null,
+    focusItem: null,
+    personaMenuSeq: 0,
+    usageRev: {},
+    memoryRev: {},
     toasts: [],
-    ui: loadPref(PREFS_KEY, DEFAULT_UI),
-    dialog: null,
+    ui: { ...DEFAULT_UI, ...ui, widths: { ...DEFAULT_UI.widths, ...ui.widths } },
   };
 }
 
@@ -117,27 +180,38 @@ type Action =
   | { type: "providers"; providers: ProviderStatus[] }
   | { type: "personas"; personas: PersonaSummary[] }
   | { type: "persona.upsert"; persona: PersonaSummary }
-  | { type: "persona.remove"; id: string }
   | { type: "credentials"; credentials: CredentialStatus[]; changed?: string[] }
   | { type: "credential.upsert"; credential: CredentialStatus }
   | { type: "credential.remove"; name: string }
-  | { type: "sessions.forPersona"; personaId: string; sessions: SessionSummary[] }
+  | { type: "skills"; skills: SkillSummary[] }
+  | { type: "models"; models: ModelOption[] | null }
+  | { type: "approvals"; approvals: PendingApproval[] | null }
+  | { type: "sessions"; sessions: SessionSummary[] }
   | { type: "session.upsert"; session: SessionSummary }
   | { type: "session.remove"; id: string }
+  | { type: "conversation"; personaId: string; session: SessionSummary; items: ChatItem[] }
+  | { type: "conversation.error"; personaId: string; error: string | null }
   | { type: "transcript.set"; sessionId: string; items: ChatItem[]; source: "ws" | "rest" }
   | { type: "transcripts.stale" }
   | { type: "item.put"; sessionId: string; item: ChatItem }
   | { type: "item.delta"; sessionId: string; itemId: string; delta: string }
   | { type: "egress.merge"; events: EgressEvent[] }
   | { type: "egress.add"; event: EgressEvent }
-  | { type: "egress.clear" }
   | { type: "select.persona"; id: string | null }
-  | { type: "select.session"; id: string | null }
-  | { type: "view"; view: State["view"] }
+  | { type: "view"; view: MainView }
+  | { type: "dock"; dock: DockMode | null }
+  | { type: "dock.width"; mode: DockMode; width: number }
+  | { type: "settings.scope"; scope: "persona" | "swan"; isNew?: boolean }
+  | { type: "draft.set"; key: string; draft: SettingsDraft | null }
+  | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
+  | { type: "composer"; personaId: string; text: string }
+  | { type: "network"; patch: Partial<NetworkFilters> }
+  | { type: "focus.approval"; sessionId: string; toolUseId: string }
+  | { type: "focus.item"; sessionId: string; itemId: string }
+  | { type: "personaMenu.open" }
+  | { type: "rev"; which: "usageRev" | "memoryRev"; personaId: string }
   | { type: "toast.add"; toast: Toast }
-  | { type: "toast.remove"; id: number }
-  | { type: "ui"; patch: Partial<UiPrefs> }
-  | { type: "dialog"; dialog: Dialog };
+  | { type: "toast.remove"; id: number };
 
 function lastIndexById(items: ChatItem[], id: string): number {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].id === id) return i;
@@ -158,12 +232,8 @@ function appendDelta(items: ChatItem[], itemId: string, delta: string): ChatItem
   const it = items[idx];
   if (!("text" in it)) return items;
   const next = items.slice();
-  next[idx] = { ...it, text: it.text + delta };
+  next[idx] = { ...it, text: it.text + delta } as ChatItem;
   return next;
-}
-
-function byTs(a: EgressEvent, b: EgressEvent): number {
-  return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0;
 }
 
 function mergeEgress(existing: EgressEvent[], incoming: EgressEvent[]): EgressEvent[] {
@@ -171,24 +241,8 @@ function mergeEgress(existing: EgressEvent[], incoming: EgressEvent[]): EgressEv
   const map = new Map<string, EgressEvent>();
   for (const e of existing) map.set(e.id, e);
   for (const e of incoming) map.set(e.id, e);
-  const all = [...map.values()].sort(byTs);
+  const all = [...map.values()].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return all.length > MAX_EGRESS ? all.slice(all.length - MAX_EGRESS) : all;
-}
-
-function selectSession(state: State, id: string | null): State {
-  const transcripts = { ...state.transcripts };
-  const prev = state.selectedSessionId;
-  if (prev && prev !== id && transcripts[prev]) transcripts[prev] = { ...transcripts[prev], source: "stale" };
-  // keep a small cache of recently viewed transcripts
-  const keys = Object.keys(transcripts);
-  if (keys.length > 8) for (const k of keys) if (k !== id && k !== prev) delete transcripts[k];
-  const session = id ? state.sessions[id] : undefined;
-  const personaId = session ? session.personaId : state.selectedPersonaId;
-  const ui =
-    session && personaId
-      ? { ...state.ui, lastSession: { ...state.ui.lastSession, [personaId]: session.id } }
-      : state.ui;
-  return { ...state, selectedSessionId: id, selectedPersonaId: personaId, transcripts, ui, view: id ? "chat" : state.view };
 }
 
 function reducer(state: State, a: Action): State {
@@ -204,14 +258,10 @@ function reducer(state: State, a: Action): State {
     case "providers":
       return { ...state, providers: a.providers };
     case "personas": {
-      let next: State = { ...state, personas: a.personas };
-      if (next.selectedPersonaId && !a.personas.some((p) => p.id === next.selectedPersonaId)) {
-        next = { ...next, selectedPersonaId: null, selectedSessionId: null };
-      }
-      if (!next.selectedPersonaId && a.personas.length > 0) {
-        next = { ...next, selectedPersonaId: a.personas[0].id };
-      }
-      return next;
+      let selectedPersonaId = state.selectedPersonaId;
+      if (selectedPersonaId && !a.personas.some((p) => p.id === selectedPersonaId)) selectedPersonaId = null;
+      if (!selectedPersonaId && a.personas.length > 0) selectedPersonaId = a.personas[0].id;
+      return { ...state, personas: a.personas, selectedPersonaId };
     }
     case "persona.upsert": {
       const exists = state.personas.some((p) => p.id === a.persona.id);
@@ -219,16 +269,6 @@ function reducer(state: State, a: Action): State {
         ? state.personas.map((p) => (p.id === a.persona.id ? a.persona : p))
         : [...state.personas, a.persona];
       return { ...state, personas };
-    }
-    case "persona.remove": {
-      const personas = state.personas.filter((p) => p.id !== a.id);
-      const sel = state.selectedPersonaId === a.id;
-      return {
-        ...state,
-        personas,
-        selectedPersonaId: sel ? (personas[0]?.id ?? null) : state.selectedPersonaId,
-        selectedSessionId: sel ? null : state.selectedSessionId,
-      };
     }
     case "credentials": {
       let flash = state.credentialFlash;
@@ -244,38 +284,57 @@ function reducer(state: State, a: Action): State {
       const credentials = exists
         ? state.credentials.map((c) => (c.name === a.credential.name ? a.credential : c))
         : [...state.credentials, a.credential].sort((x, y) => x.name.localeCompare(y.name));
-      return { ...state, credentials };
+      return { ...state, credentials, credentialFlash: { ...state.credentialFlash, [a.credential.name]: Date.now() } };
     }
     case "credential.remove":
       return { ...state, credentials: state.credentials.filter((c) => c.name !== a.name) };
-    case "sessions.forPersona": {
-      const sessions: Record<string, SessionSummary> = {};
-      for (const [id, s] of Object.entries(state.sessions)) if (s.personaId !== a.personaId) sessions[id] = s;
+    case "skills":
+      return { ...state, skills: a.skills };
+    case "models":
+      return { ...state, models: a.models };
+    case "approvals":
+      return { ...state, approvals: a.approvals };
+    case "sessions": {
+      const sessions = { ...state.sessions };
       for (const s of a.sessions) sessions[s.id] = s;
-      let selectedSessionId = state.selectedSessionId;
-      if (selectedSessionId && !sessions[selectedSessionId] && state.selectedPersonaId === a.personaId) {
-        selectedSessionId = null;
-      }
-      return { ...state, sessions, selectedSessionId };
+      return { ...state, sessions };
     }
     case "session.upsert":
       return { ...state, sessions: { ...state.sessions, [a.session.id]: a.session } };
     case "session.remove": {
-      if (!state.sessions[a.id] && state.selectedSessionId !== a.id) return state;
+      if (!state.sessions[a.id]) return state;
       const sessions = { ...state.sessions };
       delete sessions[a.id];
       const transcripts = { ...state.transcripts };
       delete transcripts[a.id];
+      const conversations = { ...state.conversations };
+      for (const [pid, sid] of Object.entries(conversations)) if (sid === a.id) delete conversations[pid];
+      return { ...state, sessions, transcripts, conversations };
+    }
+    case "conversation": {
+      const cur = state.transcripts[a.session.id];
+      const transcripts =
+        cur?.source === "ws"
+          ? state.transcripts
+          : { ...state.transcripts, [a.session.id]: { items: a.items, source: "rest" as const } };
+      const conversationError = { ...state.conversationError };
+      delete conversationError[a.personaId];
       return {
         ...state,
-        sessions,
+        conversations: { ...state.conversations, [a.personaId]: a.session.id },
+        sessions: { ...state.sessions, [a.session.id]: a.session },
         transcripts,
-        selectedSessionId: state.selectedSessionId === a.id ? null : state.selectedSessionId,
+        conversationError,
       };
+    }
+    case "conversation.error": {
+      const conversationError = { ...state.conversationError };
+      if (a.error) conversationError[a.personaId] = a.error;
+      else delete conversationError[a.personaId];
+      return { ...state, conversationError };
     }
     case "transcript.set": {
       const cur = state.transcripts[a.sessionId];
-      // A live snapshot always wins over an HTTP fetch that may have raced with it.
       if (a.source === "rest" && cur?.source === "ws") return state;
       return { ...state, transcripts: { ...state.transcripts, [a.sessionId]: { items: a.items, source: a.source } } };
     }
@@ -301,39 +360,70 @@ function reducer(state: State, a: Action): State {
     case "egress.add": {
       const list = state.egress;
       const last = list[list.length - 1];
-      let egress: EgressEvent[];
       if (!last || (last.ts <= a.event.ts && !list.some((e) => e.id === a.event.id))) {
-        egress = list.length >= MAX_EGRESS ? [...list.slice(list.length - MAX_EGRESS + 1), a.event] : [...list, a.event];
-      } else {
-        egress = mergeEgress(list, [a.event]);
+        const egress = list.length >= MAX_EGRESS ? [...list.slice(list.length - MAX_EGRESS + 1), a.event] : [...list, a.event];
+        return { ...state, egress };
       }
-      return { ...state, egress };
+      return { ...state, egress: mergeEgress(list, [a.event]) };
     }
-    case "egress.clear":
-      return { ...state, egress: [] };
-    case "select.persona": {
-      if (a.id === state.selectedPersonaId) return { ...state, view: "chat" };
-      const remembered = a.id ? state.ui.lastSession[a.id] : undefined;
-      const sessionId = remembered && state.sessions[remembered] ? remembered : null;
-      const next = selectSession({ ...state, selectedPersonaId: a.id }, sessionId);
-      return { ...next, selectedPersonaId: a.id, view: "chat" };
+    case "select.persona":
+      if (a.id === state.selectedPersonaId) return { ...state, settingsNew: false };
+      return { ...state, selectedPersonaId: a.id, settingsNew: false };
+    case "view": {
+      if (a.view === state.view) return state;
+      if (a.view === "network") {
+        // Network activity opens with the dock closed; the previous dock state comes back on return.
+        return { ...state, view: a.view, dockBeforeNetwork: state.ui.dock, ui: { ...state.ui, dock: null } };
+      }
+      return {
+        ...state,
+        view: a.view,
+        ui: { ...state.ui, dock: state.ui.dock ?? state.dockBeforeNetwork },
+        dockBeforeNetwork: null,
+      };
     }
-    case "select.session":
-      return selectSession(state, a.id);
-    case "view":
-      return { ...state, view: a.view };
+    case "dock":
+      return { ...state, ui: { ...state.ui, dock: a.dock } };
+    case "dock.width":
+      return { ...state, ui: { ...state.ui, widths: { ...state.ui.widths, [a.mode]: a.width } } };
+    case "settings.scope":
+      return {
+        ...state,
+        settingsScope: a.scope,
+        settingsNew: a.isNew ?? (a.scope === "persona" ? false : state.settingsNew),
+      };
+    case "draft.set": {
+      const drafts = { ...state.drafts };
+      if (a.draft) drafts[a.key] = a.draft;
+      else delete drafts[a.key];
+      return { ...state, drafts };
+    }
+    case "memoryPane": {
+      const cur = state.memoryPane[a.personaId] ?? DEFAULT_MEMORY_PANE;
+      return { ...state, memoryPane: { ...state.memoryPane, [a.personaId]: { ...cur, ...a.patch } } };
+    }
+    case "composer":
+      return { ...state, composer: { ...state.composer, [a.personaId]: a.text } };
+    case "network":
+      return { ...state, network: { ...state.network, ...a.patch } };
+    case "focus.approval":
+      return {
+        ...state,
+        focusApproval: { sessionId: a.sessionId, toolUseId: a.toolUseId, seq: (state.focusApproval?.seq ?? 0) + 1 },
+      };
+    case "focus.item":
+      return { ...state, focusItem: { sessionId: a.sessionId, itemId: a.itemId, seq: (state.focusItem?.seq ?? 0) + 1 } };
+    case "personaMenu.open":
+      return { ...state, personaMenuSeq: state.personaMenuSeq + 1 };
+    case "rev":
+      return { ...state, [a.which]: { ...state[a.which], [a.personaId]: (state[a.which][a.personaId] ?? 0) + 1 } };
     case "toast.add": {
-      // Do not stack identical toasts (e.g. repeated connection errors).
       const dupe = state.toasts.find((t) => t.text === a.toast.text && t.kind === a.toast.kind);
       const toasts = dupe ? state.toasts.filter((t) => t !== dupe) : state.toasts;
       return { ...state, toasts: [...toasts.slice(-4), a.toast] };
     }
     case "toast.remove":
       return { ...state, toasts: state.toasts.filter((t) => t.id !== a.id) };
-    case "ui":
-      return { ...state, ui: { ...state.ui, ...a.patch } };
-    case "dialog":
-      return { ...state, dialog: a.dialog };
   }
 }
 
@@ -341,36 +431,44 @@ function reducer(state: State, a: Action): State {
 
 export interface Actions {
   getState(): State;
-  toast(kind: ToastKind, text: string, opts?: { title?: string; icon?: "key" }): void;
+  toast(kind: ToastKind, text: string, title?: string): void;
   dismissToast(id: number): void;
   reportError(e: unknown, context?: string): void;
-  setUi(patch: Partial<UiPrefs>): void;
-  openDialog(dialog: Dialog): void;
-  selectPersona(id: string | null): void;
-  selectSession(id: string | null): void;
-  showView(view: State["view"]): void;
-  openRightTab(tab: RightTab): void;
-
   retryConnection(): void;
-  loadAll(): Promise<void>;
-  refreshSessions(personaId: string): Promise<void>;
-  refreshProviders(): Promise<void>;
-  mergeEgress(events: EgressEvent[]): void;
-  clearEgress(): void;
 
-  createSession(personaId: string): Promise<SessionSummary | null>;
+  selectPersona(id: string): void;
+  showView(view: MainView): void;
+  toggleDock(mode: DockMode): void;
+  openDock(mode: DockMode | null): void;
+  setDockWidth(mode: DockMode, width: number): void;
+  openSettings(scope: "persona" | "swan", opts?: { isNew?: boolean }): void;
+  setSettingsScope(scope: "persona" | "swan"): void;
+  setDraft(key: string, draft: SettingsDraft | null): void;
+  setMemoryPane(personaId: string, patch: Partial<MemoryPaneState>): void;
+  openUsage(personaId: string): void;
+  setComposer(personaId: string, text: string): void;
+  setNetwork(patch: Partial<NetworkFilters>): void;
+  openPersonaMenu(): void;
+  jumpToApproval(a?: PendingApproval): void;
+  jumpToItem(personaId: string, itemId: string): void;
+
+  loadConversation(personaId: string): Promise<void>;
+  refreshEgress(): Promise<void>;
+  refreshProviders(): Promise<void>;
+  refreshModels(): Promise<void>;
+
   sendMessage(sessionId: string, text: string): Promise<boolean>;
   interrupt(sessionId: string): Promise<void>;
   approve(sessionId: string, toolUseId: string, body: ApprovalBody): Promise<boolean>;
-  stopSession(sessionId: string): Promise<void>;
-  deleteSession(sessionId: string): Promise<boolean>;
+  removeAllowance(sessionId: string, rule: string): Promise<void>;
+  resetAllowances(sessionId: string): Promise<void>;
+  setModel(personaId: string, body: { provider: string; id: string; effort?: Effort }): Promise<void>;
 
-  /** Throw on failure so forms can show the error inline. */
+  /** These throw so forms can show the error inline. */
+  saveConfig(personaId: string, view: PersonaConfigView): Promise<SaveResult>;
   createPersona(id: string, yaml: string): Promise<PersonaSummary>;
-  savePersona(id: string, yaml: string): Promise<PersonaSummary>;
-  deletePersona(id: string): Promise<boolean>;
   putCredential(name: string, body: CredentialUpsert): Promise<CredentialStatus>;
-  deleteCredential(name: string): Promise<boolean>;
+  deleteCredential(name: string): Promise<void>;
   rebuildRuntime(): Promise<void>;
 }
 
@@ -395,38 +493,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const toastSeq = useRef(0);
   const loadFailed = useRef(false);
 
-  const actions = useMemo<Actions>(() => {
-    const toast: Actions["toast"] = (kind, text, opts) => {
+  const { actions, loadAll } = useMemo<{ actions: Actions; loadAll: () => Promise<void> }>(() => {
+    const toast: Actions["toast"] = (kind, text, title) => {
       toastSeq.current += 1;
-      dispatch({ type: "toast.add", toast: { id: toastSeq.current, kind, text, ...opts } });
+      dispatch({ type: "toast.add", toast: { id: toastSeq.current, kind, text, title } });
     };
 
     const reportError: Actions["reportError"] = (e, context) => {
       if (e instanceof ApiError && e.unreachable) {
-        toast("error", "Cannot reach the harness server");
+        toast("error", "Cannot reach the Swan server");
         return;
       }
-      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) return; // full-screen state handles it
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) return;
       const msg = errorMessage(e);
       toast("error", context ? `${context}: ${msg}` : msg);
-    };
-
-    const inflightSessions = new Map<string, Promise<void>>();
-    const refreshSessions = (personaId: string): Promise<void> => {
-      const existing = inflightSessions.get(personaId);
-      if (existing) return existing;
-      const p = (async () => {
-        try {
-          const sessions = await api.sessions(personaId);
-          dispatch({ type: "sessions.forPersona", personaId, sessions });
-        } catch (e) {
-          reportError(e, "Loading sessions");
-        } finally {
-          inflightSessions.delete(personaId);
-        }
-      })();
-      inflightSessions.set(personaId, p);
-      return p;
     };
 
     const refreshProviders = async () => {
@@ -437,118 +517,159 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    const refreshModels = async () => {
+      try {
+        dispatch({ type: "models", models: await api.models() });
+      } catch {
+        dispatch({ type: "models", models: null });
+      }
+    };
+
+    const refreshApprovals = async () => {
+      try {
+        dispatch({ type: "approvals", approvals: await api.approvals() });
+      } catch (e) {
+        if (isMissingEndpoint(e)) dispatch({ type: "approvals", approvals: null });
+      }
+    };
+
+    const refreshEgress = async () => {
+      try {
+        dispatch({ type: "egress.merge", events: await api.egress({ limit: 1000 }) });
+      } catch (e) {
+        if (!(e instanceof ApiError && e.unreachable)) reportError(e, "Loading network activity");
+      }
+    };
+
+    const inflight = new Map<string, Promise<void>>();
+    /** One conversation per persona: ask the server for it; older servers fall back to the newest session. */
+    const loadConversation = (personaId: string): Promise<void> => {
+      const existing = inflight.get(personaId);
+      if (existing) return existing;
+      const p = (async () => {
+        try {
+          let res: { session: SessionSummary; items: ChatItem[] };
+          try {
+            res = await api.conversation(personaId);
+          } catch (e) {
+            if (!isMissingEndpoint(e)) throw e;
+            const list = await api.sessions(personaId);
+            const session = list[0] ?? (await api.createSession(personaId));
+            res = await api.session(session.id);
+          }
+          dispatch({ type: "conversation", personaId, session: res.session, items: res.items });
+        } catch (e) {
+          if (e instanceof ApiError && e.unreachable) return;
+          dispatch({ type: "conversation.error", personaId, error: errorMessage(e) });
+        } finally {
+          inflight.delete(personaId);
+        }
+      })();
+      inflight.set(personaId, p);
+      return p;
+    };
+
     const loadAll = async () => {
-      const [runtime, providers, personas, credentials, egress] = await Promise.allSettled([
+      const [runtime, providers, personas, credentials, egress, sessions, skills] = await Promise.allSettled([
         api.runtime(),
         api.providers(),
         api.personas(),
         api.credentials(),
-        api.egress({ limit: 200 }),
+        api.egress({ limit: 1000 }),
+        api.sessions(),
+        api.skills(),
       ]);
       if (runtime.status === "fulfilled") dispatch({ type: "runtime", runtime: runtime.value });
       if (providers.status === "fulfilled") dispatch({ type: "providers", providers: providers.value });
       if (credentials.status === "fulfilled") dispatch({ type: "credentials", credentials: credentials.value });
       if (egress.status === "fulfilled") dispatch({ type: "egress.merge", events: egress.value });
+      if (sessions.status === "fulfilled") dispatch({ type: "sessions", sessions: sessions.value });
+      if (skills.status === "fulfilled") dispatch({ type: "skills", skills: skills.value });
+      void refreshModels();
+      void refreshApprovals();
       if (personas.status === "fulfilled") {
         dispatch({ type: "personas", personas: personas.value });
         dispatch({ type: "loaded" });
         loadFailed.current = false;
+        const pid = stateRef.current.selectedPersonaId;
+        if (pid) void loadConversation(pid);
       } else {
         loadFailed.current = true;
-        // A real server error (not "unreachable"/auth) should not trap the UI on the connecting screen.
         const r = personas.reason;
-        if (r instanceof ApiError && !r.unreachable && r.status !== 401 && r.status !== 403) dispatch({ type: "loaded" });
-      }
-      const failures = [runtime, providers, personas, credentials, egress].filter(
-        (r): r is PromiseRejectedResult => r.status === "rejected",
-      );
-      const firstReal = failures.find((f) => !(f.reason instanceof ApiError && f.reason.unreachable));
-      if (firstReal) reportError(firstReal.reason);
-      if (personas.status !== "fulfilled") return;
-      // A newly auto-selected persona is loaded by the selection effect instead.
-      const pid = stateRef.current.selectedPersonaId;
-      if (pid && personas.value.some((p) => p.id === pid)) await refreshSessions(pid);
-      const sid = stateRef.current.selectedSessionId;
-      if (sid) ensureTranscript(sid);
-    };
-
-    let transcriptTimer: number | null = null;
-    /** Live snapshot via WS is preferred; fall back to REST when the socket is down or slow. */
-    const ensureTranscript = (sessionId: string) => {
-      if (transcriptTimer !== null) window.clearTimeout(transcriptTimer);
-      transcriptTimer = null;
-      const t = stateRef.current.transcripts[sessionId];
-      if (t?.source === "ws") return;
-      if (!socketRef.current?.isOpen) {
-        void fetchTranscript(sessionId);
-        return;
-      }
-      transcriptTimer = window.setTimeout(() => {
-        transcriptTimer = null;
-        const cur = stateRef.current;
-        if (cur.selectedSessionId === sessionId && cur.transcripts[sessionId]?.source !== "ws") {
-          void fetchTranscript(sessionId);
+        if (r instanceof ApiError && !r.unreachable && r.status !== 401 && r.status !== 403) {
+          dispatch({ type: "loaded" });
+          reportError(r, "Loading personas");
         }
-      }, 2500);
-    };
-
-    const fetchTranscript = async (sessionId: string) => {
-      try {
-        const res = await api.session(sessionId);
-        dispatch({ type: "session.upsert", session: res.session });
-        dispatch({ type: "transcript.set", sessionId, items: res.items, source: "rest" });
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 404) {
-          dispatch({ type: "session.remove", id: sessionId });
-          return;
-        }
-        if (!(e instanceof ApiError && e.unreachable)) reportError(e, "Loading session");
       }
     };
 
-    return {
+    const conversationOf = (personaId: string) => stateRef.current.conversations[personaId];
+
+    const actions: Actions = {
       getState: () => stateRef.current,
       toast,
       dismissToast: (id) => dispatch({ type: "toast.remove", id }),
       reportError,
-      setUi: (patch) => dispatch({ type: "ui", patch }),
-      openDialog: (dialog) => dispatch({ type: "dialog", dialog }),
-      selectPersona: (id) => dispatch({ type: "select.persona", id }),
-      selectSession: (id) => {
-        dispatch({ type: "select.session", id });
-        if (id) ensureTranscript(id);
-      },
-      showView: (view) => dispatch({ type: "view", view }),
-      openRightTab: (tab) => dispatch({ type: "ui", patch: { rightOpen: true, rightTab: tab } }),
-
       retryConnection: () => {
         socketRef.current?.retryNow();
         void loadAll();
       },
-      loadAll,
-      refreshSessions,
-      refreshProviders,
-      mergeEgress: (events) => dispatch({ type: "egress.merge", events }),
-      clearEgress: () => dispatch({ type: "egress.clear" }),
 
-      createSession: async (personaId) => {
-        try {
-          const session = await api.createSession(personaId);
-          dispatch({ type: "session.upsert", session });
-          dispatch({ type: "transcript.set", sessionId: session.id, items: [], source: "rest" });
-          dispatch({ type: "select.session", id: session.id });
-          return session;
-        } catch (e) {
-          reportError(e, "New session");
-          return null;
-        }
+      selectPersona: (id) => {
+        dispatch({ type: "select.persona", id });
+        if (!conversationOf(id)) void loadConversation(id);
       },
+      showView: (view) => dispatch({ type: "view", view }),
+      toggleDock: (mode) => {
+        const s = stateRef.current;
+        dispatch({ type: "dock", dock: s.ui.dock === mode ? null : mode });
+      },
+      openDock: (dock) => dispatch({ type: "dock", dock }),
+      setDockWidth: (mode, width) => dispatch({ type: "dock.width", mode, width }),
+      openSettings: (scope, opts) => {
+        dispatch({ type: "settings.scope", scope, isNew: opts?.isNew ?? false });
+        dispatch({ type: "dock", dock: "settings" });
+      },
+      setSettingsScope: (scope) => dispatch({ type: "settings.scope", scope }),
+      setDraft: (key, draft) => dispatch({ type: "draft.set", key, draft }),
+      setMemoryPane: (personaId, patch) => dispatch({ type: "memoryPane", personaId, patch }),
+      openUsage: (personaId) => {
+        dispatch({ type: "memoryPane", personaId, patch: { tab: "usage" } });
+        dispatch({ type: "dock", dock: "memory" });
+      },
+      setComposer: (personaId, text) => dispatch({ type: "composer", personaId, text }),
+      setNetwork: (patch) => dispatch({ type: "network", patch }),
+      openPersonaMenu: () => dispatch({ type: "personaMenu.open" }),
+      jumpToApproval: (target) => {
+        const s = stateRef.current;
+        const a = target ?? pendingApprovals(s)[0];
+        if (!a) return;
+        if (a.personaId && a.personaId !== s.selectedPersonaId) {
+          dispatch({ type: "select.persona", id: a.personaId });
+          if (!conversationOf(a.personaId)) void loadConversation(a.personaId);
+        }
+        dispatch({ type: "view", view: "conversation" });
+        dispatch({ type: "focus.approval", sessionId: a.sessionId, toolUseId: a.toolUseId });
+      },
+      jumpToItem: (personaId, itemId) => {
+        const s = stateRef.current;
+        if (personaId !== s.selectedPersonaId) dispatch({ type: "select.persona", id: personaId });
+        dispatch({ type: "view", view: "conversation" });
+        const sid = s.conversations[personaId];
+        if (sid) dispatch({ type: "focus.item", sessionId: sid, itemId });
+      },
+
+      loadConversation,
+      refreshEgress,
+      refreshProviders,
+      refreshModels,
+
       sendMessage: async (sessionId, text) => {
         try {
           await api.sendMessage(sessionId, text);
           return true;
         } catch (e) {
-          reportError(e, "Send failed");
+          reportError(e, "Message not sent");
           return false;
         }
       },
@@ -556,7 +677,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           await api.interrupt(sessionId);
         } catch (e) {
-          reportError(e, "Interrupt failed");
+          reportError(e, "Stop failed");
         }
       },
       approve: async (sessionId, toolUseId, body) => {
@@ -564,67 +685,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           await api.approve(sessionId, toolUseId, body);
           return true;
         } catch (e) {
-          reportError(e, "Approval failed");
+          reportError(e, "Decision not recorded");
           return false;
         }
       },
-      stopSession: async (sessionId) => {
+      removeAllowance: async (sessionId, rule) => {
         try {
-          const session = await api.stopSession(sessionId);
-          dispatch({ type: "session.upsert", session });
+          dispatch({ type: "session.upsert", session: await api.removeAllowance(sessionId, rule) });
         } catch (e) {
-          reportError(e, "Stop failed");
+          reportError(e, "Could not remove allowance");
         }
       },
-      deleteSession: async (sessionId) => {
+      resetAllowances: async (sessionId) => {
         try {
-          await api.deleteSession(sessionId);
-          dispatch({ type: "session.remove", id: sessionId });
-          return true;
+          dispatch({ type: "session.upsert", session: await api.resetAllowances(sessionId) });
         } catch (e) {
-          reportError(e, "Delete session failed");
-          return false;
+          reportError(e, "Could not reset allowances");
+        }
+      },
+      setModel: async (personaId, body) => {
+        try {
+          dispatch({ type: "persona.upsert", persona: await api.setModel(personaId, body) });
+        } catch (e) {
+          reportError(e, "Model not changed");
         }
       },
 
+      saveConfig: async (personaId, view) => {
+        const result = await api.saveConfig(personaId, view);
+        dispatch({ type: "persona.upsert", persona: result.persona });
+        return result;
+      },
       createPersona: async (id, yaml) => {
         const persona = await api.createPersona(id, yaml);
         dispatch({ type: "persona.upsert", persona });
         dispatch({ type: "select.persona", id: persona.id });
+        void loadConversation(persona.id);
         return persona;
-      },
-      savePersona: async (id, yaml) => {
-        const persona = await api.savePersonaSource(id, yaml);
-        dispatch({ type: "persona.upsert", persona });
-        return persona;
-      },
-      deletePersona: async (id) => {
-        try {
-          await api.deletePersona(id);
-          dispatch({ type: "persona.remove", id });
-          toast("success", `Persona ${id} deleted`);
-          return true;
-        } catch (e) {
-          reportError(e, "Delete persona failed");
-          return false;
-        }
       },
       putCredential: async (name, body) => {
         const credential = await api.putCredential(name, body);
         dispatch({ type: "credential.upsert", credential });
-        // When live, the credentials.updated event produces the "reloaded" toast.
-        if (!socketRef.current?.isOpen) toast("success", `Saved ${name}`, { icon: "key" });
+        void refreshProviders();
+        void refreshModels();
         return credential;
       },
       deleteCredential: async (name) => {
-        try {
-          await api.deleteCredential(name);
-          dispatch({ type: "credential.remove", name });
-          return true;
-        } catch (e) {
-          reportError(e, "Delete credential failed");
-          return false;
-        }
+        await api.deleteCredential(name);
+        dispatch({ type: "credential.remove", name });
+        void refreshProviders();
       },
       rebuildRuntime: async () => {
         try {
@@ -634,9 +743,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       },
     };
+    return { actions, loadAll };
   }, []);
 
-  // Server events -> state
   const onEvent = useRef<(ev: ServerEvent) => void>(() => {});
   onEvent.current = (ev: ServerEvent) => {
     switch (ev.type) {
@@ -649,10 +758,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         break;
       case "credentials.updated":
         dispatch({ type: "credentials", credentials: ev.credentials, changed: ev.changed });
-        if (ev.changed.length > 0) {
-          actions.toast("success", ev.changed.join(", "), { title: "Credentials reloaded", icon: "key" });
-        }
+        if (ev.changed.length > 0) actions.toast("success", `${ev.changed.join(", ")} reloaded, no restart`, "Credentials");
         void actions.refreshProviders();
+        void actions.refreshModels();
         break;
       case "session.updated":
         dispatch({ type: "session.upsert", session: ev.session });
@@ -674,6 +782,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       case "egress":
         dispatch({ type: "egress.add", event: ev.event });
         break;
+      case "approvals.updated":
+        dispatch({ type: "approvals", approvals: ev.approvals });
+        break;
+      case "usage.updated":
+        dispatch({ type: "rev", which: "usageRev", personaId: ev.personaId });
+        break;
+      case "memory.updated":
+        dispatch({ type: "rev", which: "memoryRev", personaId: ev.personaId });
+        break;
     }
   };
 
@@ -681,15 +798,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const token = state.token;
     if (!token) {
-      // Dev convenience: poll index.html until the server has written its token, then reload.
       const t = window.setInterval(async () => {
         if (await probeToken()) window.location.reload();
       }, 3000);
       return () => window.clearInterval(t);
     }
-    configureApi(token, (h: ApiHealth) => {
-      dispatch({ type: "server", server: h });
-    });
+    configureApi(token, (h: ApiHealth) => dispatch({ type: "server", server: h }));
     const socket = new EventSocket(wsUrl(token), {
       onEvent: (ev) => onEvent.current(ev),
       onState: (ws) => {
@@ -698,36 +812,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       onOpen: (reconnect) => {
         dispatch({ type: "server", server: "ok" });
-        if (reconnect || loadFailed.current) void actions.loadAll();
+        if (reconnect || loadFailed.current) void loadAll();
       },
     });
     socketRef.current = socket;
-    socket.setSubscription(stateRef.current.selectedSessionId);
+    const pid = stateRef.current.selectedPersonaId;
+    socket.setSubscription(pid ? (stateRef.current.conversations[pid] ?? null) : null);
     socket.start();
-    void actions.loadAll();
+    void loadAll();
     return () => {
       socket.stop();
       socketRef.current = null;
     };
-  }, [state.token, actions]);
+  }, [state.token, actions, loadAll]);
 
-  // Keep the socket subscribed to the open session.
+  // Subscribe to the selected persona's conversation.
+  const currentSessionId = state.selectedPersonaId ? (state.conversations[state.selectedPersonaId] ?? null) : null;
   useEffect(() => {
-    socketRef.current?.setSubscription(state.selectedSessionId);
-  }, [state.selectedSessionId]);
+    socketRef.current?.setSubscription(currentSessionId);
+  }, [currentSessionId]);
 
-  // Load the session list of the selected persona.
+  // Make sure the selected persona's conversation is loaded (also after personas arrive).
   useEffect(() => {
-    if (state.loaded && state.selectedPersonaId) void actions.refreshSessions(state.selectedPersonaId);
-  }, [state.loaded, state.selectedPersonaId, actions]);
+    const pid = state.selectedPersonaId;
+    if (state.loaded && pid && !state.conversations[pid] && !state.conversationError[pid]) void actions.loadConversation(pid);
+  }, [state.loaded, state.selectedPersonaId, state.conversations, state.conversationError, actions]);
 
-  // Persist selection and layout prefs.
+  useEffect(() => savePref(SELECTION_KEY, { id: state.selectedPersonaId }), [state.selectedPersonaId]);
+  useEffect(() => savePref(PREFS_KEY, state.ui), [state.ui]);
   useEffect(() => {
-    savePref(SELECTION_KEY, { personaId: state.selectedPersonaId, sessionId: state.selectedSessionId });
-  }, [state.selectedPersonaId, state.selectedSessionId]);
-  useEffect(() => {
-    savePref(PREFS_KEY, state.ui);
-  }, [state.ui]);
+    const t = window.setTimeout(() => savePref(COMPOSER_KEY, state.composer), 400);
+    return () => window.clearTimeout(t);
+  }, [state.composer]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
@@ -740,13 +856,47 @@ export function useSelectedPersona(): PersonaSummary | null {
   return state.personas.find((p) => p.id === state.selectedPersonaId) ?? null;
 }
 
-export function useSelectedSession(): SessionSummary | null {
-  const { state } = useStore();
-  return state.selectedSessionId ? (state.sessions[state.selectedSessionId] ?? null) : null;
+export function conversationSession(state: State, personaId: string | null): SessionSummary | null {
+  if (!personaId) return null;
+  const sid = state.conversations[personaId];
+  if (sid && state.sessions[sid]) return state.sessions[sid];
+  // Before the conversation loads, use the newest known session for status hints.
+  let best: SessionSummary | null = null;
+  for (const s of Object.values(state.sessions)) {
+    if (s.personaId === personaId && (!best || s.updatedAt > best.updatedAt)) best = s;
+  }
+  return best;
 }
 
-export function sessionsForPersona(state: State, personaId: string): SessionSummary[] {
-  return Object.values(state.sessions)
-    .filter((s) => s.personaId === personaId)
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+/** Every waiting tool call, oldest first. Derived from loaded transcripts when the server has no approvals feed. */
+export function pendingApprovals(state: State): PendingApproval[] {
+  if (state.approvals) return [...state.approvals].sort((a, b) => (a.since < b.since ? -1 : a.since > b.since ? 1 : 0));
+  const out: PendingApproval[] = [];
+  for (const [sessionId, t] of Object.entries(state.transcripts)) {
+    const personaId = state.sessions[sessionId]?.personaId ?? "";
+    for (const it of t.items) {
+      if (it.kind === "tool_call" && it.status === "pending_approval") {
+        out.push({
+          sessionId,
+          personaId,
+          toolUseId: it.id,
+          name: it.name,
+          inputPreview: it.inputPreview,
+          rule: it.approvalReason ?? "",
+          since: it.ts,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => (a.since < b.since ? -1 : a.since > b.since ? 1 : 0));
+}
+
+export function usePendingApprovals(): PendingApproval[] {
+  const { state } = useStore();
+  return useMemo(() => pendingApprovals(state), [state.approvals, state.transcripts, state.sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export function modelLabel(state: State, model: { provider: string; id: string }): string {
+  const m = state.models?.find((x) => x.provider === model.provider && x.id === model.id);
+  return m?.label ?? model.id;
 }

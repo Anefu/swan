@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { RuntimeStatus, SessionStatus, ToolCallStatus } from "@ph/shared";
+import type { Effort, RuntimeStatus, SessionStatus, ToolCallStatus } from "@ph/shared";
+import { ApiError } from "./api";
 
 export function cls(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -184,4 +185,55 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** True when the server does not implement an endpoint yet (older server). */
+export function isMissingEndpoint(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 404 || e.status === 405 || e.status === 501);
+}
+
+export function initials(name: string): string {
+  const parts = name.trim().split(/[\s_-]+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+export function basename(p: string): string {
+  const t = p.replace(/\/+$/, "");
+  const i = t.lastIndexOf("/");
+  return i >= 0 ? t.slice(i + 1) || t : t;
+}
+
+export const EFFORT_LABEL: Record<Effort, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+export const ALL_EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
+export function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export function clone<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
+export function fmtNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+export function fmtUsd(n: number): string {
+  return n < 0.01 && n > 0 ? "<$0.01" : `$${n.toFixed(2)}`;
+}
+
+/** Last line that says "[exit code N]" in bash output. */
+export function exitCode(output: string | undefined): number | null {
+  if (!output) return null;
+  const m = /\[exit code (-?\d+)\]\s*$/.exec(output.trimEnd());
+  return m ? Number(m[1]) : null;
 }

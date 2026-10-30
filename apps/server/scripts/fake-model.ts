@@ -32,12 +32,24 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "bash /skills/repo-tour/scripts/summarize.sh /workspace/demo" } },
     { text: "That is the repo tour." },
   ],
+  remember: [
+    { tool: "memory_propose", args: { content: "Use pnpm in this repository.", type: "preference", origin: "user", sources: [] } },
+    { tool: "memory_search", args: { query: "pnpm" } },
+    { tool: "history_search", args: { query: "pnpm" } },
+    { text: "Saved and found it again." },
+  ],
   slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
 };
 
 type Msg = { role: string; content?: string | null; tool_calls?: unknown[] };
 
 function pick(messages: Msg[]): Step {
+  // Harness side-calls: checkpoints and /dream consolidation expect one JSON object.
+  const system = String(messages.find((m) => m.role === "system")?.content ?? "");
+  if (system.includes("write checkpoints"))
+    return { text: JSON.stringify({ objective: "Finish the scripted demo task", constraints: ["Keep changes small"], decisions: ["Use the scripted model"], completed: ["Ran the earlier steps"], failures: [], openQuestions: [], nextAction: "Run the next scripted step", sources: [] }) };
+  if (system.includes("long-term memory"))
+    return { text: JSON.stringify({ add: [{ type: "preference", content: "The user prefers small, reviewed changes.", origin: "user", sources: [] }], merge: [], archive: [] }) };
   let lastUser = -1;
   messages.forEach((m, i) => {
     if (m.role === "user") lastUser = i;

@@ -1,6 +1,18 @@
 import type {
   ApprovalBody,
   ChatItem,
+  Checkpoint,
+  Effort,
+  MemoryChange,
+  MemoryRecord,
+  MemoryType,
+  ModelOption,
+  PendingApproval,
+  PersonaConfigView,
+  ProviderAllowance,
+  SaveResult,
+  SlashCommand,
+  UsageReport,
   CredentialStatus,
   CredentialUpsert,
   EgressEvent,
@@ -162,4 +174,40 @@ export const api = {
     q.set("limit", String(opts.limit ?? 200));
     return request<EgressEvent[]>("GET", `/api/egress?${q.toString()}`);
   },
+
+  // ---------- Swan additions ----------
+  conversation: (personaId: string) =>
+    request<{ session: SessionSummary; items: ChatItem[] }>("GET", `/api/personas/${enc(personaId)}/conversation`),
+  commands: (personaId: string) => request<SlashCommand[]>("GET", `/api/personas/${enc(personaId)}/commands`),
+  config: (personaId: string) => request<PersonaConfigView>("GET", `/api/personas/${enc(personaId)}/config`),
+  saveConfig: (personaId: string, view: PersonaConfigView) =>
+    request<SaveResult>("PUT", `/api/personas/${enc(personaId)}/config`, view),
+  setModel: (personaId: string, body: { provider: string; id: string; effort?: Effort }) =>
+    request<PersonaSummary>("PUT", `/api/personas/${enc(personaId)}/model`, body),
+  approvals: () => request<PendingApproval[]>("GET", "/api/approvals"),
+  resetAllowances: (sessionId: string) => request<SessionSummary>("DELETE", `/api/sessions/${enc(sessionId)}/allowances`),
+  removeAllowance: (sessionId: string, rule: string) =>
+    request<SessionSummary>("DELETE", `/api/sessions/${enc(sessionId)}/allowances/${enc(rule)}`),
+  models: () => request<ModelOption[]>("GET", "/api/models"),
+
+  memory: (personaId: string, q: { query?: string; type?: string; status?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (q.query) p.set("query", q.query);
+    if (q.type) p.set("type", q.type);
+    if (q.status) p.set("status", q.status);
+    const qs = p.toString();
+    return request<MemoryRecord[]>("GET", `/api/personas/${enc(personaId)}/memory${qs ? `?${qs}` : ""}`);
+  },
+  addMemory: (personaId: string, body: { content: string; type: MemoryType; pinned?: boolean }) =>
+    request<MemoryRecord>("POST", `/api/personas/${enc(personaId)}/memory`, body),
+  editMemory: (personaId: string, recordId: string, body: { content?: string; type?: MemoryType }) =>
+    request<MemoryRecord>("PUT", `/api/personas/${enc(personaId)}/memory/${enc(recordId)}`, body),
+  memoryAction: (personaId: string, recordId: string, action: "pin" | "unpin" | "archive" | "forget") =>
+    request<MemoryRecord>("POST", `/api/personas/${enc(personaId)}/memory/${enc(recordId)}/${action}`),
+  memoryHistory: (personaId: string) => request<MemoryChange[]>("GET", `/api/personas/${enc(personaId)}/memory-history`),
+  checkpoint: (personaId: string) => request<Checkpoint | null>("GET", `/api/personas/${enc(personaId)}/checkpoint`),
+
+  usage: (personaId: string, period: "today" | "all") =>
+    request<UsageReport>("GET", `/api/usage?personaId=${enc(personaId)}&period=${period}`),
+  allowance: (provider: string) => request<ProviderAllowance>("GET", `/api/providers/${enc(provider)}/allowance`),
 };
