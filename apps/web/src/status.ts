@@ -55,3 +55,13 @@ export function sessionStatusLine(s: SessionSummary | null): { text: string; ton
 export function isWorking(s: SessionSummary | null): boolean {
   return !!s && (s.status === "running" || s.status === "awaiting_approval" || s.status === "starting");
 }
+
+/** Model-provider keys belong to Model providers, never to Credentials or a persona. */
+export function providerKeyNames(providers: Array<{ type: string; apiKeySecret?: string }>): Set<string> {
+  const keys = new Set<string>();
+  for (const p of providers) {
+    if (p.apiKeySecret) keys.add(p.apiKeySecret);
+    if (p.type === "copilot") keys.add("COPILOT_GITHUB_TOKEN");
+  }
+  return keys;
+}

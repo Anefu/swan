@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { CredentialStatus, ProviderStatus } from "@ph/shared";
 import { useStore } from "../store";
+import { providerKeyNames } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
 import { IconPlus } from "./icons";
 import { Spinner } from "./ui";
@@ -35,42 +36,110 @@ function Providers() {
 function providerLabel(p: ProviderStatus): string {
   if (p.type === "copilot") return "GitHub Copilot";
   if (p.name.toLowerCase() === p.type) return p.type === "openai" ? "OpenAI" : "Anthropic";
-  return p.name;
+  return p.name.charAt(0).toUpperCase() + p.name.slice(1);
 }
 
 function ProviderRow({ p }: { p: ProviderStatus }) {
-  const { state, actions } = useStore();
+  const { actions } = useStore();
   const [editing, setEditing] = useState(false);
-  const cred = p.apiKeySecret ? state.credentials.find((c) => c.name === p.apiKeySecret) : undefined;
-  const status = p.ready ? (p.type === "copilot" ? "Token set" : p.apiKeySecret ? "Ready" : "Ready") : "Key missing";
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const now = useNow(30_000);
+  const secret = p.apiKeySecret;
+
+  let connection: React.ReactNode;
+  let connected = true;
+  if (!p.keyRequired) connection = "No key needed";
+  else if (p.keySource === "secrets")
+    connection = (
+      <>
+        Connected{p.fingerprint && <> · key <span className="mono">{p.fingerprint}</span></>}
+        {p.keyUpdatedAt && ` · changed ${agoWords(p.keyUpdatedAt, now)}`}
+      </>
+    );
+  else if (p.keySource === "env") connection = "Connected via environment variable";
+  else if (p.keySource === "login") connection = "Using GitHub CLI login";
+  else {
+    connection = "Not connected";
+    connected = false;
+  }
+  const canEdit = !!secret && p.keyRequired && p.keySource !== "env" && p.keySource !== "login";
+
   return (
     <li className="prov-row">
-      <div className="row gap">
+      <div className="row gap wrap">
         <span className="grow">
-          {providerLabel(p)}
+          <strong>{providerLabel(p)}</strong>
           {p.type === "copilot" && <span className="muted"> · Preview</span>}
           {p.baseURL && <span className="muted small mono"> · {p.baseURL.replace(/^https?:\/\//, "")}</span>}
         </span>
-        <span className={cls("status-text", p.ready ? "tone-muted" : "tone-attention")}>{status}</span>
-        {p.apiKeySecret && !editing && (
-          <button type="button" className="link-btn" onClick={() => setEditing(true)}>
-            {cred?.present ? "Replace key" : "Add key"}
-          </button>
+      </div>
+      <div className="row gap wrap small">
+        <span className={cls("grow", connected ? "tone-muted" : "tone-attention")}>
+          {connected && <span className="dot ok" aria-hidden="true" />} {connection}
+        </span>
+        {canEdit && !editing && !confirm && (
+          <>
+            <button type="button" className="link-btn" onClick={() => setEditing(true)}>
+              {p.keySource === "secrets" ? "Replace key" : "Add key"}
+            </button>
+            {p.keySource === "secrets" && (
+              <button type="button" className="link-btn" onClick={() => setConfirm(true)}>
+                Disconnect
+              </button>
+            )}
+          </>
         )}
       </div>
-      {!p.ready && p.detail && <p className="hint">{p.detail}</p>}
-      {editing && p.apiKeySecret && (
+      {(!connected || p.type === "copilot") && p.detail && <p className="hint">{p.detail}</p>}
+      {editing && secret && (
         <SecretForm
-          label={`${providerLabel(p)} key (stored as ${p.apiKeySecret})`}
+          label={`${providerLabel(p)} key (stored as ${secret})`}
           onCancel={() => setEditing(false)}
           onSave={async (value) => {
-            await actions.putCredential(p.apiKeySecret!, { value });
+            await actions.putCredential(secret, { value });
             setEditing(false);
           }}
         />
       )}
+      {confirm && secret && (
+        <div className="inline-form" role="group" aria-label={`Disconnect ${providerLabel(p)}`}>
+          <p className="small">
+            Remove the {providerLabel(p)} key from Swan? Personas using this provider stop working until a key is added again.
+          </p>
+          <div className="row gap end">
+            <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn sm danger"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await actions.deleteCredential(secret);
+                  setConfirm(false);
+                } catch (e) {
+                  actions.reportError(e, "Could not disconnect");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      )}
     </li>
   );
+}
+
+function agoWords(iso: string, now: number): string {
+  const r = relTime(iso, now);
+  if (r === "now") return "just now";
+  return /^\d/.test(r) ? `${r.replace(/m$/, " min").replace(/h$/, " h").replace(/d$/, " d")} ago` : `on ${r}`;
 }
 
 /** A value field. Values go to the server once and are never shown again. */
@@ -139,9 +208,13 @@ function SecretForm({
 
 function Credentials() {
   const { state } = useStore();
+  const providerKeys = providerKeyNames(state.providers);
+  const creds = state.credentials.filter((c) => !providerKeys.has(c.name));
   const now = useNow(5000);
   const [adding, setAdding] = useState(false);
-  const flash = Object.entries(state.credentialFlash).sort((a, b) => b[1] - a[1])[0];
+  const flash = Object.entries(state.credentialFlash)
+    .filter(([n]) => !providerKeys.has(n))
+    .sort((a, b) => b[1] - a[1])[0];
   return (
     <section className="swan-section">
       <div className="row gap">
@@ -152,11 +225,11 @@ function Credentials() {
           </button>
         )}
       </div>
-      <p className="hint">Values are never shown. Edits apply on the next request.</p>
+      <p className="hint">Secrets the agent's requests can use. Values are never shown. Edits apply on the next request. Model keys live under Model providers.</p>
       {adding && <AddCredential onDone={() => setAdding(false)} />}
-      {state.credentials.length === 0 && !adding && <p className="muted small">No credentials yet.</p>}
+      {creds.length === 0 && !adding && <p className="muted small">No credentials yet.</p>}
       <ul className="plain-list cred-list">
-        {state.credentials.map((c) => (
+        {creds.map((c) => (
           <CredentialRow key={c.name} c={c} />
         ))}
       </ul>
@@ -295,7 +368,16 @@ function AddCredential({ onDone }: { onDone: () => void }) {
   const [format, setFormat] = useState("Bearer {value}");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const nameError = name && !NAME_RE.test(name) ? "Use UPPER_SNAKE_CASE." : state.credentials.some((c) => c.name === name) ? "Already exists; use Rotate." : null;
+  const providerKeys = providerKeyNames(state.providers);
+  const nameError = !name
+    ? null
+    : !NAME_RE.test(name)
+      ? "Use UPPER_SNAKE_CASE."
+      : providerKeys.has(name)
+        ? "This is a model key. Add it under Model providers."
+        : state.credentials.some((c) => c.name === name)
+          ? "Already exists; use Rotate."
+          : null;
   const hostList = parseList(hosts);
   return (
     <form

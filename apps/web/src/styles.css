@@ -159,6 +159,10 @@ code {
 .dot.attention {
   background: var(--attention);
 }
+.dot.ok {
+  background: var(--ok);
+  vertical-align: 1px;
+}
 
 .status-text {
   display: inline-flex;
@@ -1753,7 +1757,19 @@ button.line:focus-visible .chev,
   font-size: 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.prov-row:last-child {
+  border-bottom: none;
+}
+.approved-hosts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
 }
 .cred-list {
   gap: 12px;

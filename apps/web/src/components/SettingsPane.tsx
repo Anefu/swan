@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import type { FolderMode, PermissionMode, PersonaConfigView, PersonaSummary } from "@ph/shared";
 import { api } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
+import { providerKeyNames } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
 import { DecisionsShortcut } from "./Composer";
@@ -165,6 +166,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [hostBusy, setHostBusy] = useState<string | null>(null);
   const [mcpText, setMcpText] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [newModel, setNewModel] = useState<{ provider: string; id: string }>({ provider: "", id: "" });
@@ -192,11 +194,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Model-provider keys are Swan's own; a persona never gets them. Untick any that the loaded config lists.
-  const providerKeys = new Set<string>();
-  for (const p of state.providers) {
-    if (p.apiKeySecret) providerKeys.add(p.apiKeySecret);
-    if (p.type === "copilot") providerKeys.add("COPILOT_GITHUB_TOKEN");
-  }
+  const providerKeys = providerKeyNames(state.providers);
   const providerKeyList = [...providerKeys].sort().join(",");
   useEffect(() => {
     if (!entry || providerKeys.size === 0) return;
@@ -245,6 +243,37 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   const errors = validate(d, isNew, newId, state.personas.some((p) => p.id === newId), mcpError);
   const errorCount = Object.keys(errors).length;
   const session = persona ? conversationSession(state, persona.id) : null;
+  const netAllowances = (session?.allowances ?? []).filter((r) => r.startsWith("net:"));
+  const toolAllowances = (session?.allowances ?? []).filter((r) => !r.startsWith("net:"));
+
+  /** Keep a host approved "until stopped": save it to the persona now, then drop the temporary allowance. */
+  const keepHost = async (sessionId: string, rule: string) => {
+    if (!persona) return;
+    const host = rule.slice(4);
+    setHostBusy(rule);
+    try {
+      if (!entry.base.networkAllow.includes(host)) {
+        const nextBase = clone(entry.base);
+        nextBase.networkAllow.push(host);
+        const result = await actions.saveConfig(persona.id, nextBase);
+        let base = nextBase;
+        try {
+          base = await api.config(persona.id);
+        } catch {
+          /* keep what we sent */
+        }
+        // Unsaved edits stay a draft; the kept host joins them.
+        const draft = clone(entry.draft);
+        if (!draft.networkAllow.includes(host)) draft.networkAllow.push(host);
+        actions.setDraft(draftKey, { ...entry, base, draft, result, error: null });
+      }
+      await actions.removeAllowance(sessionId, rule);
+    } catch (e) {
+      actions.reportError(e, `Could not keep ${host}`);
+    } finally {
+      setHostBusy(null);
+    }
+  };
 
   const update = (fn: (draft: PersonaConfigView) => void) => {
     const next = clone(d);
@@ -475,7 +504,13 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         <Section
           id="hosts"
           title="Allowed hosts"
-          summary={d.networkAllow.length ? plural(d.networkAllow.length, "host") : "None"}
+          summary={
+            d.networkAllow.length + netAllowances.length
+              ? [d.networkAllow.length && plural(d.networkAllow.length, "host"), netAllowances.length && `${netAllowances.length} until stopped`]
+                  .filter(Boolean)
+                  .join(", ")
+              : "None"
+          }
           invalid={d.networkAllow.some((_, i) => errors[`host${i}`])}
         >
           <p className="hint">
@@ -510,6 +545,41 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           <button type="button" className="link-btn" onClick={() => update((x) => void x.networkAllow.push(""))}>
             <IconPlus /> Add host
           </button>
+          {netAllowances.length > 0 && session && (
+            <div className="approved-hosts">
+              <h4>Approved in the conversation</h4>
+              <p className="hint">Allowed until the agent is stopped. Keep saves the host to this persona now.</p>
+              <ul className="plain-list">
+                {netAllowances.map((rule) => {
+                  const host = rule.slice(4);
+                  const busy = hostBusy === rule;
+                  return (
+                    <li key={rule} className="row gap">
+                      <span className="grow">
+                        <span className="mono">{host}</span> <span className="muted small">· until stopped</span>
+                      </span>
+                      {busy && <Spinner size={10} />}
+                      <button type="button" className="btn sm" disabled={!!hostBusy} onClick={() => void keepHost(session.id, rule)}>
+                        Keep
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!!hostBusy}
+                        onClick={async () => {
+                          setHostBusy(rule);
+                          await actions.removeAllowance(session.id, rule);
+                          setHostBusy(null);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </Section>
 
         <Section id="credentials" title="Credentials" summary={d.credentials.length ? plural(d.credentials.length, "credential") : "None"}>
@@ -583,21 +653,18 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           {persona && (
             <div className="allowances">
               <h4>Temporary allowances</h4>
-              <p className="hint">From “Allow … until stopped”. They end when the agent stops or Swan restarts; they never edit the persona.</p>
-              {!session || session.allowances.length === 0 ? (
+              <p className="hint">
+                From “Allow … until stopped”. They end when the agent stops or Swan restarts; they never edit the persona. Hosts approved
+                this way are listed under Allowed hosts.
+              </p>
+              {!session || toolAllowances.length === 0 ? (
                 <p className="muted small">None active.</p>
               ) : (
                 <>
                   <ul className="plain-list">
-                    {session.allowances.map((rule) => (
+                    {toolAllowances.map((rule) => (
                       <li key={rule} className="row gap">
-                        {rule.startsWith("net:") ? (
-                          <span className="grow">
-                            Network: <span className="mono">{rule.slice(4)}</span>
-                          </span>
-                        ) : (
-                          <span className="mono grow">{rule}</span>
-                        )}
+                        <span className="mono grow">{rule}</span>
                         <button type="button" className="btn sm" onClick={() => void actions.removeAllowance(session.id, rule)}>
                           Remove
                         </button>

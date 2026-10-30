@@ -331,6 +331,9 @@ export class ProviderRegistry {
       const secret = this.secretName(cfg);
       const hasKey = secret ? !!this.keyFor(cfg)() : true;
       const ready = cfg.type === "copilot" ? hasKey || !!cfg.useLoggedInUser : hasKey;
+      const entry = secret ? this.secrets.get(secret) : undefined;
+      const inSecrets = !!entry?.value;
+      const inEnv = !inSecrets && !!secret && !!process.env[secret];
       return {
         name,
         type: cfg.type,
@@ -339,8 +342,12 @@ export class ProviderRegistry {
         ready,
         detail:
           cfg.type === "copilot" && !ready
-            ? `Add ${secret} (fine-grained PAT, "Copilot Requests" permission) on the Credentials page`
+            ? `Add a fine-grained GitHub token with the "Copilot Requests" permission`
             : undefined,
+        keyRequired: !!secret,
+        keySource: inSecrets ? "secrets" : inEnv ? "env" : cfg.type === "copilot" && cfg.useLoggedInUser ? "login" : null,
+        fingerprint: inSecrets ? (entry?.fingerprint ?? null) : null,
+        keyUpdatedAt: inSecrets ? (entry?.updatedAt ?? null) : null,
       };
     });
   }

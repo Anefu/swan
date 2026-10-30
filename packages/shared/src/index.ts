@@ -193,6 +193,10 @@ export interface ProviderStatus {
   apiKeySecret?: string;
   ready: boolean; // key present (or not needed)
   detail?: string; // e.g. how to sign in when not ready
+  keyRequired: boolean; // false for local servers that need no key
+  keySource: "secrets" | "env" | "login" | null; // where the key comes from; null = not connected
+  fingerprint: string | null; // first 8 hex of sha256(key), when it is in Swan's secrets
+  keyUpdatedAt: string | null;
 }
 
 /** A model a provider offers (currently listed for Copilot only). */
