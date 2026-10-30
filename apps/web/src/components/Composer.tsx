@@ -4,7 +4,7 @@ import { api } from "../api";
 import { usePendingApprovals, useStore } from "../store";
 import { isWorking, plural } from "../status";
 import { ALL_EFFORTS, cls, EFFORT_LABEL } from "../util";
-import { IconArrowRight, IconLock, IconSend, IconStop } from "./icons";
+import { IconArrowRight, IconSend, IconStop } from "./icons";
 import { MOD, Spinner } from "./ui";
 
 const SWAN_COMMANDS: SlashCommand[] = [
@@ -220,10 +220,6 @@ export function Composer({
         <div className="composer-meta">
           <ModelSelectors persona={persona} />
           <span className="grow" />
-          <span className="placeholder-note">
-            <IconLock size={14} />
-            Credentials: placeholders only
-          </span>
           <DecisionsShortcut />
         </div>
       </div>

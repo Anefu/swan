@@ -33,7 +33,7 @@ export interface ReceiptText {
   target: string;
   /** Short result summary after a separator, e.g. "3 matches" or "exit 1". */
   result: string | null;
-  icon: "file" | "search" | "terminal" | "pencil" | "plug" | "sparkles" | "tool";
+  icon: "file" | "search" | "terminal" | "pencil" | "plug" | "sparkles" | "tool" | "globe";
 }
 
 /** Spec verb mapping: Searched / Read / Ran / Wrote / Edited / Called. */
@@ -46,6 +46,8 @@ export function describeTool(item: ToolItem): ReceiptText {
     return { verb: "Called", target: `${server} › ${tool}${arg ? ` ${firstLine(arg, 50)}` : ""}`, result: null, icon: "plug" };
   }
   switch (tool) {
+    case "network_access":
+      return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
     case "grep":
     case "glob": {
       const pattern = str(item.input, ["pattern"]) ?? item.inputPreview;
@@ -85,7 +87,8 @@ export function describeTool(item: ToolItem): ReceiptText {
     case "write_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const c = str(item.input, ["content"]) ?? "";
-      return { verb: "Wrote", target: basename(p), result: c ? `${lineCount(c)} lines` : null, icon: "pencil" };
+      const n = lineCount(c);
+      return { verb: "Wrote", target: basename(p), result: c ? `${n} ${n === 1 ? "line" : "lines"}` : null, icon: "pencil" };
     }
     case "edit_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
@@ -162,4 +165,36 @@ export function mountFor(path: string, persona: PersonaSummary | null) {
     if ((path === f.mountPath || path.startsWith(`${f.mountPath}/`)) && (!best || f.mountPath.length > best.mountPath.length)) best = f;
   }
   return best;
+}
+
+const NOUNS: Record<string, [string, string, string]> = {
+  // verb -> [summary verb, singular, plural]
+  Read: ["read", "file", "files"],
+  Searched: ["ran", "search", "searches"],
+  Ran: ["ran", "command", "commands"],
+  Wrote: ["wrote", "file", "files"],
+  Edited: ["edited", "file", "files"],
+  Called: ["called", "tool", "tools"],
+  "Loaded skill": ["loaded", "skill", "skills"],
+  Network: ["requested access to", "host", "hosts"],
+};
+
+/** "Read 3 files, ran 2 commands" for a run of consecutive tool calls. */
+export function summarizeTools(items: ToolItem[]): string {
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    const v = describeTool(it).verb;
+    const key = NOUNS[v] ? v : "other";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const [v, n] of counts) {
+    if (v === "other") parts.push(`used ${n} ${n === 1 ? "tool" : "tools"}`);
+    else {
+      const [verb, one, many] = NOUNS[v];
+      parts.push(`${verb} ${n} ${n === 1 ? one : many}`);
+    }
+  }
+  const s = parts.join(", ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

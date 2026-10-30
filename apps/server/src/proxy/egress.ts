@@ -196,6 +196,25 @@ export class EgressProxy extends TypedEmitter<Events> {
     });
   }
 
+  /**
+   * Called for a public host on 80/443 that is not on the allowlist. Resolves to true when the
+   * person allowed it (the session re-registers with the host added before resolving).
+   */
+  asker: ((s: ProxySession, host: string, port: number) => Promise<boolean>) | null = null;
+
+  /** decide(), but an unlisted public host waits for the person instead of failing outright. */
+  private async decideOrAsk(s: ProxySession, host: string, port: number): Promise<{ ok: true; creds: string[] } | { ok: false; reason: string }> {
+    const d = this.decide(s, host, port);
+    if (d.ok || d.reason !== "host not in persona allowlist" || !this.asker) return d;
+    try {
+      await resolvePublic(host); // never offer private or local destinations
+    } catch (e) {
+      return { ok: false, reason: errMsg(e) };
+    }
+    if (!(await this.asker(s, host, port))) return { ok: false, reason: "denied by the user" };
+    return this.decide(this.sessions.get(s.sessionId) ?? s, host, port);
+  }
+
   private decide(s: ProxySession, host: string, port: number): { ok: true; creds: string[] } | { ok: false; reason: string } {
     if (!ALLOWED_PORTS.has(port)) {
       // Other ports only by an explicit host:port entry; always tunnelled, never credentialed.
@@ -225,7 +244,7 @@ export class EgressProxy extends TypedEmitter<Events> {
       return;
     }
     const base = { sessionId: session.sessionId, personaId: session.personaId, method: "CONNECT", host, port };
-    const d = this.decide(session, host, port);
+    const d = await this.decideOrAsk(session, host, port);
     if (!d.ok) {
       client.end(`HTTP/1.1 403 Forbidden\r\nX-PH-Reason: ${d.reason}\r\n\r\n`);
       this.record({ ...base, decision: "blocked", credentials: [], reason: d.reason });
@@ -462,7 +481,7 @@ export class EgressProxy extends TypedEmitter<Events> {
       return;
     }
     const base = { sessionId: session.sessionId, personaId: session.personaId, method: req.method ?? "GET", host, port, path: url.pathname };
-    const d = this.decide(session, host, port);
+    const d = await this.decideOrAsk(session, host, port);
     const reason = !d.ok ? d.reason : d.creds.length ? "credential hosts require https" : null;
     if (reason) {
       res.writeHead(403, { "content-type": "text/plain" }).end(`blocked: ${reason}\n`);

@@ -25,8 +25,7 @@ import { EventSocket, wsUrl, type WsState } from "./ws";
 
 export type ServerState = "loading" | "ok" | "unreachable" | "unauthorized" | "no-token";
 export type ToastKind = "info" | "success" | "warn" | "error";
-export type DockMode = "settings" | "memory";
-export type MainView = "conversation" | "network";
+export type DockMode = "settings" | "memory" | "network";
 export const NEW_PERSONA = "__new__";
 
 export interface Toast {
@@ -74,6 +73,8 @@ export interface SettingsDraft {
   newId?: string;
   result?: SaveResult | null;
   error?: string | null;
+  /** Model-provider keys removed from the loaded config; personas never need them. */
+  removedKeys?: string[];
 }
 
 export interface NetworkFilters {
@@ -105,8 +106,6 @@ export interface State {
   transcripts: Record<string, Transcript>;
   egress: EgressEvent[];
   selectedPersonaId: string | null;
-  view: MainView;
-  dockBeforeNetwork: DockMode | null;
   settingsScope: "persona" | "swan";
   /** Settings persona scope shows the new-persona draft instead of the selected persona. */
   settingsNew: boolean;
@@ -128,7 +127,7 @@ const SELECTION_KEY = "swan.persona.v1";
 const COMPOSER_KEY = "swan.composer.v1";
 const MAX_EGRESS = 2000;
 
-const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400 } };
+const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400, network: 400 } };
 
 function initState(): State {
   const token = readToken();
@@ -152,8 +151,6 @@ function initState(): State {
     transcripts: {},
     egress: [],
     selectedPersonaId: loadPref<{ id: string | null }>(SELECTION_KEY, { id: null }).id,
-    view: "conversation",
-    dockBeforeNetwork: null,
     settingsScope: "persona",
     settingsNew: false,
     drafts: {},
@@ -194,11 +191,10 @@ type Action =
   | { type: "transcript.set"; sessionId: string; items: ChatItem[]; source: "ws" | "rest" }
   | { type: "transcripts.stale" }
   | { type: "item.put"; sessionId: string; item: ChatItem }
-  | { type: "item.delta"; sessionId: string; itemId: string; delta: string }
+  | { type: "item.deltas"; deltas: Array<{ sessionId: string; itemId: string; delta: string }> }
   | { type: "egress.merge"; events: EgressEvent[] }
   | { type: "egress.add"; event: EgressEvent }
   | { type: "select.persona"; id: string | null }
-  | { type: "view"; view: MainView }
   | { type: "dock"; dock: DockMode | null }
   | { type: "dock.width"; mode: DockMode; width: number }
   | { type: "settings.scope"; scope: "persona" | "swan"; isNew?: boolean }
@@ -348,12 +344,17 @@ function reducer(state: State, a: Action): State {
       if (!cur) return state;
       return { ...state, transcripts: { ...state.transcripts, [a.sessionId]: { ...cur, items: putItem(cur.items, a.item) } } };
     }
-    case "item.delta": {
-      const cur = state.transcripts[a.sessionId];
-      if (!cur) return state;
-      const items = appendDelta(cur.items, a.itemId, a.delta);
-      if (items === cur.items) return state;
-      return { ...state, transcripts: { ...state.transcripts, [a.sessionId]: { ...cur, items } } };
+    case "item.deltas": {
+      let transcripts = state.transcripts;
+      for (const d of a.deltas) {
+        const cur = transcripts[d.sessionId];
+        if (!cur) continue;
+        const items = appendDelta(cur.items, d.itemId, d.delta);
+        if (items === cur.items) continue;
+        if (transcripts === state.transcripts) transcripts = { ...transcripts };
+        transcripts[d.sessionId] = { ...cur, items };
+      }
+      return transcripts === state.transcripts ? state : { ...state, transcripts };
     }
     case "egress.merge":
       return { ...state, egress: mergeEgress(state.egress, a.events) };
@@ -369,19 +370,6 @@ function reducer(state: State, a: Action): State {
     case "select.persona":
       if (a.id === state.selectedPersonaId) return { ...state, settingsNew: false };
       return { ...state, selectedPersonaId: a.id, settingsNew: false };
-    case "view": {
-      if (a.view === state.view) return state;
-      if (a.view === "network") {
-        // Network activity opens with the dock closed; the previous dock state comes back on return.
-        return { ...state, view: a.view, dockBeforeNetwork: state.ui.dock, ui: { ...state.ui, dock: null } };
-      }
-      return {
-        ...state,
-        view: a.view,
-        ui: { ...state.ui, dock: state.ui.dock ?? state.dockBeforeNetwork },
-        dockBeforeNetwork: null,
-      };
-    }
     case "dock":
       return { ...state, ui: { ...state.ui, dock: a.dock } };
     case "dock.width":
@@ -437,7 +425,6 @@ export interface Actions {
   retryConnection(): void;
 
   selectPersona(id: string): void;
-  showView(view: MainView): void;
   toggleDock(mode: DockMode): void;
   openDock(mode: DockMode | null): void;
   setDockWidth(mode: DockMode, width: number): void;
@@ -619,7 +606,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "select.persona", id });
         if (!conversationOf(id)) void loadConversation(id);
       },
-      showView: (view) => dispatch({ type: "view", view }),
       toggleDock: (mode) => {
         const s = stateRef.current;
         dispatch({ type: "dock", dock: s.ui.dock === mode ? null : mode });
@@ -648,13 +634,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           dispatch({ type: "select.persona", id: a.personaId });
           if (!conversationOf(a.personaId)) void loadConversation(a.personaId);
         }
-        dispatch({ type: "view", view: "conversation" });
         dispatch({ type: "focus.approval", sessionId: a.sessionId, toolUseId: a.toolUseId });
       },
       jumpToItem: (personaId, itemId) => {
         const s = stateRef.current;
         if (personaId !== s.selectedPersonaId) dispatch({ type: "select.persona", id: personaId });
-        dispatch({ type: "view", view: "conversation" });
         const sid = s.conversations[personaId];
         if (sid) dispatch({ type: "focus.item", sessionId: sid, itemId });
       },
@@ -746,8 +730,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { actions, loadAll };
   }, []);
 
+  // Streaming deltas are applied once per animation frame; any other event flushes them first so a
+  // full replacement (item.updated, snapshot) never gets stale text appended after it.
+  const deltaBuf = useRef<Array<{ sessionId: string; itemId: string; delta: string }>>([]);
+  const deltaFrame = useRef<number | null>(null);
+  const flushDeltas = () => {
+    if (deltaFrame.current !== null) {
+      cancelAnimationFrame(deltaFrame.current);
+      deltaFrame.current = null;
+    }
+    if (deltaBuf.current.length === 0) return;
+    const deltas = deltaBuf.current;
+    deltaBuf.current = [];
+    dispatch({ type: "item.deltas", deltas });
+  };
+
   const onEvent = useRef<(ev: ServerEvent) => void>(() => {});
   onEvent.current = (ev: ServerEvent) => {
+    if (ev.type === "item.delta") {
+      const buf = deltaBuf.current;
+      const last = buf[buf.length - 1];
+      if (last && last.sessionId === ev.sessionId && last.itemId === ev.itemId) last.delta += ev.delta;
+      else buf.push({ sessionId: ev.sessionId, itemId: ev.itemId, delta: ev.delta });
+      if (deltaFrame.current === null) deltaFrame.current = requestAnimationFrame(flushDeltas);
+      return;
+    }
+    flushDeltas();
     switch (ev.type) {
       case "hello":
       case "runtime.status":
@@ -775,9 +783,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       case "item.added":
       case "item.updated":
         dispatch({ type: "item.put", sessionId: ev.sessionId, item: ev.item });
-        break;
-      case "item.delta":
-        dispatch({ type: "item.delta", sessionId: ev.sessionId, itemId: ev.itemId, delta: ev.delta });
         break;
       case "egress":
         dispatch({ type: "egress.add", event: ev.event });

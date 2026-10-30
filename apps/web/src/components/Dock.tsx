@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore, type DockMode } from "../store";
 import { cls } from "../util";
 import { MemoryUsagePane } from "./MemoryUsagePane";
+import { NetworkPane } from "./NetworkPane";
 import { SettingsPane } from "./SettingsPane";
 
 export const DOCK_MIN = 320;
@@ -23,7 +24,7 @@ const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)
 
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
-  window.setTimeout(() => document.getElementById(mode === "settings" ? "trigger-settings" : "trigger-memory")?.focus(), 0);
+  window.setTimeout(() => document.getElementById(`trigger-${mode}`)?.focus(), 0);
 }
 
 export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
@@ -66,7 +67,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
       <aside
         className={cls("dock", overlay && "overlay", drag !== null && "dragging")}
         style={overlay ? undefined : { width: shown }}
-        aria-label={mode === "settings" ? "Settings" : "Memory and usage"}
+        aria-label={mode === "settings" ? "Settings" : mode === "memory" ? "Memory and usage" : "Network activity"}
         data-dock={mode}
       >
         {!overlay && (
@@ -87,7 +88,13 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
             onDoubleClick={() => actions.setDockWidth(mode, 400)}
           />
         )}
-        {mode === "settings" ? <SettingsPane onClose={close} /> : <MemoryUsagePane onClose={close} />}
+        {mode === "settings" ? (
+          <SettingsPane onClose={close} />
+        ) : mode === "memory" ? (
+          <MemoryUsagePane onClose={close} />
+        ) : (
+          <NetworkPane onClose={close} />
+        )}
       </aside>
     </>
   );

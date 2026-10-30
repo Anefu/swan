@@ -90,8 +90,8 @@ function systemPrompt(o: {
     "  Files written anywhere else are lost when the container stops.",
     `- Working directory: ${o.workdir}`,
     `- Today's date: ${new Date().toISOString().slice(0, 10)}`,
-    "- Network access goes through an egress proxy. Hosts outside the allowlist are blocked (HTTP 403 from the proxy); do not try to work around it. Tools must honour HTTPS_PROXY (curl, git, npm, pip, uv and Node do).",
-    `- Allowed hosts: ${[...o.allow, ...o.credHosts.flatMap((c) => c.hosts)].join(", ") || "none"}`,
+    "- Network access goes through an egress proxy. Requests to a public host that is not on the allowlist wait while the user decides; if they decline, the proxy answers 403. Just make the request when you need a site: do not refuse in advance and do not try to work around the proxy. Private and local addresses are always blocked. Tools must honour HTTPS_PROXY (curl, git, npm, pip, uv and Node do).",
+    `- Allowed without asking: ${[...o.allow, ...o.credHosts.flatMap((c) => c.hosts)].join(", ") || "none yet"}`,
   );
   if (o.credHosts.length) {
     lines.push(
@@ -166,6 +166,8 @@ export class Session {
   private dreaming = false;
   private abort: AbortController | null = null;
   private approvals = new Map<string, { resolve: (d: ApprovalBody) => void; info: PendingApproval }>();
+  private netPending = new Map<string, Promise<boolean>>(); // host -> decision in flight
+  private netDenied = new Set<string>(); // until stopped
   private persistSoon = debounce(() => void this.persist(), 400);
 
   constructor(
@@ -288,7 +290,7 @@ export class Session {
 
   private refreshStatus() {
     if (this.approvals.size > 0) this.setStatus("awaiting_approval");
-    else if (this.loopRunning && this.summary.status === "awaiting_approval") this.setStatus("running");
+    else if (this.summary.status === "awaiting_approval") this.setStatus(this.loopRunning ? "running" : "idle");
     this.deps.onApprovalsChanged();
   }
 
@@ -332,6 +334,62 @@ export class Session {
   private setAllowances(a: string[]) {
     this.summary = { ...this.summary, allowances: a };
     this.touch();
+    this.refreshPolicy();
+  }
+
+  /**
+   * The sandbox asked for a public host that is not on the allowlist. The request waits on an
+   * approval in the conversation: allow (until stopped), always (adds the host to the persona's
+   * config) or deny (remembered until stopped so a retrying tool does not re-prompt).
+   */
+  requestNetwork(host: string, port: number): Promise<boolean> {
+    if (this.netDenied.has(host)) return Promise.resolve(false);
+    const inflight = this.netPending.get(host);
+    if (inflight) return inflight;
+    const id = randomId("net_", 8);
+    const target = port === 443 || port === 80 ? host : `${host}:${port}`;
+    const item: Extract<ChatItem, { kind: "tool_call" }> = {
+      kind: "tool_call",
+      id,
+      ts: nowIso(),
+      name: "network_access",
+      source: "builtin",
+      input: { host, port },
+      inputPreview: target,
+      status: "pending_approval",
+      approvalReason: "not in this persona's allowed hosts",
+    };
+    this.addItem(item);
+    const p = new Promise<boolean>((resolve) => {
+      const done = (ok: boolean, status: ToolCallStatus, output: string) => {
+        clearTimeout(timer);
+        this.approvals.delete(id);
+        this.netPending.delete(host);
+        Object.assign(item, { status, output, approvalReason: undefined });
+        this.syncItem(item);
+        this.refreshStatus();
+        resolve(ok);
+      };
+      const timer = setTimeout(() => done(false, "interrupted", "No decision within 10 minutes; the request was blocked."), 10 * 60_000);
+      this.approvals.set(id, {
+        info: { sessionId: this.id, personaId: this.personaId, toolUseId: id, name: "network_access", inputPreview: target, rule: "network: ask", since: item.ts },
+        resolve: (d) => {
+          if (d.decision === "deny") {
+            this.netDenied.add(host);
+            done(false, "denied", `Blocked ${target}${d.reason?.trim() ? `: ${d.reason.trim()}` : ""}. Other requests to it are blocked until the agent is stopped.`);
+            return;
+          }
+          if (!this.summary.allowances.includes(`net:${host}`)) this.setAllowances([...this.summary.allowances, `net:${host}`]);
+          if (d.decision === "allow_always") {
+            void this.deps.personas.addNetworkHost(this.personaId, host).catch((e) => this.notice("error", `Could not save ${host} to the persona: ${errMsg(e)}`));
+            done(true, "done", `Allowed ${target} and added it to this persona's allowed hosts.`);
+          } else done(true, "done", `Allowed ${target} until the agent is stopped.`);
+        },
+      });
+      this.refreshStatus();
+    });
+    this.netPending.set(host, p);
+    return p;
   }
 
   removeAllowance(rule: string) {
@@ -360,7 +418,8 @@ export class Session {
       sessionId: this.id,
       personaId: this.personaId,
       token: this.proxyToken,
-      allowHosts: cfg?.network.allow ?? [],
+      // Hosts allowed "until stopped" ride along with the persona's own allowlist.
+      allowHosts: [...(cfg?.network.allow ?? []), ...this.summary.allowances.filter((a) => a.startsWith("net:")).map((a) => a.slice(4))],
       credentials: creds,
       placeholders: new Map(creds.map((c) => [this.placeholders[c], c] as const)),
     };
@@ -699,6 +758,9 @@ export class Session {
 
   interrupt() {
     this.abort?.abort();
+    // Pending network requests are refused; "until stopped" decisions end here too.
+    for (const [id, a] of [...this.approvals]) if (a.info.name === "network_access") this.approvals.get(id)?.resolve({ decision: "deny", reason: "stopped" });
+    this.netDenied.clear();
     for (const q of this.queue) if (q.receiptId) this.finishReceipt(q.receiptId, "Dropped by Stop", "error");
     this.queue = [];
     // Temporary allowances expire on Stop and Interrupt.
@@ -1103,7 +1165,9 @@ export class Session {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
-  constructor(private deps: SessionDeps) {}
+  constructor(private deps: SessionDeps) {
+    deps.proxy.asker = async (ps, host, port) => this.sessions.get(ps.sessionId)?.requestNetwork(host, port) ?? false;
+  }
 
   async loadAll() {
     for (const f of await fs.readdir(paths.sessions)) {

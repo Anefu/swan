@@ -46,9 +46,10 @@ export function Header() {
         </button>
         <button
           type="button"
-          className={cls("hbtn plain", state.view === "network" && "is-on")}
-          aria-pressed={state.view === "network"}
-          onClick={() => actions.showView(state.view === "network" ? "conversation" : "network")}
+          id="trigger-network"
+          className={cls("hbtn", dock === "network" && "is-on")}
+          aria-pressed={dock === "network"}
+          onClick={() => actions.toggleDock("network")}
         >
           <IconTrend size={18} />
           <span>Network activity</span>
@@ -128,7 +129,6 @@ function PersonaMenu() {
     const p = filtered[i];
     if (!p) return;
     actions.selectPersona(p.id);
-    actions.showView("conversation");
     close();
   };
 

@@ -340,6 +340,7 @@ export interface SaveResult {
   persona: PersonaSummary;
   appliedNow: string[]; // e.g. "permissions", "network allowlist"
   nextStart: string[]; // e.g. "folders" (next container start)
+  notes?: string[]; // adjustments the server made, in plain words
 }
 
 export type MemoryType = "preference" | "decision" | "observation" | "procedure" | "episode";

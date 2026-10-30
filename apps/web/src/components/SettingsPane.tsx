@@ -191,6 +191,24 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     } else void load();
   }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Model-provider keys are Swan's own; a persona never gets them. Untick any that the loaded config lists.
+  const providerKeys = new Set<string>();
+  for (const p of state.providers) {
+    if (p.apiKeySecret) providerKeys.add(p.apiKeySecret);
+    if (p.type === "copilot") providerKeys.add("COPILOT_GITHUB_TOKEN");
+  }
+  const providerKeyList = [...providerKeys].sort().join(",");
+  useEffect(() => {
+    if (!entry || providerKeys.size === 0) return;
+    const bad = entry.draft.credentials.filter((c) => providerKeys.has(c));
+    if (bad.length === 0) return;
+    actions.setDraft(draftKey, {
+      ...entry,
+      draft: { ...entry.draft, credentials: entry.draft.credentials.filter((c) => !providerKeys.has(c)) },
+      removedKeys: Array.from(new Set([...(entry.removedKeys ?? []), ...bad])),
+    });
+  }, [entry, providerKeyList]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Default model for a new persona: the first model whose provider is ready.
   useEffect(() => {
     if (!isNew || newModel.id) return;
@@ -242,7 +260,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
       actions.setSettingsScope("persona");
       return;
     }
-    actions.setDraft(draftKey, { base: entry.base, draft: clone(entry.base) });
+    actions.setDraft(draftKey, { base: entry.base, draft: clone(entry.base), removedKeys: entry.removedKeys });
   };
 
   const save = async () => {
@@ -296,7 +314,9 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     }
   };
 
-  const allCreds = Array.from(new Set([...state.credentials.map((c) => c.name), ...d.credentials])).sort();
+  const allCreds = Array.from(new Set([...state.credentials.map((c) => c.name), ...d.credentials]))
+    .filter((n) => !providerKeys.has(n))
+    .sort();
   const allSkills = Array.from(new Set([...state.skills.map((s) => s.name), ...d.skills])).sort();
   const mcpValue = mcpText ?? JSON.stringify(d.mcpServers, null, 2);
 
@@ -494,6 +514,11 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
 
         <Section id="credentials" title="Credentials" summary={d.credentials.length ? plural(d.credentials.length, "credential") : "None"}>
           <p className="hint">The agent gets placeholders. Values are managed under Swan.</p>
+          {(entry.removedKeys ?? []).map((k) => (
+            <p key={k} className="hint">
+              <span className="mono">{k}</span> is Swan's own model key; the agent never needs it.
+            </p>
+          ))}
           {allCreds.length === 0 && <p className="muted small">No credentials defined yet.</p>}
           {allCreds.map((name) => {
             const c = state.credentials.find((x) => x.name === name);
@@ -566,7 +591,13 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
                   <ul className="plain-list">
                     {session.allowances.map((rule) => (
                       <li key={rule} className="row gap">
-                        <span className="mono grow">{rule}</span>
+                        {rule.startsWith("net:") ? (
+                          <span className="grow">
+                            Network: <span className="mono">{rule.slice(4)}</span>
+                          </span>
+                        ) : (
+                          <span className="mono grow">{rule}</span>
+                        )}
                         <button type="button" className="btn sm" onClick={() => void actions.removeAllowance(session.id, rule)}>
                           Remove
                         </button>
@@ -686,14 +717,26 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
 }
 
 function SaveSummary({ result }: { result: NonNullable<SettingsDraft["result"]> }) {
+  const { state } = useStore();
+  // Use the live persona, so a problem fixed since the save is not shown.
+  const live = state.personas.find((p) => p.id === result.persona.id) ?? result.persona;
   return (
     <div className="save-summary">
       <p>
         <strong>Saved.</strong>
+        {result.appliedNow.length > 0 && ` Applied now: ${result.appliedNow.join(", ")}.`}
+        {result.nextStart.length > 0 && ` At the next safe start: ${result.nextStart.join(", ")}.`}
       </p>
-      {result.appliedNow.length > 0 && <p>Applied now: {result.appliedNow.join(", ")}.</p>}
-      {result.nextStart.length > 0 && <p>At the next safe start: {result.nextStart.join(", ")}.</p>}
-      {result.persona.errors.length > 0 && <p className="tone-error">Problem: {result.persona.errors[0]}</p>}
+      {(result.notes ?? []).map((n, i) => (
+        <p key={i} className="muted">
+          {n}
+        </p>
+      ))}
+      {live.errors.length > 0 && (
+        <p className="tone-attention">
+          Still to fix before {live.name} can start: {live.errors.join("; ")}
+        </p>
+      )}
     </div>
   );
 }

@@ -1,24 +1,18 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApprovalDecision, ChatItem, PersonaSummary } from "@ph/shared";
-import { allowScopeLabel, consequence, describeTool, mountFor, str, TOOL_STATUS_TEXT, type ReceiptText, type ToolItem } from "../receipts";
+import {
+  allowScopeLabel,
+  consequence,
+  describeTool,
+  mountFor,
+  str,
+  summarizeTools,
+  TOOL_STATUS_TEXT,
+  type ToolItem,
+} from "../receipts";
 import { useStore } from "../store";
 import { basename, cls, exitCode, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName } from "../util";
-import {
-  IconAlert,
-  IconChevronRight,
-  IconCornerDown,
-  IconFile,
-  IconInfo,
-  IconPencil,
-  IconPlug,
-  IconRepeat,
-  IconSearch,
-  IconSlash,
-  IconSparkles,
-  IconTerminal,
-  IconWarning,
-  IconWrench,
-} from "./icons";
+import { IconChevronRight } from "./icons";
 import { Markdown } from "./Markdown";
 import { CopyButton, Fold, Kbd, Spinner } from "./ui";
 
@@ -26,213 +20,261 @@ import { CopyButton, Fold, Kbd, Spinner } from "./ui";
 
 export function UserMessage({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   return (
-    <div className="msg msg-user" id={`item-${item.id}`}>
-      <span className="msg-who">You</span>
-      <div className="bubble bubble-user">{item.text}</div>
+    <div className="msg-user" id={`item-${item.id}`}>
+      <span className="sr-only">You said:</span>
+      <div className="user-block">{item.text}</div>
     </div>
   );
 }
 
-export function AssistantMessage({
-  item,
-  persona,
-  showHeader,
-}: {
-  item: Extract<ChatItem, { kind: "assistant_text" }>;
-  persona: PersonaSummary | null;
-  showHeader: boolean;
-}) {
-  const name = persona?.name ?? "Agent";
+/** Assistant prose flows as plain markdown at full column width. */
+export const AssistantText = memo(function AssistantText({ item }: { item: Extract<ChatItem, { kind: "assistant_text" }> }) {
   return (
-    <div className={cls("msg msg-model", !showHeader && "cont")} id={`item-${item.id}`}>
-      <span className="avatar" aria-hidden="true">
-        {showHeader ? initialsOf(name) : ""}
-      </span>
-      <div className="msg-model-main">
-        {showHeader && <span className="msg-who">{name}</span>}
-        <div className="bubble bubble-model">
-          <Markdown text={item.text} streaming={item.streaming} />
-        </div>
-      </div>
+    <div className="msg-model" id={`item-${item.id}`}>
+      <Markdown text={item.text} streaming={item.streaming} />
     </div>
   );
+});
+
+function seconds(fromIso: string, toIso: string | null): number | null {
+  if (!toIso) return null;
+  const s = Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 1000);
+  return Number.isFinite(s) && s >= 0 ? s : null;
 }
 
-function initialsOf(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase();
-}
-
-export function Thinking({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
+export function Thinking({ item, endTs }: { item: Extract<ChatItem, { kind: "thinking" }>; endTs: string | null }) {
+  const [open, setOpen] = useState(false);
+  const secs = item.streaming ? null : seconds(item.ts, endTs);
+  const label = item.streaming ? "Thinking" : secs !== null && secs > 0 ? `Thought for ${secs}s` : "Thought";
   return (
-    <div className="thinking" id={`item-${item.id}`}>
-      <Fold
-        summary={
-          <span>
-            {item.streaming ? "Thinking…" : "Thinking"}
-            {item.streaming && <Spinner size={10} />}
-          </span>
-        }
-      >
-        <div className="thinking-text">{item.text}</div>
-      </Fold>
+    <div className="line-item" id={`item-${item.id}`}>
+      <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="glyph" aria-hidden="true">
+          ∴
+        </span>
+        <span className={cls("line-muted", item.streaming && "shimmer")}>
+          {label}
+          {item.streaming && <Dots />}
+        </span>
+        <IconChevronRight className="chev" size={14} />
+      </button>
+      {open && <div className="line-detail thinking-text">{item.text || "…"}</div>}
     </div>
   );
 }
 
-// ---------- Notices and harness receipts ----------
+export function Dots() {
+  return (
+    <span className="dots" aria-hidden="true">
+      <span>.</span>
+      <span>.</span>
+      <span>.</span>
+    </span>
+  );
+}
+
+// ---------- Notices and harness receipts (same line style) ----------
 
 export function NoticeLine({ item }: { item: Extract<ChatItem, { kind: "notice" }> }) {
   const [open, setOpen] = useState(false);
   const lines = item.text.split("\n");
-  const long = lines.length > 1 || item.text.length > 160;
-  const Icon = item.level === "error" ? IconAlert : item.level === "warn" ? IconWarning : IconInfo;
+  const long = lines.length > 1 || item.text.length > 140;
   const label = item.level === "error" ? "Error" : item.level === "warn" ? "Warning" : "Notice";
-  const head = (
+  const tone = item.level === "error" ? "tone-error" : item.level === "warn" ? "tone-attention" : "tone-muted";
+  const body = (
     <>
-      <Icon size={16} className={`tone-${item.level === "info" ? "muted" : item.level === "warn" ? "attention" : "error"}`} />
-      <span className="notice-label">{label}</span>
-      <span className="notice-text">{long && !open ? lines[0].slice(0, 160) : lines[0]}</span>
+      <span className={cls("glyph", tone)} aria-hidden="true">
+        {item.level === "info" ? "i" : "!"}
+      </span>
+      <span className={cls("line-verb", item.level !== "info" && tone)}>{label}</span>
+      <span className="line-target plain">{long && !open ? `${lines[0].slice(0, 140)}${lines[0].length > 140 ? "…" : ""}` : lines[0]}</span>
     </>
   );
   return (
-    <div className={cls("notice", `notice-${item.level}`)} id={`item-${item.id}`} role={item.level === "error" ? "alert" : undefined}>
+    <div className="line-item" id={`item-${item.id}`} role={item.level === "error" ? "alert" : undefined}>
       {long ? (
-        <button type="button" className="notice-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {head}
-          <IconChevronRight className={cls("chev", open && "open")} />
+        <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {body}
+          <IconChevronRight className="chev" size={14} />
         </button>
       ) : (
-        <div className="notice-head">{head}</div>
+        <div className="line static">{body}</div>
       )}
-      {open && <pre className="notice-more">{item.text}</pre>}
+      {open && <pre className="line-detail code-plain">{item.text}</pre>}
     </div>
   );
 }
 
-const RECEIPT_STATUS: Record<"running" | "done" | "error", string | null> = { running: "Running", done: null, error: "Failed" };
-
 export function HarnessReceipt({ item }: { item: Extract<ChatItem, { kind: "receipt" }> }) {
-  const Icon = item.action === "dream" ? IconSparkles : item.action === "rollover" ? IconRepeat : item.action === "steer" ? IconCornerDown : IconSlash;
-  const status = RECEIPT_STATUS[item.status];
+  const glyph = item.action === "dream" ? "✦" : item.action === "rollover" ? "↻" : item.action === "steer" ? "↳" : "/";
   return (
-    <div className={cls("receipt receipt-harness", `rs-${item.status}`)} id={`item-${item.id}`}>
-      <div className="receipt-head static">
-        <Icon size={18} className={item.action === "dream" ? "tone-accent" : "tone-muted"} />
-        <span className="receipt-verb">{item.title}</span>
-        {item.detail && <span className="receipt-result">{item.detail}</span>}
-        <span className="grow" />
-        {item.status === "running" && <Spinner size={12} />}
-        {status && <span className={cls("status-text", item.status === "error" ? "tone-error" : "tone-muted")}>{status}</span>}
+    <div className="line-item" id={`item-${item.id}`}>
+      <div className="line static">
+        {item.status === "running" ? (
+          <Spinner size={11} />
+        ) : (
+          <span className={cls("glyph", item.status === "error" ? "tone-error" : item.action === "dream" ? "tone-accent" : "tone-muted")} aria-hidden="true">
+            {glyph}
+          </span>
+        )}
+        <span className="line-verb">{item.title}</span>
+        {item.detail && <span className="line-meta">{item.detail}</span>}
+        {item.status === "error" && <span className="line-status tone-error">Failed</span>}
       </div>
     </div>
   );
 }
 
-// ---------- Tool receipts ----------
+// ---------- Tool lines ----------
 
-function ToolIcon({ icon, className }: { icon: ReceiptText["icon"]; className?: string }) {
-  const props = { size: 18, className };
-  switch (icon) {
-    case "file":
-      return <IconFile {...props} />;
-    case "search":
-      return <IconSearch {...props} />;
-    case "terminal":
-      return <IconTerminal {...props} />;
-    case "pencil":
-      return <IconPencil {...props} />;
-    case "plug":
-      return <IconPlug {...props} />;
-    case "sparkles":
-      return <IconSparkles {...props} />;
+function ToolGlyph({ item }: { item: ToolItem }) {
+  switch (item.status) {
+    case "running":
+      return <Spinner size={11} />;
+    case "pending_approval":
+      return <span className="glyph tone-attention" aria-hidden="true">●</span>;
+    case "error":
+      return <span className="glyph tone-error" aria-hidden="true">✕</span>;
+    case "denied":
+      return <span className="glyph tone-error" aria-hidden="true">⊘</span>;
+    case "interrupted":
+      return <span className="glyph tone-muted" aria-hidden="true">◌</span>;
     default:
-      return <IconWrench {...props} />;
+      return <span className={cls("glyph", item.isError ? "tone-error" : "tone-ok")} aria-hidden="true">●</span>;
   }
 }
 
-/** Full-width one-line receipt; expansion shows input, output, duration, exit status and the matched rule. */
-export const ToolReceipt = memo(function ToolReceipt({
+/** One quiet line per tool call; expanding shows input and output under a thin rule. */
+export const ToolLine = memo(function ToolLine({
   item,
   sessionId,
   persona,
+  promptOpen,
 }: {
   item: ToolItem;
   sessionId: string;
   persona: PersonaSummary | null;
+  /** The oldest waiting call shows its decision prompt without being expanded. */
+  promptOpen: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const d = describeTool(item);
-  const status = TOOL_STATUS_TEXT[item.status];
   const pending = item.status === "pending_approval";
-  const tone =
-    item.status === "pending_approval" ? "attention" : item.status === "error" || item.isError ? "error" : "muted";
-  const code = item.name === "bash" ? exitCode(item.output) : null;
+  const status = TOOL_STATUS_TEXT[item.status];
+  const isNet = item.name === "network_access";
+  const meta: string[] = [];
+  if (isNet && item.output && !pending) meta.push(item.output);
+  if (d.result) meta.push(d.result);
+  if (item.durationMs !== undefined && !isNet) meta.push(fmtDuration(item.durationMs));
+  const showPrompt = pending && (promptOpen || open);
   return (
-    <div
-      className={cls("receipt", `ts-${item.status}`, pending && "is-pending")}
-      id={pending ? `approval-${item.id}` : `item-${item.id}`}
-      tabIndex={pending ? -1 : undefined}
-    >
-      <button type="button" className="receipt-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <ToolIcon icon={d.icon} className={pending ? "tone-attention" : "tone-muted"} />
-        <span className="receipt-verb">
-          {d.verb} <span className="mono">{d.target}</span>
-        </span>
-        {d.result && <span className="receipt-result">· {d.result}</span>}
-        <span className="grow" />
-        {item.status === "running" && <Spinner size={12} />}
-        {status && (
-          <span className={cls("status-text", `tone-${tone}`)}>
-            {pending && <span className="dot attention" aria-hidden="true" />}
+    <div className={cls("line-item", pending && "is-pending")} id={`item-${item.id}`}>
+      <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ToolGlyph item={item} />
+        <span className="line-verb">{d.verb}</span>
+        <span className="line-target mono">{d.target}</span>
+        {meta.length > 0 && <span className="line-meta">· {meta.join(" · ")}</span>}
+        {status && item.status !== "running" && (
+          <span className={cls("line-status", pending ? "tone-attention" : item.status === "interrupted" ? "tone-muted" : "tone-error")}>
             {status}
           </span>
         )}
-        {item.durationMs !== undefined && <span className="receipt-dur">{fmtDuration(item.durationMs)}</span>}
-        <IconChevronRight className={cls("chev", open && "open")} size={16} />
+        <IconChevronRight className="chev" size={14} />
       </button>
-      {open && (
-        <div className="receipt-body">
+      {open && !isNet && (
+        <div className="line-detail">
           <ToolInput item={item} />
           {item.output !== undefined && (
             <Section label={item.isError ? "Error output" : "Output"} copy={item.output}>
-              <pre className={cls("code", item.isError && "is-error")}>{item.output || "(empty)"}</pre>
+              <pre className={cls("code-plain", item.isError && "tone-error")}>{item.output || "(empty)"}</pre>
             </Section>
           )}
-          <dl className="facts">
-            <dt>Tool</dt>
-            <dd className="mono">{item.name}</dd>
-            {item.durationMs !== undefined && (
-              <>
-                <dt>Duration</dt>
-                <dd>{fmtDuration(item.durationMs)}</dd>
-              </>
-            )}
-            {code !== null && (
-              <>
-                <dt>Exit status</dt>
-                <dd>{code}</dd>
-              </>
-            )}
-            {item.approvalReason && (
-              <>
-                <dt>Matched rule</dt>
-                <dd className="mono">{item.approvalReason}</dd>
-              </>
-            )}
-            {item.denyReason && (
-              <>
-                <dt>Deny reason</dt>
-                <dd>{item.denyReason}</dd>
-              </>
-            )}
-          </dl>
-          {pending && <ApprovalActions item={item} sessionId={sessionId} persona={persona} />}
+          <Facts item={item} />
+        </div>
+      )}
+      {open && isNet && !pending && (
+        <div className="line-detail">
+          <Facts item={item} />
+        </div>
+      )}
+      {showPrompt &&
+        (isNet ? (
+          <NetworkPrompt item={item} sessionId={sessionId} />
+        ) : (
+          <ApprovalPrompt item={item} sessionId={sessionId} persona={persona} showInput={!open} />
+        ))}
+    </div>
+  );
+});
+
+function Facts({ item }: { item: ToolItem }) {
+  const code = item.name === "bash" ? exitCode(item.output) : null;
+  return (
+    <dl className="facts small">
+      <dt>Tool</dt>
+      <dd className="mono">{item.name}</dd>
+      {item.durationMs !== undefined && (
+        <>
+          <dt>Duration</dt>
+          <dd>{fmtDuration(item.durationMs)}</dd>
+        </>
+      )}
+      {code !== null && (
+        <>
+          <dt>Exit status</dt>
+          <dd>{code}</dd>
+        </>
+      )}
+      {item.approvalReason && (
+        <>
+          <dt>Matched rule</dt>
+          <dd className="mono">{item.approvalReason}</dd>
+        </>
+      )}
+      {item.denyReason && (
+        <>
+          <dt>Deny reason</dt>
+          <dd>{item.denyReason}</dd>
+        </>
+      )}
+      {item.name === "network_access" && item.output && (
+        <>
+          <dt>Outcome</dt>
+          <dd>{item.output}</dd>
+        </>
+      )}
+    </dl>
+  );
+}
+
+/** Consecutive finished tool calls fold into one summary line. */
+export function ToolGroup({ items, sessionId, persona }: { items: ToolItem[]; sessionId: string; persona: PersonaSummary | null }) {
+  const [open, setOpen] = useState(false);
+  const failed = items.filter((i) => i.status === "error" || i.isError || i.status === "denied").length;
+  const ms = items.reduce((a, i) => a + (i.durationMs ?? 0), 0);
+  return (
+    <div className="line-item group" id={`item-${items[0].id}`}>
+      <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className={cls("glyph", failed ? "tone-error" : "tone-ok")} aria-hidden="true">
+          ●
+        </span>
+        <span className="line-verb">{summarizeTools(items)}</span>
+        <span className="line-meta">
+          {failed > 0 && `· ${failed} failed `}
+          {ms > 0 && `· ${fmtDuration(ms)}`}
+        </span>
+        <IconChevronRight className="chev" size={14} />
+      </button>
+      {open && (
+        <div className="group-body">
+          {items.map((it) => (
+            <ToolLine key={it.id} item={it} sessionId={sessionId} persona={persona} promptOpen={false} />
+          ))}
         </div>
       )}
     </div>
   );
-});
+}
 
 function Section({ label, copy, children }: { label: string; copy?: string; children: ReactNode }) {
   return (
@@ -285,7 +327,7 @@ function ToolInput({ item }: { item: ToolItem }) {
         return (
           <Section label="Command" copy={cmd}>
             <pre className="code">
-              <span className="prompt" aria-hidden="true">
+              <span className="sh-prompt" aria-hidden="true">
                 ${" "}
               </span>
               {cmd}
@@ -305,7 +347,24 @@ function ToolInput({ item }: { item: ToolItem }) {
     }
     if (tool === "write_file") {
       const c = str(input, ["content"]);
-      if (c !== null) return <WritePreview path={path} content={c} />;
+      if (c !== null) {
+        const lines = c.split("\n");
+        const shown = lines.slice(0, 200);
+        return (
+          <Section label={path ?? "New content"} copy={c}>
+            <pre className="code diff">
+              {shown.map((l, i) => (
+                <span key={i} className="diff-line add">
+                  <span className="diff-sign">+</span>
+                  {l || " "}
+                  {"\n"}
+                </span>
+              ))}
+            </pre>
+            {lines.length > shown.length && <p className="muted small">{lines.length - shown.length} more lines not shown.</p>}
+          </Section>
+        );
+      }
     }
   }
   const text = prettyJson(input);
@@ -316,104 +375,70 @@ function ToolInput({ item }: { item: ToolItem }) {
   );
 }
 
-function WritePreview({ path, content }: { path: string | null; content: string }) {
-  const lines = content.split("\n");
-  const shown = lines.slice(0, 200);
-  return (
-    <Section label={path ?? "New content"} copy={content}>
-      <pre className="code diff">
-        {shown.map((l, i) => (
-          <span key={i} className="diff-line add">
-            <span className="diff-sign">+</span>
-            {l || " "}
-            {"\n"}
-          </span>
-        ))}
-      </pre>
-      {lines.length > shown.length && <p className="muted small">{lines.length - shown.length} more lines not shown.</p>}
-    </Section>
-  );
+// ---------- Approval prompts ----------
+
+interface DecideHandle {
+  decide(d: ApprovalDecision): void;
+  startDeny(): void;
 }
 
-// ---------- Approval ----------
-
-function approvalTitle(item: ToolItem): string {
-  const { server, tool } = toolDisplayName(item.name);
-  if (server) return `Call ${server} › ${tool}`;
-  const path = str(item.input, ["path", "file_path"]);
-  switch (tool) {
-    case "edit_file":
-      return `Edit ${path ? basename(path) : "file"}`;
-    case "write_file":
-      return `Write ${path ? basename(path) : "file"}`;
-    case "bash":
-      return "Run a command";
-    case "read_file":
-      return `Read ${path ? basename(path) : "file"}`;
-    default:
-      return `Use ${tool}`;
-  }
-}
-
-/** The oldest waiting call, open inline at full column width. */
-export function ApprovalCard({
-  item,
-  sessionId,
-  persona,
-}: {
-  item: ToolItem;
-  sessionId: string;
-  persona: PersonaSummary | null;
-}) {
-  const ref = useRef<HTMLElement>(null);
-  const actionsRef = useRef<ApprovalHandle | null>(null);
-  const title = approvalTitle(item);
-  const d = describeTool(item);
-  const path = str(item.input, ["path", "file_path"]);
-  const folder = path ? mountFor(path, persona) : null;
-
-  // When the previous card was decided, keep keyboard users on the next decision.
-  useEffect(() => {
-    const ae = document.activeElement;
-    if (!ae || ae === document.body) ref.current?.focus({ preventScroll: true });
-  }, []);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
+/** A / ⇧A / D while focus is inside the prompt. */
+function useDecisionKeys(handle: React.MutableRefObject<DecideHandle | null>) {
+  return (e: React.KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return;
     const k = e.key.toLowerCase();
     if (k === "a") {
       e.preventDefault();
-      actionsRef.current?.decide(e.shiftKey ? "allow_always" : "allow");
+      handle.current?.decide(e.shiftKey ? "allow_always" : "allow");
     } else if (k === "d") {
       e.preventDefault();
-      actionsRef.current?.startDeny();
+      handle.current?.startDeny();
     }
   };
+}
 
+function useAutoFocus(ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const ae = document.activeElement;
+    if (!ae || ae === document.body) ref.current?.focus({ preventScroll: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+function ApprovalPrompt({
+  item,
+  sessionId,
+  persona,
+  showInput,
+}: {
+  item: ToolItem;
+  sessionId: string;
+  persona: PersonaSummary | null;
+  showInput: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const handle = useRef<DecideHandle | null>(null);
+  const onKeyDown = useDecisionKeys(handle);
+  useAutoFocus(ref);
+  const path = str(item.input, ["path", "file_path"]);
+  const folder = path ? mountFor(path, persona) : null;
+  const tool = toolDisplayName(item.name).tool;
+  const what = tool === "edit_file" || tool === "write_file" ? `${tool === "edit_file" ? "Edit" : "Write"} ${path ? basename(path) : "file"}` : null;
   return (
-    <section
+    <div
       ref={ref}
       id={`approval-${item.id}`}
-      className="approval"
+      className="prompt"
       tabIndex={0}
-      aria-label={`${title}, decision needed`}
+      role="group"
+      aria-label={`${what ?? item.name}: decision needed`}
       onKeyDown={onKeyDown}
     >
-      <div className="approval-head">
-        <ToolIcon icon={d.icon} className="tone-attention" />
-        <h2>{title}</h2>
-        <span className="grow" />
-        <span className="status-text tone-attention">
-          <span className="dot attention" aria-hidden="true" />
-          Decision needed
-        </span>
-      </div>
-      <ToolInput item={item} />
-      <div className="approval-meta">
-        <span>{consequence(item, persona)}</span>
-      </div>
-      <Fold summary="Why approval is required" className="approval-why">
-        <dl className="facts">
+      <p className="prompt-q">
+        <strong>{what ?? `Allow ${item.name}?`}</strong> <span className="muted">· {consequence(item, persona)}</span>
+      </p>
+      {showInput && <ToolInput item={item} />}
+      <Fold summary="Why approval is required">
+        <dl className="facts small">
           <dt>Matched rule</dt>
           <dd className="mono">{item.approvalReason || `${item.name} resolves to “ask” for this persona`}</dd>
           {folder && (
@@ -426,35 +451,69 @@ export function ApprovalCard({
           )}
           <dt>Allow until stopped</dt>
           <dd>
-            Adds a temporary rule for {item.name === "bash" ? "this exact command" : <span className="mono">{item.name}</span>}. It
-            ends when the agent is stopped or interrupted, or Swan restarts, and never edits the persona.
+            Adds a temporary rule for {item.name === "bash" ? "this exact command" : <span className="mono">{item.name}</span>}. It ends when
+            the agent is stopped or interrupted, or Swan restarts, and never edits the persona.
           </dd>
         </dl>
       </Fold>
-      <ApprovalActions item={item} sessionId={sessionId} persona={persona} handleRef={actionsRef} large />
-      <p className="approval-keys">
-        <Kbd>A</Kbd> allow once · <Kbd>⇧A</Kbd> allow until stopped · <Kbd>D</Kbd> deny
+      <DecisionButtons
+        item={item}
+        sessionId={sessionId}
+        handleRef={handle}
+        labels={{ allow: "Allow once", always: allowScopeLabel(item) }}
+      />
+      <p className="prompt-keys">
+        <Kbd>A</Kbd> allow once · <Kbd>⇧A</Kbd> until stopped · <Kbd>D</Kbd> deny
       </p>
-    </section>
+    </div>
   );
 }
 
-interface ApprovalHandle {
-  decide(d: ApprovalDecision): void;
-  startDeny(): void;
+/** The sandbox asked for a host that is not on the allowlist; the request waits. */
+function NetworkPrompt({ item, sessionId }: { item: ToolItem; sessionId: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const handle = useRef<DecideHandle | null>(null);
+  const onKeyDown = useDecisionKeys(handle);
+  useAutoFocus(ref);
+  const host = str(item.input, ["host"]) ?? item.inputPreview;
+  return (
+    <div
+      ref={ref}
+      id={`approval-${item.id}`}
+      className="prompt"
+      tabIndex={0}
+      role="group"
+      aria-label={`Network access to ${host}: decision needed`}
+      onKeyDown={onKeyDown}
+    >
+      <p className="prompt-q">
+        Allow network access to <strong className="mono">{item.inputPreview || host}</strong>?{" "}
+        <span className="muted">The request is paused; it is {item.approvalReason ?? "not on the allowlist"}.</span>
+      </p>
+      <DecisionButtons
+        item={item}
+        sessionId={sessionId}
+        handleRef={handle}
+        labels={{ allow: "Allow until stopped", always: `Always allow ${host}` }}
+      />
+      <p className="prompt-keys">
+        “Always allow” adds {host} to this persona's allowed hosts. Deny blocks it until the agent is stopped. <Kbd>A</Kbd> ·{" "}
+        <Kbd>⇧A</Kbd> · <Kbd>D</Kbd>
+      </p>
+    </div>
+  );
 }
 
-function ApprovalActions({
+function DecisionButtons({
   item,
   sessionId,
   handleRef,
-  large,
+  labels,
 }: {
   item: ToolItem;
   sessionId: string;
-  persona: PersonaSummary | null;
-  handleRef?: React.MutableRefObject<ApprovalHandle | null>;
-  large?: boolean;
+  handleRef: React.MutableRefObject<DecideHandle | null>;
+  labels: { allow: string; always: string };
 }) {
   const { actions } = useStore();
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
@@ -469,8 +528,7 @@ function ApprovalActions({
     const ok = await actions.approve(sessionId, item.id, body);
     if (!ok) setBusy(null);
   };
-
-  if (handleRef) handleRef.current = { decide: (d) => void decide(d), startDeny: () => setDenying(true) };
+  handleRef.current = { decide: (d) => void decide(d), startDeny: () => setDenying(true) };
 
   useEffect(() => {
     if (denying) reasonRef.current?.focus();
@@ -500,33 +558,31 @@ function ApprovalActions({
               }
             }}
             disabled={busy !== null}
-            placeholder="e.g. Don't touch the public API"
           />
         </label>
         <div className="deny-actions">
-          <button type="button" className="btn" onClick={() => setDenying(false)} disabled={busy !== null}>
+          <button type="button" className="btn sm" onClick={() => setDenying(false)} disabled={busy !== null}>
             Cancel
           </button>
-          <button type="submit" className="btn danger" disabled={busy !== null}>
-            {busy === "deny" && <Spinner size={12} />}
+          <button type="submit" className="btn sm danger" disabled={busy !== null}>
+            {busy === "deny" && <Spinner size={10} />}
             Deny
           </button>
         </div>
       </form>
     );
   }
-
   return (
-    <div className={cls("approval-actions", large && "large")}>
-      <button type="button" className="btn primary" disabled={busy !== null} onClick={() => void decide("allow")}>
-        {busy === "allow" && <Spinner size={12} />}
-        Allow once
+    <div className="prompt-actions">
+      <button type="button" className="btn sm primary" disabled={busy !== null} onClick={() => void decide("allow")}>
+        {busy === "allow" && <Spinner size={10} />}
+        {labels.allow}
       </button>
-      <button type="button" className="btn" disabled={busy !== null} onClick={() => void decide("allow_always")}>
-        {busy === "allow_always" && <Spinner size={12} />}
-        {allowScopeLabel(item)}
+      <button type="button" className="btn sm" disabled={busy !== null} onClick={() => void decide("allow_always")}>
+        {busy === "allow_always" && <Spinner size={10} />}
+        {labels.always}
       </button>
-      <button type="button" className="btn" disabled={busy !== null} onClick={() => setDenying(true)}>
+      <button type="button" className="btn sm" disabled={busy !== null} onClick={() => setDenying(true)}>
         Deny
       </button>
     </div>

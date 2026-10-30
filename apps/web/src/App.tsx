@@ -4,7 +4,6 @@ import { Conversation } from "./components/Conversation";
 import { closeDockAndRestoreFocus, Dock, useMediaQuery } from "./components/Dock";
 import { FirstRun } from "./components/FirstRun";
 import { Header } from "./components/Header";
-import { NetworkView } from "./components/NetworkView";
 import { conversationSession, useStore } from "./store";
 import { isWorking } from "./status";
 
@@ -66,10 +65,7 @@ export function App() {
           {noPersonas ? (
             <FirstRun />
           ) : (
-            <>
-              <Conversation hidden={state.view === "network"} />
-              {state.view === "network" && <NetworkView />}
-            </>
+            <Conversation />
           )}
         </main>
         {dock && <Dock mode={dock} overlay={overlay} />}

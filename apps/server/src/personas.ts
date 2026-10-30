@@ -187,7 +187,7 @@ export class PersonaStore extends TypedEmitter<Events> {
     for (const c of cfg.credentials) {
       if (!SECRET_NAME.test(c)) errors.push(`invalid credential name "${c}"`);
       // A model-provider key in the sandbox would let the agent spend the user's model budget.
-      if (providerKeys.has(c)) errors.push(`credential "${c}" is a model-provider key and stays host-side; remove it from credentials`);
+      if (providerKeys.has(c)) errors.push(`${c} is the key Swan uses to call the model, so it can't be handed to the agent. Untick it under Credentials and save.`);
     }
     const checkRefs = (where: string, value: string) => {
       for (const m of value.matchAll(SECRET_REF)) {
@@ -279,6 +279,10 @@ export class PersonaStore extends TypedEmitter<Events> {
     const p = this.personas.get(id);
     if (!p) throw new Error("not found");
     const before = p.config;
+    // Model-provider keys never go to the sandbox; drop them instead of saving an invalid persona.
+    const providerKeys = new Set(Object.values(this.settings.providers).flatMap((x) => (x.apiKeySecret ? [x.apiKeySecret] : x.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
+    const dropped = v.credentials.filter((c) => providerKeys.has(c));
+    v = { ...v, credentials: v.credentials.filter((c) => !providerKeys.has(c)) };
     const doc = YAML.parseDocument(p.yaml);
     doc.set("name", v.name);
     doc.set("description", v.description);
@@ -301,7 +305,18 @@ export class PersonaStore extends TypedEmitter<Events> {
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
     if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
       nextStart.push("folders, skills and MCP servers (next container start)");
-    return { persona: this.summary(saved), appliedNow, nextStart };
+    const notes = dropped.map((c) => `${c} was left out: it's the key Swan itself uses to call the model, and the agent never needs it.`);
+    return { persona: this.summary(saved), appliedNow, nextStart, ...(notes.length ? { notes } : {}) };
+  }
+
+  /** "Always allow" on a network request: add the host to the persona's allowlist. */
+  async addNetworkHost(id: string, host: string) {
+    const p = this.personas.get(id);
+    if (!p?.config) throw new Error("persona is invalid");
+    if (p.config.network.allow.includes(host)) return;
+    const doc = YAML.parseDocument(p.yaml);
+    doc.setIn(["network", "allow"], doc.createNode([...p.config.network.allow, host]));
+    await this.save(id, doc.toString());
   }
 
   /** Composer model/effort selectors: saved to the persona, used from the next model turn. */
