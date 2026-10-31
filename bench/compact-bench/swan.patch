@@ -1,0 +1,106 @@
+diff --git a/harness/e1_xb.py b/harness/e1_xb.py
+index d3e1fd3..2ab8c1f 100644
+--- a/harness/e1_xb.py
++++ b/harness/e1_xb.py
+@@ -21,12 +21,15 @@ import sys
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ import cb_common as C
+ import e1_runner as R
++import swan_checkpoint as SC
+ from cb_data import ensure_data
+ 
+ WORK = C.WORK_ROOT
+ 
+ 
+ def compress_x(H_msgs, backbone, variant):
++    if variant in SC.STRATEGIES:
++        return SC.checkpoint(H_msgs, backbone, variant, C.key_for_model(backbone))
+     user = C.build_transcript(H_msgs) + "\n\n" + C.PROMPTS[variant]
+     return C.summarize(backbone, user, C.key_for_model(backbone))
+ 
+diff --git a/harness/e2_score.py b/harness/e2_score.py
+index b869ccf..60afc4c 100644
+--- a/harness/e2_score.py
++++ b/harness/e2_score.py
+@@ -23,15 +23,20 @@ from concurrent.futures import ThreadPoolExecutor
+ 
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ import cb_common as C
++import swan_checkpoint as SC
+ from cb_data import ensure_data
+ 
+-ORDER = ["claude", "codex", "opencode", "gemini", "kimi", "anchor_index"]
++ORDER = ["claude", "codex", "opencode", "gemini", "kimi", *SC.STRATEGIES, "anchor_index"]
++VARIANTS = (*C.PROMPTS, *SC.STRATEGIES)
+ 
+ 
+ def compress_one(args):
+-    sid, client, tr, atoms, variant, model = args
++    sid, client, H, atoms, variant, model = args
+     try:
+-        S = C.summarize(model, tr + "\n\n" + C.PROMPTS[variant], C.key_for_model(model))
++        if variant in SC.STRATEGIES:
++            S = SC.checkpoint(H, model, variant, C.key_for_model(model))
++        else:
++            S = C.summarize(model, C.transcript(H) + "\n\n" + C.PROMPTS[variant], C.key_for_model(model))
+     except Exception as e:
+         return {"sample_id": sid, "client": client, "variant": variant, "error": str(e)[:150]}
+     hits = sum(1 for a in atoms if a["value"] in S)
+@@ -47,7 +52,12 @@ def main():
+     ap.add_argument("--out", default=os.path.join(C.RESULTS_ROOT, "e2"))
+     ap.add_argument("--workers", type=int, default=8)
+     ap.add_argument("--baseline-only", action="store_true", help="run the mechanical reference without a model API")
++    ap.add_argument("--variants", default=",".join(C.PROMPTS), help=f"comma-separated summary methods from {', '.join(VARIANTS)}")
+     args = ap.parse_args()
++    variants = [v for v in args.variants.split(",") if v]
++    unknown = [v for v in variants if v not in VARIANTS]
++    if unknown:
++        ap.error(f"unknown variants: {', '.join(unknown)}")
+     model = args.model
+ 
+     samples = [json.loads(l) for l in open(ensure_data("e2/sessions.jsonl"), encoding="utf-8") if l.strip()]
+@@ -55,9 +65,8 @@ def main():
+         samples = samples[: args.n]
+     jobs = []
+     for s in samples:
+-        tr = C.transcript(s["H"])
+-        for variant in ([] if args.baseline_only else C.PROMPTS):
+-            jobs.append((s["sample_id"], s["client"], tr, s["atoms"], variant, model))
++        for variant in ([] if args.baseline_only else variants):
++            jobs.append((s["sample_id"], s["client"], s["H"], s["atoms"], variant, model))
+     print(f"samples={len(samples)}, compress jobs={len(jobs)}", flush=True)
+ 
+     os.makedirs(args.out, exist_ok=True)
+diff --git a/run.py b/run.py
+index 4e0e865..06f8ef5 100644
+--- a/run.py
++++ b/run.py
+@@ -110,7 +110,9 @@ def main(argv=None):
+     parser.add_argument("--track", choices=("all", "task", "retention", "production"), default="all")
+     parser.add_argument("--limit", type=int, default=0, help="limit task instances and retention sessions (0=all)")
+     parser.add_argument("--instance", action="append", help="task instance ID; repeat to select multiple")
+-    parser.add_argument("--prompt", choices=("claude", "codex", "opencode", "gemini", "kimi"), default="claude")
++    parser.add_argument("--prompt", choices=("claude", "codex", "opencode", "gemini", "kimi", "swan-full", "swan-minimal"), default="claude")
++    parser.add_argument("--variants", default="claude,codex,opencode,gemini,kimi",
++                        help="retention: comma-separated summary methods (adds swan-full, swan-minimal)")
+     parser.add_argument("--rounds", type=int, choices=(1, 3), default=3, help="task verification rounds")
+     parser.add_argument("--workers", type=int, default=8)
+     parser.add_argument("--output", type=Path, default=ROOT / "results")
+@@ -143,7 +145,7 @@ def main(argv=None):
+             C.key_for_model(C.AGENT_MODEL)
+     # The hash prevents incompatible models/settings from reusing old results.
+     config = {"models": args.model, "dataset": args.dataset, "revision": args.revision,
+-              "agent": C.AGENT_MODEL, "prompt": args.prompt,
++              "agent": C.AGENT_MODEL, "prompt": args.prompt, "variants": args.variants,
+               "summarizer_api": os.environ.get("CB_SUMMARIZER_API", "auto"),
+               "summary_max_tokens": C.SUMMARIZER_MAX_TOKENS,
+               "baseline_only": args.baseline_only,
+@@ -165,7 +167,7 @@ def main(argv=None):
+     if args.track in ("all", "retention"):
+         for model in args.model:
+             options = ["--model", model, "--n", args.limit, "--workers", args.workers,
+-                       "--out", output / "retention"]
++                       "--out", output / "retention", "--variants", args.variants]
+             if args.baseline_only:
+                 options.append("--baseline-only")
+             launch("harness.e2_score", *options)

@@ -1,0 +1,14 @@
+# One trial of the natural-length case under today's default, to see whether it reaches a rollover
+# at Swan's real 200k context and what the hard tier costs. Hard cap $8.
+#   pnpm bench run bench/campaigns/calibrate-natural.yaml --secrets ~/.persona-harness/secrets.yaml
+name: calibrate-natural
+cap: 8
+trials: 1
+cases:
+  - ../cases/cost-ledger-review.yaml
+providers:
+  anthropic: { type: anthropic, apiKeySecret: ANTHROPIC_API_KEY }
+configs:
+  - id: full-sonnet
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: full
