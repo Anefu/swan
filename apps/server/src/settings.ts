@@ -22,6 +22,8 @@ export const paths = {
   audit: path.join(PH_HOME, "audit"),
   copilotRuntime: path.join(PH_HOME, "copilot-runtime"),
   memory: path.join(PH_HOME, "memory"),
+  connections: path.join(PH_HOME, "connections"), // per-connection wrapper state and logs
+  migrationNote: path.join(PH_HOME, "connections-migration.json"),
   apiToken: path.join(PH_HOME, "api-token"),
   webDist: path.join(REPO_ROOT, "apps/web/dist"),
   containerfile: path.join(REPO_ROOT, "sandbox/Containerfile"),
@@ -59,6 +61,7 @@ const SettingsSchema = z.object({
     .object({ provider: z.string(), id: z.string() })
     .default({ provider: "anthropic", id: "claude-opus-5-5" }),
   skillDirs: z.array(z.string()).default([]), // extra skill roots, e.g. ~/.claude/skills
+  connections: z.unknown().optional(), // validated and hot-reloaded by the ConnectionManager
   toolOutputLimit: z.number().int().default(30_000),
   bashTimeoutMs: z.number().int().default(120_000),
   contextLimitTokens: z.number().int().default(200_000), // assumed model context when the provider does not say
@@ -71,7 +74,8 @@ const SettingsSchema = z.object({
 export type Settings = z.infer<typeof SettingsSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
 
-const DEFAULT_CONFIG = `# persona-harness settings. Restart the server after editing this file.
+const DEFAULT_CONFIG = `# persona-harness settings. Restart the server after editing this file
+# (except connections, which apply immediately).
 port: 4317          # web UI + API (127.0.0.1 only)
 proxyPort: 4318     # egress proxy the sandbox reaches through the relay
 providers:
@@ -85,10 +89,21 @@ providers:
 defaultModel: { provider: anthropic, id: claude-opus-5-5 }
 # Extra directories to load skills from (each child dir with a SKILL.md is a skill)
 skillDirs: []
+# Where agents' credentials come from. Values live in secrets.yaml as connection/NAME.
+connections:
+  github:
+    type: static
+    credentials:
+      GITHUB_TOKEN: { hosts: [api.github.com] }
+  # A wrapper around your own sign-in tool that speaks Swan's connection protocol, e.g.:
+  # corp-aws:
+  #   type: command
+  #   command: [~/bin/corp-swan, --role, ReadOnly]
+  #   hosts: ["*.amazonaws.com"]
 `;
 
 export async function ensureHome(): Promise<void> {
-  for (const d of [paths.home, paths.personas, paths.skills, paths.sessions, paths.ca, paths.build, paths.audit, paths.memory]) {
+  for (const d of [paths.home, paths.personas, paths.skills, paths.sessions, paths.ca, paths.build, paths.audit, paths.memory, paths.connections]) {
     await fs.mkdir(d, { recursive: true, mode: 0o700 });
   }
   await fs.chmod(paths.home, 0o700);

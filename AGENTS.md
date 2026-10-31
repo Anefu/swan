@@ -15,7 +15,7 @@ Read before changing behaviour:
 ## Layout
 
 ```
-apps/server       Node harness (TypeScript, run with tsx): agent loop, providers, MCP, sandbox, egress proxy, API
+apps/server       Node harness (TypeScript, run with tsx): agent loop, providers, MCP, sandbox, egress proxy, connections, API
 apps/web          React UI (Vite), served by the server from apps/web/dist
 packages/shared   Wire protocol types used by server and web; change these first
 packages/aws-sigv4  AWS Signature V4 signing and verification (no dependencies)
@@ -46,11 +46,11 @@ pnpm aws-stub         # local AWS/Kubernetes stub, see tools/aws-stub/README.md
 These are the product. A change that weakens one needs an explicit decision from the maintainer, not a workaround.
 
 1. Secret values exist only on the host. The sandbox, transcripts, logs, audit files, API responses and the UI see placeholders, names and fingerprints only.
-2. The proxy substitutes a credential only for HTTPS requests to that credential's bound hosts, and rewrites echoed values back to placeholders.
+2. The proxy substitutes a credential only for HTTPS requests to that credential's bound hosts that the persona's rules allow (unmatched means not substituted), re-signs AWS requests only after verifying the placeholder signature, and rewrites echoed values back to placeholders.
 3. The proxy refuses loopback, private, link-local, CGNAT, multicast and reserved addresses, resolves once and connects to the address it checked. Ports other than 80/443 only by explicit `host:port`, always tunnelled, never credentialed.
 4. Host patterns are exact or one-level `*.domain`; a bare `*` never matches.
-5. Model-provider keys never reach a persona or the sandbox.
-6. Host-side commands (MCP stdio is in the sandbox; connection wrappers and runtimes are on the host) are run as argv without a shell, with a minimal environment, and nothing from the sandbox is passed to them unvalidated.
+5. Model-provider keys never reach a persona or the sandbox: they are plain secrets, never connections.
+6. Host-side commands (MCP stdio is in the sandbox; connection wrappers and runtimes are on the host) are run as argv without a shell, without Swan's own secrets in their environment, and nothing from the sandbox is passed to them. Wrapper output is validated against protocol v1 and may not put real values into files.
 7. The API binds to 127.0.0.1, checks `Host` and `Origin`, and requires the token. Uploaded files are served inline only for images and PDFs; everything else downloads with `nosniff` and a sandboxing CSP.
 8. Containers run as uid 1000 with `cap-drop ALL`, `no-new-privileges`, `--init` and resource limits, on the `--internal` network with no DNS.
 
@@ -69,7 +69,7 @@ When you touch the proxy, secrets, sandbox or API, add or update a test that pro
 
 - Vitest. Tests sit next to the code as `*.test.ts` (`apps/server/src`, `packages/*/src`, `tools/*/src`).
 - Tests must not need the internet, Podman, a real `PH_HOME` or API keys. Use temporary directories, ephemeral ports and the stubs in this repository.
-- AWS and Kubernetes behaviour is tested against `tools/aws-stub` (with the official AWS SDK as the client, so signatures are checked against a real implementation).
+- AWS and Kubernetes behaviour is tested against `tools/aws-stub` (with the official AWS SDK as the client, so signatures are checked against a real implementation). `apps/server/src/proxy/credentials.test.ts` drives the real proxy end to end against the stub; its `resolve` hook is the only way to point the proxy at a local address, and it exists for tests only.
 - Run `pnpm typecheck && pnpm test` before committing. CI runs the same plus the web build.
 
 ## Git

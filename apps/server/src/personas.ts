@@ -5,7 +5,9 @@ import chokidar from "chokidar";
 import YAML from "yaml";
 import { z } from "zod";
 import type { Effort, FolderMount, McpServerSummary, PersonaConfigView, PersonaSummary, SaveResult } from "@ph/shared";
-import { SECRET_NAME, SECRET_REF, type SecretStore } from "./secrets.js";
+import { PersonaConnectionsSchema, credentialRefs } from "./connections/config.js";
+import type { ConnectionManager } from "./connections/manager.js";
+import { patternError } from "./connections/rules.js";
 import { PH_HOME, paths, type Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { TypedEmitter, debounce, errMsg, exists, expandHome, log, writeFileAtomic } from "./util.js";
@@ -48,7 +50,8 @@ export const PersonaSchema = z.strictObject({
     .default([]),
   skills: z.array(z.string()).default([]),
   mcpServers: z.record(z.string(), z.union([McpStdio, McpHttp])).default({}),
-  credentials: z.array(z.string()).default([]),
+  // Which credentials the agent may use, and for what. A credential no rule names never reaches the sandbox.
+  connections: PersonaConnectionsSchema.default({}),
   env: z.record(z.string(), z.string()).default({}),
   network: z.strictObject({ allow: z.array(z.string()).default([]) }).prefault({}),
   memory: z
@@ -154,10 +157,26 @@ export class PersonaStore extends TypedEmitter<Events> {
 
   constructor(
     private settings: Settings,
-    private secrets: SecretStore,
+    private connections: ConnectionManager,
     private skills: SkillRegistry,
   ) {
     super();
+    connections.usedBy = () => this.usedBy();
+  }
+
+  /** `connection/name` refs the persona's rules name; globs expand to the names known now. */
+  namedRefs(cfg: PersonaConfig): Set<string> {
+    const out = new Set<string>();
+    for (const [conn, pc] of Object.entries(cfg.connections)) {
+      const known = this.connections.credentialNames(conn);
+      for (const r of pc.rules) {
+        if (/[*?]/.test(r.credential)) {
+          const re = new RegExp(`^${r.credential.replace(/[.+^${}()|[\]\\-]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+          for (const n of known) if (re.test(n)) out.add(`${conn}/${n}`);
+        } else out.add(`${conn}/${r.credential}`);
+      }
+    }
+    return out;
   }
 
   parse(id: string, yaml: string): Persona {
@@ -182,16 +201,31 @@ export class PersonaStore extends TypedEmitter<Events> {
 
     for (const s of cfg.skills) if (!this.skills.get(s)) errors.push(`skill "${s}" not found`);
 
-    const declared = new Set(cfg.credentials);
-    const providerKeys = new Set(Object.values(this.settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
-    for (const c of cfg.credentials) {
-      if (!SECRET_NAME.test(c)) errors.push(`invalid credential name "${c}"`);
-      // A model-provider key in the sandbox would let the agent spend the user's model budget.
-      if (providerKeys.has(c)) errors.push(`${c} is the key Swan uses to call the model, so it can't be handed to the agent. Untick it under Credentials and save.`);
+    for (const [conn, pc] of Object.entries(cfg.connections)) {
+      const c = this.connections.configOf(conn);
+      if (!c) {
+        errors.push(`connections.${conn}: connection "${conn}" is not defined in config.yaml`);
+        continue;
+      }
+      pc.rules.forEach((r, i) => {
+        const where = `connections.${conn}.rules[${i}]`;
+        // A command connection's credential names are only known once its wrapper ran.
+        if (c.type === "static" && !/[*?]/.test(r.credential) && !c.credentials[r.credential])
+          errors.push(`${where}: connection "${conn}" has no credential "${r.credential}"`);
+        for (const list of ["allow", "ask", "deny"] as const)
+          for (const p of r[list]) {
+            const problem = patternError(r.api, p);
+            if (problem) errors.push(`${where}.${list}: ${problem}`);
+          }
+      });
     }
+    const named = this.namedRefs(cfg);
     const checkRefs = (where: string, value: string) => {
-      for (const m of value.matchAll(SECRET_REF)) {
-        if (!declared.has(m[1])) errors.push(`${where} references {{secret:${m[1]}}} but it is not listed under credentials`);
+      for (const ref of credentialRefs(value)) {
+        if (ref.legacy) {
+          if (![...named].some((n) => n.endsWith(`/${ref.name}`))) errors.push(`${where} references {{secret:${ref.name}}} but no rule names a credential ${ref.name}`);
+        } else if (!ref.connection) errors.push(`${where}: write {{credential:<connection>/${ref.name}}}`);
+        else if (!named.has(`${ref.connection}/${ref.name}`)) errors.push(`${where} references {{credential:${ref.connection}/${ref.name}}} but no rule of this persona names it`);
       }
     };
     for (const [k, v] of Object.entries(cfg.env)) checkRefs(`env.${k}`, v);
@@ -266,7 +300,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       instructions: c.instructions,
       folders: c.folders.map((f) => ({ path: f.path, ...(f.mount ? { mount: f.mount } : {}), mode: f.mode })),
       networkAllow: c.network.allow,
-      credentials: c.credentials,
+      connections: c.connections,
       permissions: c.permissions,
       skills: c.skills,
       mcpServers: c.mcpServers as Record<string, unknown>,
@@ -279,17 +313,14 @@ export class PersonaStore extends TypedEmitter<Events> {
     const p = this.personas.get(id);
     if (!p) throw new Error("not found");
     const before = p.config;
-    // Model-provider keys never go to the sandbox; drop them instead of saving an invalid persona.
-    const providerKeys = new Set(Object.values(this.settings.providers).flatMap((x) => (x.apiKeySecret ? [x.apiKeySecret] : x.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
-    const dropped = v.credentials.filter((c) => providerKeys.has(c));
-    v = { ...v, credentials: v.credentials.filter((c) => !providerKeys.has(c)) };
     const doc = YAML.parseDocument(p.yaml);
     doc.set("name", v.name);
     doc.set("description", v.description);
     doc.set("instructions", v.instructions);
     doc.set("folders", doc.createNode(v.folders));
     doc.setIn(["network", "allow"], doc.createNode(v.networkAllow));
-    doc.set("credentials", doc.createNode(v.credentials));
+    doc.delete("credentials");
+    if (Object.keys(v.connections).length || doc.has("connections")) doc.set("connections", doc.createNode(v.connections));
     doc.set("permissions", doc.createNode(v.permissions));
     doc.set("skills", doc.createNode(v.skills));
     doc.set("mcpServers", doc.createNode(v.mcpServers));
@@ -300,13 +331,12 @@ export class PersonaStore extends TypedEmitter<Events> {
     const nextStart: string[] = [];
     if (!before || !eq(before.permissions, v.permissions)) appliedNow.push("permissions");
     if (!before || !eq(before.network.allow, v.networkAllow)) appliedNow.push("network allowlist");
-    if (!before || !eq(before.credentials, v.credentials)) appliedNow.push("credentials (new ones from the next container start)");
+    if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (newly named credentials from the next container start)");
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
     if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
       nextStart.push("folders, skills and MCP servers (next container start)");
-    const notes = dropped.map((c) => `${c} was left out: it's the key Swan itself uses to call the model, and the agent never needs it.`);
-    return { persona: this.summary(saved), appliedNow, nextStart, ...(notes.length ? { notes } : {}) };
+    return { persona: this.summary(saved), appliedNow, nextStart };
   }
 
   /** "Always allow" on a network request: add the host to the persona's allowlist. */
@@ -316,6 +346,27 @@ export class PersonaStore extends TypedEmitter<Events> {
     if (p.config.network.allow.includes(host)) return;
     const doc = YAML.parseDocument(p.yaml);
     doc.setIn(["network", "allow"], doc.createNode([...p.config.network.allow, host]));
+    await this.save(id, doc.toString());
+  }
+
+  /** "Always allow" on an ask prompt: move the pattern from ask to allow in the rules for that credential. */
+  async promoteAskRule(id: string, ref: string, api: string, pattern: string) {
+    const p = this.personas.get(id);
+    if (!p?.config) throw new Error("persona is invalid");
+    const i = ref.indexOf("/");
+    const conn = ref.slice(0, i);
+    const name = ref.slice(i + 1);
+    const rules = p.config.connections[conn]?.rules ?? [];
+    const glob = (g: string) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\-]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(name);
+    let changed = false;
+    const next = rules.map((r) => {
+      if (r.api !== api || !glob(r.credential) || !r.ask.includes(pattern)) return r;
+      changed = true;
+      return { ...r, ask: r.ask.filter((x) => x !== pattern), allow: r.allow.includes(pattern) ? r.allow : [...r.allow, pattern] };
+    });
+    if (!changed) return;
+    const doc = YAML.parseDocument(p.yaml);
+    doc.setIn(["connections", conn, "rules"], doc.createNode(next));
     await this.save(id, doc.toString());
   }
 
@@ -338,10 +389,12 @@ export class PersonaStore extends TypedEmitter<Events> {
     this.emit("changed");
   }
 
+  /** Persona ids per credential ref their rules name. */
   usedBy(): Map<string, string[]> {
     const m = new Map<string, string[]>();
     for (const p of this.personas.values()) {
-      for (const c of p.config?.credentials ?? []) m.set(c, [...(m.get(c) ?? []), p.id]);
+      if (!p.config) continue;
+      for (const ref of this.namedRefs(p.config)) m.set(ref, [...(m.get(ref) ?? []), p.id]);
     }
     return m;
   }
@@ -356,7 +409,7 @@ export class PersonaStore extends TypedEmitter<Events> {
           ? { name, kind: "http", target: s.url }
           : { name, kind: "stdio", target: [s.command, ...s.args].join(" ") },
       );
-    const credentials = cfg?.credentials ?? [];
+    const credentials = cfg ? [...this.namedRefs(cfg)].sort() : [];
     return {
       id: p.id,
       name: cfg?.name ?? p.id,
@@ -365,8 +418,9 @@ export class PersonaStore extends TypedEmitter<Events> {
       folders: p.folders,
       skills: cfg?.skills ?? [],
       mcpServers,
+      connections: Object.keys(cfg?.connections ?? {}),
       credentials,
-      missingCredentials: credentials.filter((c) => !this.secrets.value(c)),
+      missingCredentials: credentials.filter((c) => !this.connections.usable(c)),
       networkAllow: cfg?.network.allow ?? [],
       errors: p.errors,
     };

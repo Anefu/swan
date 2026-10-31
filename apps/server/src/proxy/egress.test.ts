@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ConnectionManager } from "../connections/manager.js";
 import { SecretStore } from "../secrets.js";
-import { paths } from "../settings.js";
+import { paths, type Settings } from "../settings.js";
 import { CertAuthority } from "./ca.js";
 import { EgressProxy, isPrivateAddress } from "./egress.js";
 
@@ -23,10 +24,10 @@ describe("EgressProxy", () => {
   beforeAll(async () => {
     await fs.mkdir(paths.ca, { recursive: true });
     await fs.mkdir(paths.audit, { recursive: true });
-    proxy = new EgressProxy(new SecretStore(), await CertAuthority.load());
+    proxy = new EgressProxy(new ConnectionManager(new SecretStore(), { providers: {} } as unknown as Settings), await CertAuthority.load());
     await proxy.listen(0);
     port = ((proxy as unknown as { server: http.Server }).server.address() as AddressInfo).port;
-    proxy.register({ sessionId: "s1", personaId: "p1", token: "t0ken", allowHosts: ["localhost", "127.0.0.1", "example.com:22", "allowed.example"], credentials: [], placeholders: new Map() });
+    proxy.register({ sessionId: "s1", personaId: "p1", token: "t0ken", allowHosts: ["localhost", "127.0.0.1", "example.com:22", "allowed.example"], credentials: [], placeholders: new Map(), rules: new Map(), sessionAllowed: new Set() });
   });
   afterAll(() => (proxy as unknown as { server: http.Server }).server.close());
 

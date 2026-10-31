@@ -3,6 +3,8 @@ import { ProviderRegistry } from "./agent/providers.js";
 import { SessionManager } from "./agent/session.js";
 import { Hub, startApi } from "./api.js";
 import { AttachmentStore } from "./attachments.js";
+import { ConnectionManager } from "./connections/manager.js";
+import { migrateConnections } from "./connections/migrate.js";
 import { ModelCatalog } from "./catalog.js";
 import { MemoryStore } from "./memory.js";
 import { PersonaStore } from "./personas.js";
@@ -13,7 +15,7 @@ import { PodmanRuntime } from "./sandbox/podman.js";
 import { SecretStore } from "./secrets.js";
 import { ensureHome, loadSettings, paths } from "./settings.js";
 import { SkillRegistry } from "./skills.js";
-import { errMsg, exists, log, randomId, writeFileAtomic } from "./util.js";
+import { debounce, errMsg, exists, log, randomId, writeFileAtomic } from "./util.js";
 
 async function apiToken(): Promise<string> {
   if (await exists(paths.apiToken)) {
@@ -30,20 +32,28 @@ async function main() {
   const settings = await loadSettings();
   const token = await apiToken();
 
+  // Model-provider keys stay host-side secrets; everything else becomes a connection once.
+  const providerKeys = new Set(Object.values(settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
+  await migrateConnections(providerKeys).catch((e) => log.error("connections", `could not convert credentials to connections: ${errMsg(e)}`));
+
   const secrets = new SecretStore();
   await secrets.load().catch((e) => log.error("secrets", `could not load secrets: ${errMsg(e)}`));
   secrets.watch();
+
+  const connections = new ConnectionManager(secrets, settings);
+  await connections.loadConfig();
+  connections.watch();
 
   const skills = new SkillRegistry(settings);
   await skills.load();
   skills.watch();
 
-  const personas = new PersonaStore(settings, secrets, skills);
+  const personas = new PersonaStore(settings, connections, skills);
   await personas.load();
   personas.watch();
 
   const ca = await CertAuthority.load();
-  const proxy = new EgressProxy(secrets, ca);
+  const proxy = new EgressProxy(connections, ca);
   await proxy.listen(settings.proxyPort);
 
   const runtime = new PodmanRuntime(settings, ca);
@@ -57,7 +67,7 @@ async function main() {
   // eslint-disable-next-line prefer-const
   let sessions: SessionManager;
   sessions = new SessionManager({
-    settings, runtime, proxy, secrets, personas, skills, providers, memory, usage, attachments,
+    settings, runtime, proxy, connections, personas, skills, providers, memory, usage, attachments,
     broadcast: hub.broadcast,
     onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
   });
@@ -65,23 +75,25 @@ async function main() {
   await sessions.loadAll();
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
-  secrets.on("changed", (changed) => {
-    log.info("secrets", `changed: ${changed.join(", ")}`);
-    hub.broadcast({ type: "credentials.updated", credentials: secrets.status(personas.usedBy()), changed });
+  secrets.on("changed", () => catalog.invalidate());
+  const broadcastConnections = debounce(() => hub.broadcast({ type: "connections.updated", connections: connections.status(), changed: [] }), 50);
+  connections.on("updated", broadcastConnections);
+  connections.on("changed", (changed) => {
+    log.info("connections", `changed: ${changed.join(", ")}`);
+    hub.broadcast({ type: "connections.updated", connections: connections.status(), changed });
     hub.broadcast({ type: "personas.updated", personas: personaSummaries() });
-    sessions.onSecretsChanged(changed);
-    catalog.invalidate();
   });
+  connections.on("configLoaded", () => personas.revalidate());
   personas.on("changed", () => {
     hub.broadcast({ type: "personas.updated", personas: personaSummaries() });
-    hub.broadcast({ type: "credentials.updated", credentials: secrets.status(personas.usedBy()), changed: [] });
+    broadcastConnections();
     sessions.onPersonasChanged();
   });
   skills.on("changed", () => personas.revalidate());
   runtime.on("status", (s) => hub.broadcast({ type: "runtime.status", runtime: s }));
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
-  await startApi({ settings, token, secrets, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
+  await startApi({ settings, token, secrets, connections, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
   log.info("main", `harness home: ${paths.home}`);
 
   void runtime.init().then(() => runtime.removeOrphans());

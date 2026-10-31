@@ -26,13 +26,18 @@ describe("SecretStore", () => {
     expect(s.get("GITHUB_TOKEN")?.inject).toEqual({ header: "Authorization", format: "Bearer {value}" });
   });
 
-  it("never exposes values in status, only fingerprints", async () => {
-    await fs.writeFile(paths.secretsYaml, "API_KEY:\n  value: super-secret-value\n  hosts: [api.example.com]\n");
+  it("finds connection keys in either file and edits them in place", async () => {
+    await fs.writeFile(paths.secretsYaml, "# values only\ngithub/GITHUB_TOKEN: ghp_yaml\n");
+    await fs.writeFile(paths.secretsEnv, "CORP_PROD__KEY=from-env\nGITHUB__GITHUB_TOKEN=loses\n");
     const s = new SecretStore();
     await s.load();
-    const status = JSON.stringify(s.status(new Map([["API_KEY", ["demo"]]])));
-    expect(status).not.toContain("super-secret-value");
-    expect(s.status(new Map())[0]).toMatchObject({ name: "API_KEY", present: true, fingerprint: expect.stringMatching(/^[0-9a-f]{8}$/), usedBy: [] });
+    expect(s.value("github/GITHUB_TOKEN")).toBe("ghp_yaml");
+    expect(s.get("corp-prod/KEY")).toMatchObject({ value: "from-env", source: "env", fingerprint: expect.stringMatching(/^[0-9a-f]{8}$/) });
+    await s.setValue("npm/NPM_TOKEN", "npm_x");
+    expect(await fs.readFile(paths.secretsYaml, "utf8")).toBe("# values only\ngithub/GITHUB_TOKEN: ghp_yaml\nnpm/NPM_TOKEN: npm_x\n");
+    await s.remove("corp-prod/KEY");
+    expect(s.value("corp-prod/KEY")).toBeUndefined();
+    expect(await fs.readFile(paths.secretsEnv, "utf8")).toBe("GITHUB__GITHUB_TOKEN=loses\n");
   });
 
   it("reports changes and rejects bad files without clearing the last good set", async () => {
@@ -47,12 +52,5 @@ describe("SecretStore", () => {
     await fs.writeFile(paths.secretsYaml, "bad-name!: x\n");
     await expect(s.load()).rejects.toThrow(/invalid secret name/);
     expect(s.value("A")).toBe("two");
-  });
-
-  it("resolves host-side references and lists missing ones", async () => {
-    await fs.writeFile(paths.secretsYaml, "TOKEN: abc\n");
-    const s = new SecretStore();
-    await s.load();
-    expect(s.resolveHost("Bearer {{secret:TOKEN}} {{ secret:MISSING }}")).toEqual({ text: "Bearer abc ", missing: ["MISSING"], used: ["TOKEN", "MISSING"] });
   });
 });

@@ -7,6 +7,8 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
 import type { AttachmentStore } from "./attachments.js";
+import type { ConnectionManager } from "./connections/manager.js";
+import { dismissMigrationNote, readMigrationNote } from "./connections/migrate.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { MemoryStore } from "./memory.js";
 import type { UsageLedger } from "./usage.js";
@@ -26,6 +28,7 @@ export interface ApiDeps {
   settings: Settings;
   token: string;
   secrets: SecretStore;
+  connections: ConnectionManager;
   personas: PersonaStore;
   skills: SkillRegistry;
   runtime: PodmanRuntime;
@@ -211,15 +214,58 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     }
   });
 
-  // ----- skills / credentials -----
+  // ----- skills / connections -----
   app.get("/api/skills", async () => d.skills.list());
-  app.get("/api/credentials", async () => d.secrets.status(d.personas.usedBy()));
-  app.put("/api/credentials/:name", async (req: FastifyRequest<{ Params: { name: string }; Body: CredentialUpsert }>) => {
-    await d.secrets.upsert(req.params.name, req.body ?? {});
-    return d.secrets.status(d.personas.usedBy()).find((c) => c.name === req.params.name);
+  const connection = (name: string) => {
+    const c = d.connections.status().find((x) => x.name === name);
+    if (!c) throw new HttpError(404, `connection "${name}" not found`);
+    return c;
+  };
+  app.get("/api/connections", async () => d.connections.status());
+  app.get("/api/connections/migration", async () => readMigrationNote());
+  app.delete("/api/connections/migration", async () => {
+    await dismissMigrationNote();
+    return { ok: true };
   });
-  app.delete("/api/credentials/:name", async (req: P<{ name: string }>) => {
-    await d.secrets.remove(req.params.name);
+  app.put("/api/connections/:conn/credentials/:name", async (req: FastifyRequest<{ Params: { conn: string; name: string }; Body: CredentialUpsert }>) => {
+    try {
+      await d.connections.upsertStatic(req.params.conn, req.params.name, req.body ?? {});
+    } catch (e) {
+      throw new HttpError(400, e instanceof Error ? e.message : String(e));
+    }
+    return connection(req.params.conn);
+  });
+  app.delete("/api/connections/:conn/credentials/:name", async (req: P<{ conn: string; name: string }>) => {
+    await d.connections.removeStatic(req.params.conn, req.params.name);
+    return d.connections.status().find((x) => x.name === req.params.conn) ?? { ok: true };
+  });
+  app.post("/api/connections/:conn/:action", async (req: P<{ conn: string; action: string }>) => {
+    const c = connection(req.params.conn);
+    if (c.type !== "command") throw new HttpError(400, `${c.name} is a static connection`);
+    const { action } = req.params;
+    if (action === "login") d.connections.login(c.name).catch((e) => log.warn("connections", `${c.name} login: ${e instanceof Error ? e.message : e}`));
+    else if (action === "renew") await d.connections.renew(c.name);
+    else if (action === "cancel") d.connections.cancel(c.name);
+    else if (action === "logout") d.connections.logout(c.name);
+    else throw new HttpError(404, `unknown action ${action}`);
+    return connection(c.name);
+  });
+
+  // Model-provider keys: host-side only, never a connection.
+  const providerKey = (name: string) => {
+    const cfg = d.settings.providers[name];
+    const key = cfg?.apiKeySecret ?? (cfg?.type === "copilot" ? "COPILOT_GITHUB_TOKEN" : undefined);
+    if (!key) throw new HttpError(404, `provider "${name}" has no key`);
+    return key;
+  };
+  app.put("/api/providers/:name/key", async (req: FastifyRequest<{ Params: { name: string }; Body: { value?: string } }>) => {
+    const value = req.body?.value?.trim();
+    if (!value) throw new HttpError(400, "value is required");
+    await d.secrets.setValue(providerKey(req.params.name), value);
+    return d.providers.status().find((p) => p.name === req.params.name);
+  });
+  app.delete("/api/providers/:name/key", async (req: P<{ name: string }>) => {
+    await d.secrets.remove(providerKey(req.params.name));
     return { ok: true };
   });
 

@@ -7,12 +7,14 @@ import type { MemoryStore } from "../memory.js";
 import type { PersonaStore } from "../personas.js";
 import type { EgressProxy } from "../proxy/egress.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
-import { SECRET_REF, type SecretStore } from "../secrets.js";
+import type { ConnectionManager } from "../connections/manager.js";
+import type { Verdict } from "../connections/rules.js";
 import { paths, type Settings } from "../settings.js";
 import type { SkillRegistry } from "../skills.js";
 import type { UsageLedger, UsagePurpose } from "../usage.js";
 import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeFileAtomic } from "../util.js";
 import { SessionMcp } from "./mcp.js";
+import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { PermissionPolicy } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
@@ -25,7 +27,7 @@ export interface SessionDeps {
   settings: Settings;
   runtime: PodmanRuntime;
   proxy: EgressProxy;
-  secrets: SecretStore;
+  connections: ConnectionManager;
   personas: PersonaStore;
   skills: SkillRegistry;
   providers: ProviderRegistry;
@@ -62,7 +64,7 @@ interface Persisted {
   items: ChatItem[];
   epochs: Epoch[];
   carry: string | null; // checkpoint text waiting to open the next user message of a new epoch
-  placeholders: Record<string, string>; // secret name -> placeholder seen inside the sandbox
+  placeholders: Record<string, string>; // credential ref (or ref.field) -> placeholder seen inside the sandbox
   proxyToken: string;
 }
 
@@ -80,7 +82,8 @@ function systemPrompt(o: {
   folders: FolderMount[];
   workdir: string;
   allow: string[];
-  credHosts: { name: string; hosts: string[] }[];
+  credHosts: string[]; // bound hosts of usable credentials
+  credentialLines: string[];
   skills: { name: string; description: string }[];
   brief: string;
   epoch: number;
@@ -97,14 +100,9 @@ function systemPrompt(o: {
     `- Working directory: ${o.workdir}`,
     `- Today's date: ${new Date().toISOString().slice(0, 10)}`,
     "- Network access goes through an egress proxy. Requests to a public host that is not on the allowlist wait while the user decides; if they decline, the proxy answers 403. Just make the request when you need a site: do not refuse in advance and do not try to work around the proxy. Private and local addresses are always blocked. Tools must honour HTTPS_PROXY (curl, git, npm, pip, uv and Node do).",
-    `- Allowed without asking: ${[...o.allow, ...o.credHosts.flatMap((c) => c.hosts)].join(", ") || "none yet"}`,
+    `- Allowed without asking: ${[...new Set([...o.allow, ...o.credHosts])].join(", ") || "none yet"}`,
+    ...o.credentialLines,
   );
-  if (o.credHosts.length) {
-    lines.push(
-      "- Credentials: you never see real secret values. These environment variables hold placeholders that the proxy swaps for the real value only on requests to the listed hosts; use them exactly as you would the real thing (e.g. `curl -H \"Authorization: Bearer $GITHUB_TOKEN\" https://api.github.com/user`). Do not try to reveal, print or transform the real values.",
-      ...o.credHosts.map((c) => `  - $${c.name} → ${c.hosts.join(", ") || "(not usable from the sandbox)"}`),
-    );
-  }
   lines.push(
     "- Some tool calls require the user's approval. If a call is denied, adjust your plan instead of retrying the same call.",
     "- The user may send a new message while you work; it arrives with your tool results. Take it into account before your next step.",
@@ -178,6 +176,7 @@ export class Session {
   private netPending = new Map<string, Promise<boolean>>(); // host -> decision in flight
   private netDenied = new Set<string>(); // until stopped
   private persistSoon = debounce(() => void this.persist(), 400);
+  readonly creds: SessionCredentials;
 
   constructor(
     private deps: SessionDeps,
@@ -187,8 +186,26 @@ export class Session {
     this.items = data.items;
     this.epochs = data.epochs;
     this.carry = data.carry;
-    this.placeholders = data.placeholders;
+    this.placeholders = data.placeholders ?? {};
     this.proxyToken = data.proxyToken;
+    this.creds = new SessionCredentials(
+      {
+        id: this.summary.id,
+        personaId: this.summary.personaId,
+        connections: deps.connections,
+        personas: deps.personas,
+        runtime: deps.runtime,
+        container: () => this.container,
+        addItem: (it) => this.addItem(it),
+        syncItem: (it) => this.syncItem(it),
+        notice: (level, text) => this.notice(level, text),
+        allowances: () => this.summary.allowances,
+        setAllowances: (a) => this.setAllowances(a),
+        waitApproval: (id, info, ms) => this.waitForDecision(id, info, ms),
+        refreshPolicy: () => this.refreshPolicy(),
+      },
+      this.placeholders,
+    );
   }
 
   static create(deps: SessionDeps, personaId: string, title?: string): Session {
@@ -401,6 +418,35 @@ export class Session {
     return p;
   }
 
+  /** A pending decision outside the agent loop (credential use): listed and resolvable like a tool call. */
+  private waitForDecision(id: string, info: PendingApproval, timeoutMs: number): Promise<ApprovalBody | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.approvals.delete(id);
+        this.refreshStatus();
+        resolve(null);
+      }, timeoutMs);
+      this.approvals.set(id, {
+        info,
+        resolve: (d) => {
+          clearTimeout(timer);
+          this.approvals.delete(id);
+          this.refreshStatus();
+          resolve(d);
+        },
+      });
+      this.refreshStatus();
+    });
+  }
+
+  requestCredentialUse(ref: string, v: Verdict) {
+    return this.creds.requestUse(ref, v);
+  }
+
+  credentialBlocked(ref: string, v: Verdict) {
+    this.creds.blockedRequest(ref, v);
+  }
+
   removeAllowance(rule: string) {
     this.setAllowances(this.summary.allowances.filter((r) => r !== rule));
   }
@@ -417,44 +463,46 @@ export class Session {
     return this.starting;
   }
 
-  private renderPlaceholders = (template: string) => template.replace(SECRET_REF, (_m, n: string) => this.placeholders[n] ?? "");
+  private renderPlaceholders = (template: string) => this.creds.render(template);
 
   private proxyRegistration() {
     const cfg = this.deps.personas.get(this.personaId)?.config;
-    const allowed = new Set(cfg?.credentials ?? []);
-    const creds = Object.keys(this.placeholders).filter((c) => allowed.has(c));
     return {
       sessionId: this.id,
       personaId: this.personaId,
       token: this.proxyToken,
       // Hosts allowed "until stopped" ride along with the persona's own allowlist.
       allowHosts: [...(cfg?.network.allow ?? []), ...this.summary.allowances.filter((a) => a.startsWith("net:")).map((a) => a.slice(4))],
-      credentials: creds,
-      placeholders: new Map(creds.map((c) => [this.placeholders[c], c] as const)),
+      ...this.creds.proxyFields(),
     };
   }
 
-  /** Persona edits (allowlist, credential list, permissions) apply to running sessions. */
+  /** Persona edits (allowlist, credential rules, permissions) apply to running sessions. */
   refreshPolicy() {
     if (this.container) this.deps.proxy.register(this.proxyRegistration());
   }
 
   private async start(): Promise<void> {
-    const { personas, runtime, skills, secrets, settings } = this.deps;
+    const { personas, runtime, skills, connections, settings } = this.deps;
     const persona = personas.get(this.personaId);
     if (!persona?.config) throw new Error(`persona "${this.personaId}" is missing or invalid`);
     if (persona.errors.length) throw new Error(`persona has problems: ${persona.errors.join("; ")}`);
     const cfg = persona.config;
-    this.setStatus("starting", "starting sandbox container");
+    this.setStatus("starting", this.creds.commandConnections().length ? "checking connections" : "starting sandbox container");
 
-    for (const c of cfg.credentials) this.placeholders[c] ??= `phs_${c}_${randomId("", 8)}`;
+    const prepared = await this.creds.prepare();
+    this.setStatus("starting", "starting sandbox container");
     this.deps.proxy.register(this.proxyRegistration());
 
     this.workdir = cfg.sandbox.workdir ?? persona.folders[0]?.mountPath ?? "/workspace";
-    const env: Record<string, string> = {};
-    for (const c of cfg.credentials) env[c] = this.placeholders[c];
+    // Connection wrappers' variables live in a file every bash shell reads, so a later sign-in applies to new shells.
+    const env: Record<string, string> = { ...this.creds.staticEnv(), BASH_ENV: ENV_FILE };
     for (const [k, v] of Object.entries(cfg.env)) env[k] = this.renderPlaceholders(v);
-    const skillMounts = cfg.skills.flatMap((name) => {
+    const connectionSkills = this.creds.commandConnections().flatMap((c) => {
+      const cc = connections.configOf(c);
+      return cc?.type === "command" && cc.skill && !cfg.skills.includes(cc.skill) && skills.get(cc.skill) ? [cc.skill] : [];
+    });
+    const skillMounts = [...cfg.skills, ...connectionSkills].flatMap((name) => {
       const s = skills.get(name);
       return s ? [{ name, hostPath: s.hostPath }] : [];
     });
@@ -474,7 +522,9 @@ export class Session {
         pidsLimit: cfg.sandbox.pidsLimit,
       });
 
-      this.mcp = new SessionMcp(runtime, secrets, settings, this.container, this.workdir, this.renderPlaceholders);
+      for (const p of await this.creds.writeMaterials()) this.notice("warn", p);
+      const named = new Set(this.creds.namedRefs());
+      this.mcp = new SessionMcp(runtime, (t) => connections.resolveHost(t, named), settings, this.container, this.workdir, this.renderPlaceholders);
       const problems = await this.mcp.start(cfg.mcpServers, (msg) => this.setStatus("starting", msg));
       for (const p of problems) this.notice("warn", p);
     } catch (e) {
@@ -484,15 +534,17 @@ export class Session {
 
     const tools = [
       ...builtinTools(),
-      ...(cfg.skills.length ? [skillTool()] : []),
+      ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
+      ...this.creds.tools(),
       this.agentTool(),
       ...(await this.mcp.tools()),
     ];
     this.liveTools = new Map(tools.map((t) => [t.name, t]));
 
-    const missing = cfg.credentials.filter((c) => !secrets.value(c));
-    if (missing.length) this.notice("warn", `Missing credentials: ${missing.join(", ")}. Requests that need them will go out without auth until you add them (picked up live).`);
+    for (const p of prepared.problems) this.notice("warn", p);
+    // Turns go ahead; requests that need the connection fail until the user signs in.
+    for (const conn of prepared.needSignIn) void this.creds.signIn(conn);
     this.setStatus("idle");
   }
 
@@ -502,6 +554,7 @@ export class Session {
     this.mcp = null;
     this.liveTools.clear();
     this.deps.proxy.unregister(this.id);
+    this.creds.release();
     if (this.container) await this.deps.runtime.stopSession(this.id).catch(() => {});
     this.container = null;
   }
@@ -513,12 +566,27 @@ export class Session {
     await this.persist();
   }
 
-  /** Hot reload: notify the user, reconnect http MCP servers that use the changed secrets. */
-  async onSecretsChanged(names: string[]) {
-    const mine = names.filter((n) => n in this.placeholders);
-    if (!mine.length || !this.container) return;
-    const reconnected = (await this.mcp?.onSecretsChanged(mine)) ?? [];
-    this.notice("info", `Credentials reloaded: ${mine.join(", ")} — applied to new requests immediately${reconnected.length ? `; reconnected MCP ${reconnected.join(", ")}` : ""}.`);
+  /** Hot reload: the proxy reads values live; reconnect http MCP servers and tell the user about static edits. */
+  async onCredentialsChanged(refs: string[]) {
+    if (!this.container) return;
+    const named = new Set(this.creds.namedRefs());
+    const mine = refs.filter((r) => named.has(r));
+    if (!mine.length) return;
+    this.creds.ensurePlaceholders();
+    this.refreshPolicy();
+    const reconnected = (await this.mcp?.onCredentialsChanged(mine)) ?? [];
+    // Wrapper renewals are routine; only edits to static credentials get a notice.
+    const edited = mine.filter((r) => this.deps.connections.configOf(r.split("/")[0])?.type === "static");
+    if (edited.length || reconnected.length)
+      this.notice("info", `Credentials reloaded: ${(edited.length ? edited : mine).join(", ")}, applied to new requests immediately${reconnected.length ? `; reconnected MCP ${reconnected.join(", ")}` : ""}.`);
+  }
+
+  /** A command connection returned new files or env: rewrite what changed. */
+  async onMaterials(conn: string) {
+    if (!this.container || !this.creds.commandConnections().includes(conn)) return;
+    this.creds.ensurePlaceholders();
+    this.refreshPolicy();
+    for (const p of await this.creds.writeMaterials()) this.notice("warn", p);
   }
 
   // ---------- epochs ----------
@@ -535,7 +603,7 @@ export class Session {
 
   /** Build a fresh epoch: current persona model, current tools, memory brief, frozen until the next one. */
   private async openEpoch() {
-    const { personas, skills, secrets } = this.deps;
+    const { personas, skills } = this.deps;
     const persona = personas.get(this.personaId)!;
     const cfg = persona.config!;
     const m = this.currentModel();
@@ -552,7 +620,8 @@ export class Session {
           folders: persona.folders,
           workdir: this.workdir,
           allow: cfg.network.allow,
-          credHosts: cfg.credentials.map((name) => ({ name, hosts: secrets.get(name)?.hosts ?? [] })),
+          credHosts: this.creds.namedRefs().flatMap((ref) => this.deps.connections.usable(ref)?.hosts ?? []),
+          credentialLines: this.creds.promptLines(),
           skills: cfg.skills.flatMap((s) => (skills.get(s) ? [{ name: s, description: skills.get(s)!.description }] : [])),
           brief,
           epoch: n,
@@ -807,8 +876,9 @@ export class Session {
   interrupt() {
     this.abort?.abort();
     // Pending network requests are refused; "until stopped" decisions end here too.
-    for (const [id, a] of [...this.approvals]) if (a.info.name === "network_access") this.approvals.get(id)?.resolve({ decision: "deny", reason: "stopped" });
+    for (const [id, a] of [...this.approvals]) if (a.info.name === "network_access" || a.info.name === "credential_use") this.approvals.get(id)?.resolve({ decision: "deny", reason: "stopped" });
     this.netDenied.clear();
+    this.creds.reset();
     for (const q of this.queue) if (q.receiptId) this.finishReceipt(q.receiptId, "Dropped by Stop", "error");
     this.queue = [];
     // Temporary allowances expire on Stop and Interrupt.
@@ -1176,6 +1246,8 @@ export class Session {
     let perm = policy.evaluate(tool, v.value);
     // Memory and history reads are allowed unless a rule says otherwise.
     if (perm.rule.startsWith("default") && MEMORY_READ_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "memory read" };
+    // Connection status and sign-in requests only show the user a card: allowed by default.
+    if (perm.rule.startsWith("default") && CONNECTION_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "connection tool" };
     // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
     if (perm.rule.startsWith("default") && tool.name === "agent") perm = { mode: "allow", rule: "sub-agent" };
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
@@ -1269,8 +1341,9 @@ export class Session {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
-      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items })];
-    return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: MEMORY_READ_TOOLS.has(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
+      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...this.creds.tools()];
+    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || CONNECTION_TOOLS.has(n);
+    return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
   }
 
   get isActive() {
@@ -1282,6 +1355,20 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
   constructor(private deps: SessionDeps) {
     deps.proxy.asker = async (ps, host, port) => this.sessions.get(ps.sessionId)?.requestNetwork(host, port) ?? false;
+    deps.proxy.credentialAsker = async (ps, ref, v) => this.sessions.get(ps.sessionId)?.requestCredentialUse(ref, v) ?? false;
+    deps.proxy.onDenied = (ps, ref, v) => this.sessions.get(ps.sessionId)?.credentialBlocked(ref, v);
+    deps.connections.on("changed", (refs) => {
+      for (const s of this.sessions.values()) void s.onCredentialsChanged(refs);
+    });
+    deps.connections.on("materials", (conn) => {
+      for (const s of this.sessions.values()) void s.onMaterials(conn);
+    });
+    deps.connections.on("updated", () => {
+      for (const s of this.sessions.values()) s.creds.syncSignIns();
+    });
+    deps.connections.on("stateChanged", (conn, state) => {
+      for (const s of this.sessions.values()) s.creds.onState(conn, state);
+    });
   }
 
   async loadAll() {
@@ -1333,10 +1420,6 @@ export class SessionManager {
     await this.deps.attachments.removeSession(id);
     this.sessions.delete(id);
     this.deps.broadcast({ type: "session.deleted", sessionId: id });
-  }
-
-  onSecretsChanged(names: string[]) {
-    for (const s of this.sessions.values()) void s.onSecretsChanged(names);
   }
 
   onPersonasChanged() {

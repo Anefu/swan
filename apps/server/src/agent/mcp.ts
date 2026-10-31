@@ -5,8 +5,6 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isHttpMcp, type McpHttpConfig, type McpStdioConfig } from "../personas.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
-import type { SecretStore } from "../secrets.js";
-import { SECRET_REF } from "../secrets.js";
 import type { Settings } from "../settings.js";
 import { errMsg, log, truncateMiddle } from "../util.js";
 import { mcpTool, type ToolDef, type ToolOutput } from "./tools.js";
@@ -18,20 +16,20 @@ interface Conn {
   cfg: McpStdioConfig | McpHttpConfig;
   client: Client | null;
   error: string | null;
-  secretRefs: string[];
+  credentialRefs: string[]; // refs its http headers use
 }
 
 /**
  * MCP servers for one session. stdio servers run inside the session container through
  * `podman exec -i` and only ever see placeholders; http servers are called from the host
- * with headers resolved from the secret store (and reconnect when those secrets change).
+ * with headers resolved from the session's credentials (and reconnect when those change).
  */
 export class SessionMcp {
   private conns = new Map<string, Conn>();
 
   constructor(
     private runtime: PodmanRuntime,
-    private secrets: SecretStore,
+    private resolveHost: (template: string) => { text: string; used: string[] },
     private settings: Settings,
     private container: string,
     private workdir: string,
@@ -44,10 +42,8 @@ export class SessionMcp {
       Object.entries(servers)
         .filter(([, cfg]) => cfg.enabled)
         .map(async ([name, cfg]) => {
-          const refs = isHttpMcp(cfg)
-            ? Object.values(cfg.headers).flatMap((v) => [...v.matchAll(SECRET_REF)].map((m) => m[1]))
-            : [];
-          const conn: Conn = { name, cfg, client: null, error: null, secretRefs: refs };
+          const refs = isHttpMcp(cfg) ? Object.values(cfg.headers).flatMap((v) => this.resolveHost(v).used) : [];
+          const conn: Conn = { name, cfg, client: null, error: null, credentialRefs: refs };
           this.conns.set(name, conn);
           onProgress(`starting MCP server ${name}`);
           try {
@@ -68,7 +64,7 @@ export class SessionMcp {
     let transport: Transport;
     if (isHttpMcp(conn.cfg)) {
       const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(conn.cfg.headers)) headers[k] = this.secrets.resolveHost(v).text;
+      for (const [k, v] of Object.entries(conn.cfg.headers)) headers[k] = this.resolveHost(v).text;
       const url = new URL(conn.cfg.url);
       try {
         transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
@@ -172,11 +168,11 @@ export class SessionMcp {
     }
   }
 
-  /** Hot reload: reconnect http servers whose headers reference a changed secret. */
-  async onSecretsChanged(names: string[]): Promise<string[]> {
+  /** Hot reload: reconnect http servers whose headers use a changed credential. */
+  async onCredentialsChanged(refs: string[]): Promise<string[]> {
     const reconnected: string[] = [];
     for (const conn of this.conns.values()) {
-      if (!isHttpMcp(conn.cfg) || !conn.secretRefs.some((r) => names.includes(r))) continue;
+      if (!isHttpMcp(conn.cfg) || !conn.credentialRefs.some((r) => refs.includes(r))) continue;
       try {
         await conn.client?.close();
       } catch {}

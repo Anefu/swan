@@ -39,47 +39,64 @@ What runs where:
 | Built-in tools (bash, read/write/edit, glob, grep) | session container via `podman exec` | no |
 | stdio MCP servers | session container via `podman exec -i` | no — env holds placeholders |
 | http MCP servers | host (harness) | yes — headers resolved host-side |
+| Connection wrappers | host, as the user | yes — they produce the values |
 | Skills | mounted read-only at `/skills/<name>` | no |
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
 ## Credential flow
 
-1. Secrets live in `~/.persona-harness/secrets.yaml` and/or `secrets.env`, outside every mount.
-   Both are file-watched; edits apply immediately (no session restart).
-2. A persona lists the secret names it may use (`credentials:`). Each session gets a random
-   placeholder per secret, e.g. `phs_GITHUB_TOKEN_3f9c…`. Persona/MCP config refers to secrets as
-   `{{secret:GITHUB_TOKEN}}`; inside the sandbox that renders as the placeholder.
+1. Every credential comes from a **connection** in `config.yaml` (`connections:`, hot-reloaded).
+   `static` connections keep values in `~/.persona-harness/secrets.yaml` / `secrets.env` as
+   `connection/NAME`, outside every mount; `command` connections run a wrapper on the host
+   (argv, no shell, the user's environment minus Swan's secrets, working directory
+   `connections/<name>/`) that prints credentials and config files in protocol v1
+   (`docs/connection-protocol-v1.schema.json`). Wrapper values are held in memory only.
+2. A persona names credentials through rules (`connections: { <conn>: { rules: [...] } }`). Each
+   session gets a random placeholder per named credential (`phs_GITHUB_TOKEN_3f9c…`; AWS keys get
+   placeholder keys shaped like real ones). Static credentials appear as an env var; command
+   connections' files are written into `/home/agent` with placeholders, and their env goes to a
+   file every bash shell reads (`BASH_ENV`). Persona/MCP config refers to credentials as
+   `{{credential:conn/NAME}}` (`{{secret:NAME}}` is an old alias).
 3. Container traffic must use the proxy (there is no other route). The proxy identifies the session
    from `Proxy-Authorization`, then for each request:
-   - destination not in `network.allow` ∪ credential hosts → **blocked** (403, audited);
+   - destination not in `network.allow` ∪ hosts of the session's usable credentials → **blocked**
+     (403, audited; a host bound to an expired or empty credential says so);
    - destination resolves to loopback/private/link-local → **blocked** (prevents reaching the
      harness API or the LAN via the proxy);
    - destination is a host bound to one of the session's credentials → TLS is terminated with the
-     harness CA (trusted inside the image only), placeholders in headers/query/Basic-auth are
-     replaced with real values, optional `inject` headers are added, upstream TLS is verified, and
-     real values in the response are rewritten back to placeholders;
+     harness CA (trusted inside the image only). The proxy works out which credentials the request
+     would carry (a placeholder in headers, query or Basic auth, a missing `inject` header, or an
+     AWS signature made with the placeholder keys) and checks each against the persona's rules for
+     that credential: **allow** substitutes (AWS: verifies the placeholder signature, then re-signs
+     with the real keys), **ask** pauses the request on an approval card, **deny** or no matching
+     rule forwards the placeholder unchanged and adds `X-Swan-Denied` to the response. Upstream TLS
+     is verified (against the credential's `ca` when it has one), and real values in the response
+     are rewritten back to placeholders;
    - otherwise → plain CONNECT tunnel (no interception).
-4. A placeholder sent to any host not bound to that secret stays a useless placeholder.
-5. Rotation = edit the file. The proxy reads values per request; http MCP clients that reference a
-   changed secret reconnect; provider clients are created per request.
+4. A placeholder sent to any host not bound to that credential stays a useless placeholder.
+5. Rotation = edit the file, or the wrapper's renewal. The proxy reads values per request; renewal
+   runs `renew` before the earliest expiry (and after a 401/403 from a bound host, at most once a
+   minute) and is shared by every session; files are rewritten only if their content changed and
+   placeholders never change. http MCP clients that use a changed credential reconnect; provider
+   clients are created per request.
+
+AWS re-signing refuses what it cannot re-sign: presigned URLs and query-string auth, and signed
+streaming uploads (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`). Unsigned payloads, including
+`STREAMING-UNSIGNED-PAYLOAD-TRAILER`, stream through. Bodies without a declared payload hash
+(the JSON and query protocols) are buffered up to 64 MB.
 
 Secret file formats:
 
 ```yaml
 # secrets.yaml
-GITHUB_TOKEN:
-  value: ghp_xxx
-  hosts: [api.github.com, github.com, "*.githubusercontent.com"]
-  inject: { header: Authorization, format: "Bearer {value}" }   # optional
-ANTHROPIC_API_KEY:
-  value: sk-ant-xxx            # no hosts: usable by the harness only, never by the sandbox
+github/GITHUB_TOKEN: ghp_xxx        # static connection "github", credential GITHUB_TOKEN
+ANTHROPIC_API_KEY: sk-ant-xxx       # model-provider key: host-side only, never a connection
 ```
 
 ```sh
-# secrets.env — values only; bind hosts with NAME__HOSTS
-GITHUB_TOKEN=ghp_xxx
-GITHUB_TOKEN__HOSTS=api.github.com,github.com
+# secrets.env: the same keys, connection in capitals with dashes as _, then __
+GITHUB__GITHUB_TOKEN=ghp_xxx
 ```
 
 ## Personas (workspaces)
@@ -100,11 +117,17 @@ mcpServers:
   github:                                         # stdio, runs in the sandbox
     command: npx
     args: [-y, "@modelcontextprotocol/server-github"]
-    env: { GITHUB_PERSONAL_ACCESS_TOKEN: "{{secret:GITHUB_TOKEN}}" }
+    env: { GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github/GITHUB_TOKEN}}" }
   docs:                                           # http, called from the host
     url: https://example.com/mcp
-    headers: { Authorization: "Bearer {{secret:DOCS_TOKEN}}" }
-credentials: [GITHUB_TOKEN, DOCS_TOKEN]
+    headers: { Authorization: "Bearer {{credential:docs/DOCS_TOKEN}}" }
+connections:                    # the credentials this persona may use, and for what
+  github:
+    rules:
+      - { credential: GITHUB_TOKEN, api: http, allow: ["GET /**"], ask: ["POST /**", "PATCH /**"] }
+  docs:
+    rules:
+      - { credential: DOCS_TOKEN, api: http, allow: ["* /**"] }
 env: { NODE_ENV: development }
 network:
   allow: [registry.npmjs.org, pypi.org, files.pythonhosted.org]
@@ -153,8 +176,8 @@ Copilot's own agent runtime. To keep the harness in charge of the loop:
   replays earlier turns as text, since the SDK cannot seed tool-call history.
 - The runtime gets an explicit minimal environment (no provider keys from the harness's env), and
   its token comes only from `COPILOT_GITHUB_TOKEN` (or, with `useLoggedInUser`, the GitHub CLI login: SDK empty mode cannot see a `copilot login`).
-- Personas may not list any provider key under `credentials:`, so the egress proxy can never
-  inject it into sandbox traffic.
+- Model-provider keys are plain secrets, not connections, so no persona rule can name them and the
+  egress proxy can never inject them into sandbox traffic.
 
 ## Harness API hardening
 

@@ -38,6 +38,11 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "history_search", args: { query: "pnpm" } },
     { text: "Saved and found it again." },
   ],
+  connections: [
+    { tool: "connection_status", args: {} },
+    { tool: "bash", args: { command: "echo \"profile=$AWS_PROFILE kubeconfig=$KUBECONFIG github=${GITHUB_TOKEN:0:4}…\"; cat ~/.aws/credentials; grep -E 'server|token' ~/.kube/config; ls -l ~/.aws ~/.kube" } },
+    { text: "Those are the connection files; every value is a placeholder." },
+  ],
   slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
 };
 
@@ -87,4 +92,4 @@ const server = http.createServer((req, res) => {
     res.end("data: [DONE]\n\n");
   });
 });
-server.listen(8099, "127.0.0.1", () => console.log("fake model on http://127.0.0.1:8099/v1"));
+server.listen(Number(process.env.FAKE_MODEL_PORT ?? 8099), "127.0.0.1", () => console.log(`fake model on http://127.0.0.1:${process.env.FAKE_MODEL_PORT ?? 8099}/v1`));

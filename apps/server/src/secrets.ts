@@ -2,22 +2,23 @@ import { promises as fs, statSync } from "node:fs";
 import chokidar from "chokidar";
 import YAML from "yaml";
 import { z } from "zod";
-import type { CredentialStatus, CredentialUpsert } from "@ph/shared";
 import { paths } from "./settings.js";
 import { TypedEmitter, debounce, errMsg, exists, log, sha256Hex, writeFileAtomic } from "./util.js";
 
+/** Host-side keys (model providers) are plain names; connection credentials are `connection/name`. */
 export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-export const SECRET_REF = /\{\{\s*secret:([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+export const SECRET_KEY = /^(?:[A-Za-z_][A-Za-z0-9_]*|[a-z0-9-]{1,32}\/[A-Za-z0-9_-]{1,64})$/;
 
 export interface SecretEntry {
   name: string;
   value: string | undefined;
   source: "yaml" | "env" | null;
+  fingerprint: string | null;
+  updatedAt: string | null;
+  // Earlier format only (read for migration): bindings now live in config.yaml.
   hosts: string[];
   inject?: { header: string; format: string };
   substituteInBody?: boolean;
-  fingerprint: string | null;
-  updatedAt: string | null;
 }
 
 const YamlEntry = z.union([
@@ -26,7 +27,7 @@ const YamlEntry = z.union([
     value: z.string().optional(),
     hosts: z.array(z.string()).optional(),
     inject: z.object({ header: z.string(), format: z.string().default("{value}") }).optional(),
-    substituteInBody: z.boolean().optional(), // also swap placeholders in JSON/form request bodies (< 1 MB)
+    substituteInBody: z.boolean().optional(),
   }),
 ]);
 
@@ -51,12 +52,20 @@ function parseEnv(text: string): Map<string, string> {
   return out;
 }
 
+/** secrets.env spellings of `connection/name`: GITHUB__GITHUB_TOKEN (dashes in the connection become _). */
+export function envKeys(key: string): string[] {
+  const i = key.indexOf("/");
+  if (i < 0) return [key];
+  const conn = key.slice(0, i).replace(/-/g, "_");
+  const name = key.slice(i + 1);
+  return [...new Set([`${conn.toUpperCase()}__${name}`, `${conn}__${name}`])];
+}
+
 type Events = { changed: [string[]]; error: [string] };
 
 /**
- * Credentials live only on the host, in secrets.yaml and/or secrets.env under PH_HOME.
- * Both files are watched; every consumer reads values at use time, so edits take effect
- * immediately without restarting sessions.
+ * Secret values live only on the host, in secrets.yaml and/or secrets.env under PH_HOME. Both
+ * files are watched; consumers read values at use time, so edits apply without restarts.
  */
 export class SecretStore extends TypedEmitter<Events> {
   private entries = new Map<string, SecretEntry>();
@@ -76,7 +85,7 @@ export class SecretStore extends TypedEmitter<Events> {
       const env = parseEnv(await fs.readFile(paths.secretsEnv, "utf8"));
       const t = fileTime(paths.secretsEnv);
       for (const [k, v] of env) {
-        if (k.endsWith("__HOSTS")) continue;
+        if (k.endsWith("__HOSTS") && env.has(k.slice(0, -7))) continue;
         const hosts = (env.get(`${k}__HOSTS`) ?? "").split(",").map((h) => h.trim()).filter(Boolean);
         next.set(k, { name: k, value: v, source: "env", hosts, fingerprint: null, updatedAt: t });
       }
@@ -84,10 +93,10 @@ export class SecretStore extends TypedEmitter<Events> {
 
     if (await exists(paths.secretsYaml)) {
       const doc = YAML.parse(await fs.readFile(paths.secretsYaml, "utf8")) ?? {};
-      if (typeof doc !== "object" || Array.isArray(doc)) throw new Error("secrets.yaml must be a mapping of NAME: entry");
+      if (typeof doc !== "object" || Array.isArray(doc)) throw new Error("secrets.yaml must be a mapping of NAME: value");
       const t = fileTime(paths.secretsYaml);
       for (const [name, rawEntry] of Object.entries(doc)) {
-        if (!SECRET_NAME.test(name)) throw new Error(`invalid secret name "${name}"`);
+        if (!SECRET_KEY.test(name)) throw new Error(`invalid secret name "${name}" (use connection/NAME, or a plain NAME for model-provider keys)`);
         if (rawEntry == null) continue;
         const parsed = YamlEntry.safeParse(rawEntry);
         if (!parsed.success) throw new Error(`secrets.yaml: ${name}: ${parsed.error.issues[0]?.message}`);
@@ -97,7 +106,7 @@ export class SecretStore extends TypedEmitter<Events> {
           name,
           value: e.value ?? prev?.value,
           source: e.value !== undefined ? "yaml" : (prev?.source ?? null),
-          hosts: e.hosts ?? prev?.hosts ?? [],
+          hosts: "hosts" in e && e.hosts ? e.hosts : (prev?.hosts ?? []),
           inject: "inject" in e ? e.inject : undefined,
           substituteInBody: "substituteInBody" in e ? e.substituteInBody : undefined,
           fingerprint: null,
@@ -111,12 +120,7 @@ export class SecretStore extends TypedEmitter<Events> {
       e.fingerprint = e.value ? sha256Hex(e.value).slice(0, 8) : null;
       const prev = this.entries.get(name);
       if (prev && prev.fingerprint === e.fingerprint) e.updatedAt = prev.updatedAt;
-      if (
-        !prev ||
-        prev.fingerprint !== e.fingerprint ||
-        prev.hosts.join(",") !== e.hosts.join(",") ||
-        JSON.stringify(prev.inject) !== JSON.stringify(e.inject)
-      ) {
+      if (!prev || prev.fingerprint !== e.fingerprint || prev.hosts.join(",") !== e.hosts.join(",") || JSON.stringify(prev.inject) !== JSON.stringify(e.inject)) {
         if (prev && prev.fingerprint !== e.fingerprint) e.updatedAt = new Date().toISOString();
         changed.push(name);
       }
@@ -138,81 +142,57 @@ export class SecretStore extends TypedEmitter<Events> {
           this.emit("error", this.lastError);
         });
     }, 150);
-    chokidar
-      .watch([paths.secretsYaml, paths.secretsEnv], { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 80 } })
-      .on("all", reload);
+    chokidar.watch([paths.secretsYaml, paths.secretsEnv], { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 80 } }).on("all", reload);
   }
 
-  get(name: string): SecretEntry | undefined {
-    return this.entries.get(name);
+  /** A key's entry: secrets.yaml first, then any secrets.env spelling. */
+  get(key: string): SecretEntry | undefined {
+    const y = this.entries.get(key);
+    if (y?.value !== undefined) return y;
+    for (const k of envKeys(key)) {
+      const e = this.entries.get(k);
+      if (e?.value !== undefined) return e;
+    }
+    return y;
   }
 
-  value(name: string): string | undefined {
-    return this.entries.get(name)?.value;
+  value(key: string): string | undefined {
+    return this.get(key)?.value;
+  }
+
+  /** Every entry as stored, keyed by file spelling (migration reads the earlier format from here). */
+  all(): SecretEntry[] {
+    return [...this.entries.values()];
   }
 
   get error() {
     return this.lastError;
   }
 
-  status(usedBy: Map<string, string[]>): CredentialStatus[] {
-    const names = new Set([...this.entries.keys(), ...usedBy.keys()]);
-    return [...names].sort().map((name) => {
-      const e = this.entries.get(name);
-      return {
-        name,
-        present: !!e?.value,
-        source: e?.value ? e.source : null,
-        hosts: e?.hosts ?? [],
-        injects: !!e?.inject,
-        fingerprint: e?.fingerprint ?? null,
-        updatedAt: e?.updatedAt ?? null,
-        usedBy: usedBy.get(name) ?? [],
-      };
-    });
-  }
-
-  /** Render `{{secret:NAME}}` references with real values (host-side use only). */
-  resolveHost(template: string): { text: string; missing: string[]; used: string[] } {
-    const missing: string[] = [];
-    const used: string[] = [];
-    const text = template.replace(SECRET_REF, (_m, name: string) => {
-      used.push(name);
-      const v = this.value(name);
-      if (v === undefined) missing.push(name);
-      return v ?? "";
-    });
-    return { text, missing, used };
-  }
-
-  /** Edit secrets.yaml in place, preserving comments and ordering. */
-  async upsert(name: string, u: CredentialUpsert): Promise<void> {
-    if (!SECRET_NAME.test(name)) throw new Error("invalid credential name");
+  /** Set a value in secrets.yaml, preserving comments and ordering. */
+  async setValue(key: string, value: string): Promise<void> {
+    if (!SECRET_KEY.test(key)) throw new Error("invalid credential name");
     const text = (await exists(paths.secretsYaml)) ? await fs.readFile(paths.secretsYaml, "utf8") : "";
     const doc = YAML.parseDocument(text || "{}");
-    const current = (doc.toJS() ?? {})[name];
-    const entry: Record<string, unknown> =
-      typeof current === "string" ? { value: current } : current && typeof current === "object" ? { ...current } : {};
-    if (u.value !== undefined) entry.value = u.value;
-    if (u.hosts !== undefined) entry.hosts = u.hosts;
-    if (u.inject === null) delete entry.inject;
-    else if (u.inject) entry.inject = u.inject;
-    doc.set(name, doc.createNode(entry));
+    const current = (doc.toJS() ?? {})[key];
+    doc.set(key, current && typeof current === "object" ? doc.createNode({ ...current, value }) : value);
     await writeFileAtomic(paths.secretsYaml, doc.toString(), 0o600);
     await this.load();
   }
 
-  async remove(name: string): Promise<void> {
+  /** Remove a key from both files. */
+  async remove(key: string): Promise<void> {
     if (await exists(paths.secretsYaml)) {
       const doc = YAML.parseDocument(await fs.readFile(paths.secretsYaml, "utf8"));
-      if (doc.has(name)) {
-        doc.delete(name);
+      if (doc.has(key)) {
+        doc.delete(key);
         await writeFileAtomic(paths.secretsYaml, doc.toString(), 0o600);
       }
     }
     if (await exists(paths.secretsEnv)) {
       const lines = (await fs.readFile(paths.secretsEnv, "utf8")).split(/\r?\n/);
-      const re = new RegExp(`^\\s*(export\\s+)?${name}(__HOSTS)?\\s*=`);
+      const names = envKeys(key).map((k) => k.replace(/[^A-Za-z0-9_]/g, ""));
+      const re = new RegExp(`^\\s*(export\\s+)?(${names.join("|")})(__HOSTS)?\\s*=`);
       const kept = lines.filter((l) => !re.test(l));
       if (kept.length !== lines.length) await writeFileAtomic(paths.secretsEnv, kept.join("\n"), 0o600);
     }

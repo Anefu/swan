@@ -28,8 +28,9 @@ export interface PersonaSummary {
   folders: FolderMount[];
   skills: string[];
   mcpServers: McpServerSummary[];
-  credentials: string[]; // secret names this persona may use
-  missingCredentials: string[]; // subset of credentials with no value right now
+  connections: string[]; // connection names the persona's rules use
+  credentials: string[]; // "<connection>/<name>" refs its rules name
+  missingCredentials: string[]; // refs with no usable value right now (missing, expired, needs sign-in)
   networkAllow: string[]; // host patterns reachable from the sandbox
   errors: string[]; // validation problems; a persona with errors cannot start sessions
 }
@@ -39,23 +40,84 @@ export interface PersonaSource {
   yaml: string;
 }
 
-// ---------- Credentials ----------
+// ---------- Connections ----------
+// Every credential an agent can use comes from a connection defined in config.yaml. `static`
+// connections read values from secrets.yaml / secrets.env; `command` connections run a wrapper
+// that speaks connection protocol v1 (docs/connection-protocol-v1.schema.json).
 
-export interface CredentialStatus {
+export type ConnectionType = "static" | "command";
+export type ConnectionState =
+  | "ready" // every credential usable
+  | "incomplete" // static: some credentials have no value
+  | "signing_in" // command: waiting for the user to finish a device-code sign-in
+  | "login_required" // command: needs a sign-in
+  | "error"
+  | "unknown"; // command: not checked yet (checked when a session needs it)
+export type CredentialKind = "static" | "bearer" | "header" | "basic" | "aws-sigv4";
+export type RuleApi = "kubernetes" | "aws" | "http";
+
+export interface ConnectionCredentialStatus {
+  name: string; // unique within the connection
+  ref: string; // "<connection>/<name>"
+  kind: CredentialKind;
+  present: boolean; // has a usable value now (not expired)
+  source: "yaml" | "env" | "command" | null;
+  hosts: string[];
+  injects: boolean;
+  env?: string; // static: sandbox variable that holds the placeholder
+  fingerprint: string | null; // first 8 hex chars of sha256(value)
+  expiresAt: string | null;
+  updatedAt: string | null;
+  usedBy: string[]; // persona ids whose rules name it
+}
+
+export interface DeviceCode {
+  verificationUri: string;
+  userCode: string;
+  verificationUriComplete?: string;
+  expiresAt?: string;
+}
+
+export interface ConnectionStatus {
   name: string;
-  present: boolean; // has a value
-  source: "yaml" | "env" | null;
-  hosts: string[]; // hosts the proxy may send this secret to; empty = host-side use only
-  injects: boolean; // proxy adds an auth header automatically for those hosts
-  fingerprint: string | null; // first 8 hex chars of sha256(value), to spot rotations
-  updatedAt: string | null; // ISO time this value last changed (per harness observation)
-  usedBy: string[]; // persona ids that declare it
+  type: ConnectionType;
+  state: ConnectionState;
+  message: string | null; // from the wrapper, or why it is incomplete / failed
+  hosts: string[]; // command: upper bound for every credential's hosts
+  command?: string[]; // command: the wrapper argv from config.yaml
+  expiresAt: string | null; // earliest credential expiry
+  lastRenewedAt: string | null;
+  signIn: DeviceCode | null; // pending device-code sign-in
+  credentials: ConnectionCredentialStatus[];
+  usedBy: string[];
 }
 
 export interface CredentialUpsert {
   value?: string; // omit to keep the existing value (e.g. only change hosts)
   hosts?: string[];
   inject?: { header: string; format: string } | null; // format uses {value}, e.g. "Bearer {value}"
+  env?: string | null; // sandbox variable; default: the credential name
+}
+
+export interface CredentialRule {
+  credential: string; // name or glob within the connection
+  api: RuleApi;
+  allow?: string[];
+  ask?: string[];
+  deny?: string[];
+}
+
+export interface PersonaConnection {
+  rules: CredentialRule[];
+}
+
+/** One-time note after converting the earlier secrets format. */
+export interface MigrationNote {
+  at: string;
+  moved: string[]; // e.g. "GITHUB_TOKEN → github/GITHUB_TOKEN"
+  personas: string[]; // persona ids whose credentials became rules
+  kept: string[]; // host-less entries left in secrets.yaml
+  problems: string[];
 }
 
 // ---------- Skills ----------
@@ -129,9 +191,34 @@ export type ChatItem =
     }
   | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string }
   // One-line record of a harness action: /dream, a context rollover, a queued steering message.
-  | { kind: "receipt"; id: string; ts: string; action: "dream" | "rollover" | "steer" | "command"; title: string; detail: string; status: "running" | "done" | "error" };
+  | { kind: "receipt"; id: string; ts: string; action: "dream" | "rollover" | "steer" | "command"; title: string; detail: string; status: "running" | "done" | "error" }
+  // A command connection needs the user to sign in. Only the user sees the code and opens the link.
+  | {
+      kind: "sign_in";
+      id: string;
+      ts: string;
+      connection: string;
+      state: "starting" | "waiting" | "done" | "cancelled" | "failed";
+      code?: DeviceCode;
+      message?: string;
+    }
+  // Requests the proxy sent without the credential because no rule allowed them. Grouped per
+  // credential and rule within a minute.
+  | {
+      kind: "credential_blocked";
+      id: string;
+      ts: string;
+      credential: string; // ref
+      api: RuleApi;
+      rule: string | null; // the deny pattern, or null for "no rule"
+      operations: string[]; // described requests, newest last (at most 5)
+      count: number;
+      suggestion: string; // allow pattern that would match the latest request
+    };
 
-export type ApprovalDecision = "allow" | "allow_always" | "deny";
+// allow: this call (network: until stopped); allow_session: until stopped (credential use);
+// allow_always: until stopped plus a persona change; deny.
+export type ApprovalDecision = "allow" | "allow_session" | "allow_always" | "deny";
 
 export interface ApprovalBody {
   decision: ApprovalDecision;
@@ -165,7 +252,8 @@ export interface EgressEvent {
   path?: string; // only known for inspected/injected/plain-http requests
   status?: number;
   decision: EgressDecision;
-  credentials: string[]; // names used, never values
+  credentials: string[]; // refs used, never values
+  denied?: { credential: string; operation: string; rule: string | null }[]; // sent without the credential
   reason?: string; // why blocked
   durationMs?: number;
   bytesUp?: number;
@@ -229,9 +317,12 @@ export interface ProviderModel {
 // GET    /api/personas/:id/files?path=/workspace/x -> { path, entries: FileEntry[] } (path inside sandbox)
 // GET    /api/personas/:id/file?path=...      -> { path, content, truncated }
 // GET    /api/skills                          -> SkillSummary[]
-// GET    /api/credentials                     -> CredentialStatus[]
-// PUT    /api/credentials/:name   CredentialUpsert -> CredentialStatus
-// DELETE /api/credentials/:name               -> { ok: true }
+// GET    /api/connections                     -> ConnectionStatus[]
+// PUT    /api/connections/:conn/credentials/:name CredentialUpsert -> ConnectionStatus (static; creates the connection)
+// DELETE /api/connections/:conn/credentials/:name -> ConnectionStatus | { ok: true } (static)
+// POST   /api/connections/:conn/:action       (login|renew|cancel|logout) -> ConnectionStatus (command)
+// GET    /api/connections/migration           -> MigrationNote | null
+// DELETE /api/connections/migration           -> { ok: true } (dismiss the note)
 // GET    /api/sessions?personaId=             -> SessionSummary[] (newest first)
 // POST   /api/sessions            {personaId, title?} -> SessionSummary
 // GET    /api/sessions/:id                    -> { session: SessionSummary, items: ChatItem[] }
@@ -263,7 +354,7 @@ export type ServerEvent =
   | { type: "hello"; runtime: RuntimeStatus }
   | { type: "runtime.status"; runtime: RuntimeStatus }
   | { type: "personas.updated"; personas: PersonaSummary[] }
-  | { type: "credentials.updated"; credentials: CredentialStatus[]; changed: string[] }
+  | { type: "connections.updated"; connections: ConnectionStatus[]; changed: string[] } // changed: credential refs
   | { type: "session.updated"; session: SessionSummary }
   | { type: "session.deleted"; sessionId: string }
   | { type: "session.snapshot"; session: SessionSummary; items: ChatItem[] } // reply to subscribe
@@ -358,7 +449,7 @@ export interface PersonaConfigView {
   instructions: string;
   folders: { path: string; mount?: string; mode: FolderMode }[];
   networkAllow: string[]; // hostnames, *.domain, or host:port (always tunnelled)
-  credentials: string[];
+  connections: Record<string, PersonaConnection>;
   permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
   skills: string[];
   mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON

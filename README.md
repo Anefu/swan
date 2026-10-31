@@ -4,16 +4,19 @@ A local agent harness with a web UI: an agent loop (Claude or any OpenAI-compati
 tool calls run in a Podman sandbox that only sees the folders you approved, and whose network
 traffic goes through an egress proxy that injects credentials, so the agent never sees a secret.
 
-Work is organised into **personas** (workspaces). Each one bundles folders, skills, MCP servers, the
-credentials it may use, a network allowlist and tool permissions.
+Work is organised into **personas** (workspaces). Each one bundles folders, skills, MCP servers,
+rules for the credentials it may use, a network allowlist and tool permissions.
 
 | Feature | How |
 |---|---|
-| Credentials hidden from agents | The sandbox gets placeholders; the host-side proxy swaps in real values only for HTTPS requests to each secret's bound hosts, and rewrites echoed secrets back to placeholders |
-| Hot-reloaded credentials | `secrets.yaml` / `secrets.env` are watched; the next request uses the new value, with no restart, and sessions get a notice |
+| Credentials hidden from agents | Every credential comes from a **connection**. The sandbox gets placeholders; the host-side proxy swaps in real values only for HTTPS requests to the credential's hosts, and rewrites echoed secrets back to placeholders |
+| Credential use rules | Per persona and credential, `kubernetes`, `aws` or `http` rules (deny, ask, allow) say which requests may carry it, checked by the proxy however the request was made; anything unmatched goes out without the credential and the user is told |
+| Command connections | A wrapper around your own sign-in tool (SSO, cloud CLI, registry login) speaks a small JSON protocol; Swan shows the device-code sign-in, keeps the values on the host, writes placeholder config files into the sandbox and renews before expiry |
+| AWS | The sandbox signs with placeholder keys; the proxy checks that signature and re-signs with the real session credentials, so the AWS CLI and SDKs work unmodified |
+| Hot-reloaded credentials | `secrets.yaml` / `secrets.env` and the `connections` block of `config.yaml` are watched; the next request uses the new value, with no restart |
 | Filesystem sandbox | One Podman container per session; only persona folders are mounted (ro/rw); non-root, `cap-drop ALL`, cpu/mem/pids limits |
 | Network sandbox | Container on an `--internal` network with no route and no DNS; the only way out is the relay → proxy, which enforces the allowlist and blocks private/loopback addresses |
-| MCP | stdio servers run inside the sandbox (placeholders only); http servers run from the host with real headers and reconnect when their secret rotates |
+| MCP | stdio servers run inside the sandbox (placeholders only); http servers run from the host with real headers and reconnect when their credential rotates |
 | Skills | Agent Skills format (`SKILL.md` + files), mounted read-only at `/skills/<name>`, loaded on demand |
 | Agent loop | Streaming, adaptive thinking, prompt caching, context epochs with checkpoints, refusal fallbacks, per-tool approvals, interrupt, resumable sessions |
 | One conversation per persona | Long conversations roll over into new context epochs with a structured checkpoint; nothing is rewritten, and `history_search` recovers older turns |
@@ -44,9 +47,9 @@ pnpm build && pnpm start
 Open http://127.0.0.1:4317. On first start the harness creates `~/.persona-harness/`, seeds two
 example personas, builds the sandbox image (about a minute) and starts the relay container.
 
-Add your Anthropic key to `~/.persona-harness/secrets.yaml` (`ANTHROPIC_API_KEY: { value: sk-ant-… }`)
-or from the Credentials page. Without one, the harness falls back to `$ANTHROPIC_API_KEY` or an
-`ant auth login` profile.
+Add your Anthropic key to `~/.persona-harness/secrets.yaml` (`ANTHROPIC_API_KEY: sk-ant-…`)
+or under Settings → Swan → Model providers. Without one, the harness falls back to
+`$ANTHROPIC_API_KEY` or an `ant auth login` profile.
 
 Tests (no network, Podman or API keys needed):
 
@@ -66,8 +69,9 @@ Vite prints its port (5173, or the next free one).
 
 | Path | What |
 |---|---|
-| `config.yaml` | Ports, model providers, extra skill directories (restart to apply) |
-| `secrets.yaml`, `secrets.env` | Credentials and their host bindings (hot-reloaded, mode 0600) |
+| `config.yaml` | Ports, model providers, extra skill directories (restart to apply); `connections` (hot-reloaded) |
+| `secrets.yaml`, `secrets.env` | Secret values: model-provider keys, and static connection credentials as `connection/NAME` (hot-reloaded, mode 0600) |
+| `connections/<name>/` | A command connection's working directory: the wrapper's own state and a redacted `wrapper.log` |
 | `personas/<id>.yaml` | Personas (hot-reloaded; also editable in the UI) |
 | `skills/<name>/SKILL.md` | Skills (plus any `skillDirs`, e.g. `~/.claude/skills`) |
 | `sessions/<id>.json` | Transcripts; a stopped session resumes when you message it |
@@ -79,15 +83,58 @@ Vite prints its port (5173, or the next free one).
 | `copilot-runtime/` | Working and state directory of the Copilot SDK runtime (copilot provider only) |
 | `api-token` | Token the UI uses for the API |
 
-A credential is usable from the sandbox only when both are true: the persona lists it under
-`credentials:`, and the secret has `hosts:`. Example:
+## Connections
+
+Every credential an agent can use comes from a connection in `config.yaml`. A persona gets exactly
+the credentials its rules name, and the proxy substitutes one only into requests those rules allow.
 
 ```yaml
-GITHUB_TOKEN:
-  value: ghp_…
-  hosts: [api.github.com]
-  inject: { header: Authorization, format: "Bearer {value}" }   # optional
+# config.yaml (no values here)
+connections:
+  github:
+    type: static                       # values from secrets.yaml / secrets.env
+    credentials:
+      GITHUB_TOKEN:
+        hosts: [api.github.com]
+        inject: { header: Authorization, format: "Bearer {value}" }   # optional
+  corp-aws:
+    type: command                      # a wrapper that speaks protocol v1
+    command: [~/bin/corp-swan, --role, ReadOnly]
+    hosts: ["*.amazonaws.com"]         # upper bound for every credential it returns
 ```
+
+```yaml
+# secrets.yaml
+github/GITHUB_TOKEN: ghp_…
+```
+
+```yaml
+# persona
+connections:
+  github:
+    rules:
+      - { credential: GITHUB_TOKEN, api: http, allow: ["GET /**"], ask: ["POST /repos/*/*/issues"] }
+  corp-aws:
+    rules:
+      - { credential: prod-eks, api: kubernetes, allow: ["get *", "list *", "watch *"], deny: ["* secrets"] }
+      - { credential: prod-aws, api: aws, allow: ["sts:GetCallerIdentity", "s3:Get*", "logs:*"] }
+```
+
+Rule forms: `kubernetes` `<verb> <resource>[/<sub>] [in <namespace>]`; `aws` `service:Action`;
+`http` `METHOD /path` (`*` within a segment, `**` across). Deny wins over ask, ask over allow, and a
+request no rule matches goes out with the placeholder (so it fails upstream) and shows a
+"Blocked …" notice with **Add rule…**. An ask rule pauses the request on an approval card.
+
+A command connection runs on the host: `<command> status|login|renew`, `{"protocol":1,…}` on stdin,
+JSON Lines on stdout, defined by [docs/connection-protocol-v1.schema.json](docs/connection-protocol-v1.schema.json).
+Credential kinds are `bearer`, `header`, `basic` and `aws-sigv4`; files it returns (for example
+`~/.aws/credentials`, `~/.kube/config`) are written into the sandbox home with placeholders, and its
+env applies to every new shell. `tools/aws-stub` has a reference wrapper and a local AWS +
+Kubernetes stand-in to try it without an AWS account.
+
+Upgrading from the earlier format (credentials with `hosts` in the secrets files, personas with
+`credentials: [...]`) happens once on start: originals are kept as `.bak`, existing access is kept
+with `allow: ["* /**"]` rules, and Settings shows what moved.
 
 Persona reference: [docs/ARCHITECTURE.md#personas-workspaces](docs/ARCHITECTURE.md#personas-workspaces)
 and `examples/personas/`.
@@ -106,9 +153,9 @@ third-party apps, and this is the supported route.
 
 1. Create a fine-grained personal access token on your **personal** account (not an org) with the
    **Copilot Requests** account permission. Classic `ghp_` tokens are rejected.
-2. Add it as `COPILOT_GITHUB_TOKEN` on the Credentials page or in `secrets.yaml`. Leave it
-   without `hosts`: it is used only by the harness and never reaches the sandbox. Personas cannot
-   list provider keys under `credentials:`.
+2. Add it under Settings → Swan → Model providers, or as `COPILOT_GITHUB_TOKEN` in
+   `secrets.yaml`. Model-provider keys are used only by the harness; they are not connections, so
+   no persona rule can name them and they never reach the sandbox.
 3. List the model ids your plan offers:
    `curl -H "x-ph-token: $(cat ~/.persona-harness/api-token)" http://127.0.0.1:4317/api/providers/copilot/models`
 4. Use one in a persona: `model: { provider: copilot, id: <id>, effort: high }`.

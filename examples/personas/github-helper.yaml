@@ -17,8 +17,17 @@ mcpServers:
     command: npx
     args: [-y, "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "{{secret:GITHUB_TOKEN}}"
-credentials: [GITHUB_TOKEN]
+      GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github/GITHUB_TOKEN}}"
+# The token reaches the sandbox only as a placeholder, and the proxy only substitutes it for
+# requests these rules allow: reads freely, writes after asking.
+connections:
+  github:
+    rules:
+      - credential: GITHUB_TOKEN
+        api: http
+        allow: ["GET /**", "HEAD /**"]
+        ask: ["POST /**", "PATCH /**", "PUT /**"]
+        deny: ["DELETE /**"]
 network:
   allow: [registry.npmjs.org]
 permissions:

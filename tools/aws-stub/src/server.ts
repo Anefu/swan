@@ -26,6 +26,7 @@ export interface StartOptions extends Partial<StubOptions> {
  *   /_stub/*            test controls (reset, approve a device code, recorded requests)
  *   /sso/*              device-code sign-in and role credentials
  *   /k8s/<cluster>/*    Kubernetes API with EKS token auth
+ *   host <cluster>.k8s.* the same API at the root, like a real EKS endpoint
  *   anything else       AWS APIs, routed by the service in the SigV4 credential scope
  */
 export async function startStub(opts: StartOptions = {}): Promise<StubServer> {
@@ -54,6 +55,8 @@ export async function startStub(opts: StartOptions = {}): Promise<StubServer> {
     if (path.startsWith("/sso/")) return handleSso(r, res, state, base);
     const k = /^\/k8s\/([^/]+)(\/.*)?$/.exec(path);
     if (k) return handleKubernetes(r, res, state, decodeURIComponent(k[1]), k[2] ?? "/");
+    const vhost = /^([a-z0-9-]+)\.k8s\./.exec(r.url.hostname);
+    if (vhost) return handleKubernetes(r, res, state, vhost[1], path);
 
     const auth = describeAuth({ url: r.rawUrl, headers: r.headers });
     const service = auth?.service ?? "sts";

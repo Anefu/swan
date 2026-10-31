@@ -12,7 +12,6 @@ folders:
     mode: rw
 skills: [repo-tour]
 mcpServers: {}
-credentials: []
 network:
   allow: [pypi.org, files.pythonhosted.org, registry.npmjs.org]
 permissions:

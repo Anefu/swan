@@ -1,13 +1,18 @@
 // Reference connection wrapper (Swan connection protocol v1) for the AWS stub.
 //
 //   swan-stub-connection <status|login|renew> [--stub URL] [--role ReadOnly] [--cluster swan-dev] [--region us-east-1]
+//                        [--sandbox-url URL] [--cluster-url URL] [--ca FILE]
+//
+// --sandbox-url and --cluster-url are the addresses the sandbox uses for the AWS APIs and the
+// cluster (they default to the stub's own); --ca attaches the PEM that signs them to each
+// credential, so Swan's proxy can verify the stub upstream.
 //
 // It signs in with the stub's device-code flow, keeps its refresh token in the working directory
 // (Swan runs wrappers in a private state directory per connection), and prints JSON Lines: an
 // optional `device_code` line during login, then exactly one `result` line.
 // A wrapper for a real identity tool has the same shape: run the tool, read what it produced,
 // print the result.
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { presign, sign, type Credentials } from "@ph/aws-sigv4";
@@ -21,11 +26,16 @@ const { values, positionals } = parseArgs({
     cluster: { type: "string", default: "swan-dev" },
     region: { type: "string", default: "us-east-1" },
     "state-dir": { type: "string", default: "." },
+    "sandbox-url": { type: "string" },
+    "cluster-url": { type: "string" },
+    ca: { type: "string" },
   },
 });
 const verb = positionals[0];
 const stub = values.stub!.replace(/\/$/, "");
 const stateFile = path.join(values["state-dir"]!, "swan-stub-connection.json");
+const sandboxUrl = (values["sandbox-url"] ?? stub).replace(/\/$/, "");
+const caPem = values.ca ? readFileSync(values.ca, "utf8") : undefined;
 
 interface Saved {
   refreshToken: string;
@@ -135,7 +145,8 @@ async function ready(saved: Saved) {
   const eksToken = TOKEN_PREFIX + Buffer.from(presigned).toString("base64url");
   const tokenExpiresAt = new Date(Math.min(signedAt.getTime() + 14 * 60_000, rc.expiration));
   const cluster = await describeCluster(creds);
-  const host = new URL(stub).hostname;
+  const server = values["cluster-url"] ?? cluster.endpoint.replace(stub, sandboxUrl);
+  const clusterCa = caPem ?? (cluster.ca ? Buffer.from(cluster.ca, "base64").toString("utf8") : undefined);
   const kubeconfig = [
     "apiVersion: v1",
     "kind: Config",
@@ -143,8 +154,9 @@ async function ready(saved: Saved) {
     "clusters:",
     `- name: ${values.cluster}`,
     "  cluster:",
-    `    server: ${cluster.endpoint}`,
-    ...(cluster.ca ? [`    certificate-authority-data: ${cluster.ca}`] : []),
+    // No certificate-authority-data: Swan's proxy terminates TLS for credential hosts and checks
+    // the cluster's certificate itself, with the CA attached to the credential.
+    `    server: ${server}`,
     "contexts:",
     `- name: ${values.cluster}`,
     "  context:",
@@ -163,11 +175,11 @@ async function ready(saved: Saved) {
     message: `Signed in to the AWS stub as ${values.role}`,
     expiresAt: tokenExpiresAt.toISOString(),
     credentials: [
-      { name: "aws", kind: "aws-sigv4", ...creds, hosts: [host], expiresAt: new Date(rc.expiration).toISOString() },
-      { name: "eks", kind: "bearer", value: eksToken, hosts: [host], expiresAt: tokenExpiresAt.toISOString(), ...(cluster.ca ? { ca: Buffer.from(cluster.ca, "base64").toString("utf8") } : {}) },
+      { name: "aws", kind: "aws-sigv4", ...creds, hosts: [new URL(sandboxUrl).hostname], expiresAt: new Date(rc.expiration).toISOString(), ...(caPem ? { ca: caPem } : {}) },
+      { name: "eks", kind: "bearer", value: eksToken, hosts: [new URL(server).hostname], expiresAt: tokenExpiresAt.toISOString(), ...(clusterCa ? { ca: clusterCa } : {}) },
     ],
     files: [
-      { path: "~/.aws/config", mode: "0644", content: `[profile swan-stub]\nregion = ${values.region}\nendpoint_url = ${stub}\n` },
+      { path: "~/.aws/config", mode: "0644", content: `[profile swan-stub]\nregion = ${values.region}\nendpoint_url = ${sandboxUrl}\n` },
       {
         path: "~/.aws/credentials",
         content: "[swan-stub]\naws_access_key_id = {{credential:aws.accessKeyId}}\naws_secret_access_key = {{credential:aws.secretAccessKey}}\naws_session_token = {{credential:aws.sessionToken}}\n",
