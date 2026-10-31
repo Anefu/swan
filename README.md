@@ -1,187 +1,200 @@
-# Swan (persona-harness)
+# Swan
 
-A local agent harness for macOS: an agent loop (Claude or any OpenAI-compatible model) whose
-tool calls run in a Podman sandbox that only sees the folders you approved, and whose network
-traffic goes through an egress proxy that injects credentials, so the agent never sees a secret.
+Swan is a Mac app for working with AI agents without handing them your computer. You give an agent
+a job, such as fixing a bug, tidying a folder or checking a cloud account, and it works in a sandbox.
+The sandbox sees only the folders you choose and reaches only the websites you allow. The agent can
+use your tokens and passwords without ever seeing them, and it asks before doing anything you
+haven't allowed.
 
-Work is organised into **personas** (workspaces). Each one bundles folders, skills, MCP servers,
-rules for the credentials it may use, a network allowlist and tool permissions.
+## What you get
 
-| Feature | How |
-|---|---|
-| Credentials hidden from agents | Every credential comes from a **connection**. The sandbox gets placeholders; the host-side proxy swaps in real values only for HTTPS requests to the credential's hosts, and rewrites echoed secrets back to placeholders |
-| Credential use rules | Per persona and credential, `kubernetes`, `aws` or `http` rules (deny, ask, allow) say which requests may carry it, checked by the proxy however the request was made; anything unmatched goes out without the credential and the user is told |
-| Command connections | A wrapper around your own sign-in tool (SSO, cloud CLI, registry login) speaks a small JSON protocol; Swan shows the device-code sign-in, keeps the values on the host, writes placeholder config files into the sandbox and renews before expiry |
-| AWS | The sandbox signs with placeholder keys; the proxy checks that signature and re-signs with the real session credentials, so the AWS CLI and SDKs work unmodified |
-| Hot-reloaded credentials | `secrets.yaml` / `secrets.env` and the `connections` block of `config.yaml` are watched; the next request uses the new value, with no restart |
-| Filesystem sandbox | One Podman container per session; only persona folders are mounted (ro/rw); non-root, `cap-drop ALL`, cpu/mem/pids limits |
-| Network sandbox | Container on an `--internal` network with no route and no DNS; the only way out is the relay → proxy, which enforces the allowlist and blocks private/loopback addresses |
-| MCP | stdio servers run inside the sandbox (placeholders only); http servers run from the host with real headers and reconnect when their credential rotates |
-| Skills | Agent Skills format (`SKILL.md` + files), mounted read-only at `/skills/<name>`, loaded on demand |
-| Agent loop | Streaming, adaptive thinking, prompt caching, context epochs with checkpoints, refusal fallbacks, per-tool approvals, interrupt, resumable sessions |
-| One conversation per persona | Long conversations roll over into new context epochs with a structured checkpoint; nothing is rewritten, and `history_search` recovers older turns |
-| Memory | Persona-private records (preferences, decisions, observations, procedures, episodes) the agent reads and proposes through host-side tools; `/dream` consolidates them |
-| Slash commands | `/dream`, `/stop`, `/usage`, plus `/<skill>` for every skill on the persona |
-| Sub-agents | An `agent` tool runs focused sub-loops with the same sandbox, credentials and permissions: in parallel, in the background (the parent is told when they finish or ask), with a named sub-agent or a model the parent picks, a forked or brief-only context, and a turn limit per task. Sub-agents can ask the parent a question (`ask_parent`); the parent answers with `agent_message` |
-| Attachments | Paperclip, paste or drag-and-drop; files are copied into the sandbox at `/home/agent/attachments/`, images and PDFs also go to the model |
-| Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, subagent, checkpoint, dream), context occupancy, estimated cost where rates are known |
-| UI | The Swan app (Electron): persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |
+- **A sandbox for every agent.** Commands run in a Linux container that can see only the folders you
+  add, read-only or read-write. The rest of your Mac doesn't exist to it.
+- **Secrets that stay secret.** Agents get stand-ins for your credentials. Swan swaps in the real
+  value on the way out, only to the website it belongs to, and only for requests you've allowed.
+- **You decide what happens.** For each kind of action you choose: allowed, ask first, or never.
+  When an agent wants something you haven't decided on, you get a card to allow it once, allow it
+  always, or deny it.
+- **No surprise network traffic.** Agents reach only the websites on their allowlist. Anything else
+  is blocked and shows up in the Network panel, where you can allow it.
+- **Personas.** Set an agent up once for a kind of work (its model, folders, credentials and rules)
+  and keep one ongoing conversation with it. It remembers your preferences and decisions over time.
+- **Your choice of model.** Claude (Anthropic), OpenAI, any OpenAI-compatible server including models
+  running on your Mac, or your GitHub Copilot subscription.
+- **More when you need it.** Skills, MCP servers, sub-agents that work in parallel, file and image
+  attachments, and usage and cost tracking.
 
-Design and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working on the code (people or agents): [AGENTS.md](AGENTS.md).
+Everything stays on your Mac, in `~/.swan`. What leaves it: your conversations go to the model
+provider you chose, and agents' requests go only to hosts you've allowed.
+
+## What you need
+
+- A Mac with Apple silicon (M1 or later) and macOS 13 or later.
+- [Podman](https://podman.io), the free tool that runs the sandboxes: `brew install podman`, or
+  [Podman Desktop](https://podman-desktop.io).
+- A model: an Anthropic or OpenAI API key, a GitHub Copilot subscription, or a model server running
+  on your Mac (Ollama, LM Studio, `mlx_lm.server`, vLLM).
 
 ## Install
 
-Download the DMG from Releases; [docs/DESKTOP.md](docs/DESKTOP.md) covers opening an unsigned build,
-Podman, test instances and releases. Swan needs Podman (`brew install podman`); on first start it
-offers to set up Podman's machine.
+1. Download `Swan-<version>-arm64.dmg` from [Releases](https://github.com/Anefu/swan/releases) and
+   drag Swan to Applications.
+2. Builds are not signed by Apple yet, so macOS blocks the first open. Either run this once:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Swan.app
+   ```
+   or open Swan, then choose System Settings → Privacy & Security → Open Anyway.
+3. Open Swan. If Podman has no machine yet, click **Set up Podman** (a one-time download of about
+   1 GB). Swan then builds its sandbox, which takes a minute or two the first time.
 
-On first start Swan creates `~/.swan/`, seeds two example personas, builds the sandbox image (about
-a minute) and starts the relay container. Add a model key under Settings → Swan → Model providers,
-or to `~/.swan/secrets.yaml` (`ANTHROPIC_API_KEY: sk-ant-…`).
+## Getting started
 
-## Build from source
+1. **Add a model.** Open the persona menu (the name at the top left), choose **Swan settings**, and
+   add a key under **Model providers**. For Copilot, see [GitHub Copilot](#github-copilot).
+2. **Make a persona.** Swan starts with two examples, Demo and GitHub helper. To make your own, open
+   the persona menu at the top left and choose **New persona**: give it a name and a model, add the
+   folders it may see ("Can read" or "Can change"), and choose what it may do without asking. The
+   gear icon opens the current persona's settings.
+3. **Give it a job.** Type what you want done. When the agent wants to run a command, change a file
+   or reach a new website, a card asks you first. **Stop** interrupts it at any time.
+4. **Keep an eye on it.** The Overview panel (the list icon) shows what the agent is working on, its
+   sub-agents, credentials, memory, attachments and network activity.
 
-Node ≥ 22.12 and pnpm 10.
+Type `/` in the message box for commands: `/dream` tidies the persona's memory, `/stop` stops the
+agent and clears what you allowed for this run, `/usage` shows usage, and `/<skill>` asks the agent
+to use one of the persona's skills.
+
+## Main ideas
+
+- **Persona**: an agent set up for a kind of work, with its own model, instructions, folders,
+  skills, credentials, allowed websites and permissions. Each persona has one conversation; long ones
+  continue in a fresh context with a summary, and nothing is lost.
+- **Folders**: the only parts of your Mac an agent sees, at `/workspace/<name>`. Swan refuses
+  folders that would expose your whole home folder, system folders or its own data.
+- **Permissions**: per tool, `allow`, `ask` or `deny`, with patterns such as `bash(git status*)`.
+  "Always allow" on a card adds a rule to the persona.
+- **Credentials**: tokens and keys agents may use, each limited to its websites and to the requests
+  the persona's rules allow. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md).
+- **Allowed websites**: each persona lists the hosts its agent may reach. Private and local
+  addresses on your network are never reachable.
+- **Memory**: preferences, decisions and facts the agent saves for the persona, which you can review
+  and edit under Memory. It never leaves the persona.
+- **Skills**: folders of instructions and scripts (the Agent Skills format) the agent loads when a
+  task needs them.
+- **MCP servers**: extra tools for the agent. Ones that run as a command run inside the sandbox; ones
+  at a URL are called from your Mac with the real credentials.
+- **Sub-agents**: the agent can hand parts of a task to focused helpers that work in parallel or in
+  the background, with the same sandbox and rules.
+
+A complete persona, `config.yaml` and `secrets.yaml` using every setting:
+[examples/reference/](examples/reference/).
+
+## Models
+
+Models are set up in Swan settings → Model providers, or under `providers` in
+`~/.swan/config.yaml`. Keys are used only by Swan itself; no agent can ever see or use them.
+
+- **Anthropic**: Claude, with an API key.
+- **OpenAI and compatible servers**: OpenAI with an API key, or any OpenAI-compatible server, such as
+  a model running on your Mac.
+
+### GitHub Copilot
+
+Swan can use your Copilot subscription through GitHub's official
+[Copilot SDK](https://github.com/github/copilot-sdk).
+
+1. On your personal GitHub account, create a fine-grained personal access token with the
+   **Copilot Requests** permission. Classic `ghp_` tokens don't work.
+2. Add it in Swan settings → Model providers → GitHub Copilot.
+3. Pick a Copilot model in the model menu below the message box. Which ones you see depends on your
+   plan.
+
+Good to know: usage counts against your Copilot plan. After you stop the agent or restart Swan,
+earlier turns are passed to Copilot as text, so it may lose some detail of past tool calls. Images
+reach Copilot models, PDFs don't.
+
+## Privacy and safety
+
+- Your conversations, including file contents the agent reads, go to your model provider. Check
+  that this is allowed for the data you give it.
+- Credentials and keys stay on your Mac: in `~/.swan/secrets.yaml`, readable only by your user, or
+  with your own sign-in tools. Agents, logs and the UI see stand-ins, names and fingerprints.
+- An agent can send what it reads to any website you allow. Keep each persona's list short.
+- Swan has no analytics or telemetry of its own.
+- Swan is young (version 0.x) and has not had an independent security review. How it works and what
+  it defends against: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Behind a company proxy
+
+If your network reaches the internet only through a proxy or internal mirrors (an Artifactory, for
+example), see [docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors).
+
+## Your data
+
+Everything is in `~/.swan`:
+
+| Path | What |
+|---|---|
+| `config.yaml` | Model providers, credentials (`connections`), proxy and mirrors, ports. Restart Swan after editing, except `connections`, which apply at once |
+| `secrets.yaml`, `secrets.env` | Keys and credential values (readable only by you) |
+| `personas/<id>.yaml` | Personas (also editable in Settings) |
+| `skills/` | Skills |
+| `sessions/` | Conversations |
+| `memory/` | Each persona's memory |
+| `attachments/` | Files you attached |
+| `audit/` | Every outbound request the agents made (hosts and decisions, never values), and every model request with its usage |
+| `ca/` | Swan's own certificate authority, trusted only inside the sandbox |
+| `copilot-runtime/` | Copilot's working files |
+| `connections/` | Your sign-in tools' working folders |
+| `api-token`, `server.json` | How the app talks to its server |
+
+Swan's log is at `~/Library/Logs/Swan/server.log` (Help → Show Server Log). Data from before Swan
+was renamed, in `~/.persona-harness`, is moved to `~/.swan` on first start.
+
+## Updating and uninstalling
+
+To update, download the new DMG from [Releases](https://github.com/Anefu/swan/releases) and replace
+the app; your data stays. Builds are unsigned, so macOS may ask again for access to folders such as
+Documents.
+
+To remove Swan completely:
+1. Quit Swan and delete `/Applications/Swan.app`.
+2. Delete `~/.swan`, `~/Library/Application Support/Swan` and `~/Library/Logs/Swan`.
+3. Remove Swan's Podman resources: `podman rm -f ph-relay`, `podman network rm ph-internal`, and the
+   `localhost/persona-harness-sandbox` images (`podman images`). Or remove the whole Podman machine
+   with `podman machine rm`.
+4. Revoke any tokens you created for it.
+
+## Limits
+
+- macOS on Apple silicon only for now. Intel Macs, Linux and Windows may come later.
+- Not yet signed or notarized by Apple, and no automatic updates.
+- Behind a company proxy, agents' own internet traffic doesn't go through the proxy yet.
+
+## Building from source and contributing
+
+Node 22.12 or later and pnpm 10.
 
 ```bash
 pnpm install
 pnpm start      # build and open the app
 pnpm package    # Swan.app and a DMG in apps/desktop/release
-pnpm dev        # server with auto-restart + the UI with hot reload, in the app window
+pnpm dev        # the server with auto-restart, and the UI with hot reload in the app window
+pnpm typecheck && pnpm test   # no network, Podman or API keys needed
 ```
 
-Tests (no network, Podman or API keys needed):
-
-```bash
-pnpm typecheck && pnpm test
-```
-
-## Files in `~/.swan`
-
-| Path | What |
-|---|---|
-| `config.yaml` | Ports, model providers, extra skill directories, proxy and mirrors ([docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors)) (restart to apply); `connections` (hot-reloaded) |
-| `secrets.yaml`, `secrets.env` | Secret values: model-provider keys, and static connection credentials as `connection/NAME` (hot-reloaded, mode 0600) |
-| `connections/<name>/` | A command connection's working directory: the wrapper's own state and a redacted `wrapper.log` |
-| `personas/<id>.yaml` | Personas (hot-reloaded; also editable in the UI) |
-| `skills/<name>/SKILL.md` | Skills (plus any `skillDirs`, e.g. `~/.claude/skills`) |
-| `sessions/<id>.json` | Transcripts; a stopped session resumes when you message it |
-| `audit/egress-YYYY-MM-DD.jsonl` | Every outbound request: host, path, decision, credential names (never values) |
-| `audit/usage-YYYY-MM-DD.jsonl` | Every model request: persona, purpose, tokens, estimated cost or Copilot credits |
-| `attachments/<session>/` | Uploaded attachments and their metadata |
-| `memory/<persona>.json` | Persona memory records, change history and checkpoints; never mounted into a sandbox |
-| `ca/` | Local CA used to terminate TLS for credential hosts; trusted only inside the sandbox image. `extra-roots.pem` holds `caFiles`, combined |
-| `copilot-runtime/` | Working and state directory of the Copilot SDK runtime (copilot provider only) |
-| `api-token` | Token the UI uses for the API |
-| `server.json` | The server running for this folder (pid, ports, version); one at a time |
-
-Swan used `~/.persona-harness` before; the first start moves it to `~/.swan` and leaves a link.
-
-## Connections
-
-Every credential an agent can use comes from a connection in `config.yaml`. A persona gets exactly
-the credentials its rules name, and the proxy substitutes one only into requests those rules allow.
-
-```yaml
-# config.yaml (no values here)
-connections:
-  github:
-    type: static                       # values from secrets.yaml / secrets.env
-    credentials:
-      GITHUB_TOKEN:
-        hosts: [api.github.com]
-        inject: { header: Authorization, format: "Bearer {value}" }   # optional
-  corp-aws:
-    type: command                      # a wrapper that speaks protocol v1
-    command: [~/bin/corp-swan, --role, ReadOnly]
-    hosts: ["*.amazonaws.com"]         # upper bound for every credential it returns
-```
-
-```yaml
-# secrets.yaml
-github/GITHUB_TOKEN: ghp_…
-```
-
-```yaml
-# persona
-connections:
-  github:
-    rules:
-      - { credential: GITHUB_TOKEN, api: http, allow: ["GET /**"], ask: ["POST /repos/*/*/issues"] }
-  corp-aws:
-    rules:
-      - { credential: prod-eks, api: kubernetes, allow: ["get *", "list *", "watch *"], deny: ["* secrets"] }
-      - { credential: prod-aws, api: aws, allow: ["sts:GetCallerIdentity", "s3:Get*", "logs:*"] }
-```
-
-Rule forms: `kubernetes` `<verb> <resource>[/<sub>] [in <namespace>]`; `aws` `service:Action`;
-`http` `METHOD /path` (`*` within a segment, `**` across). Deny wins over ask, ask over allow, and a
-request no rule matches goes out with the placeholder (so it fails upstream) and shows a
-"Blocked …" notice with **Add rule…**. An ask rule pauses the request on an approval card.
-
-A command connection runs on the host: `<command> status|login|renew`, `{"protocol":1,…}` on stdin,
-JSON Lines on stdout, defined by [docs/connection-protocol-v1.schema.json](docs/connection-protocol-v1.schema.json).
-Credential kinds are `bearer`, `header`, `basic` and `aws-sigv4`; files it returns (for example
-`~/.aws/credentials`, `~/.kube/config`) are written into the sandbox home with placeholders, and its
-env applies to every new shell. `tools/aws-stub` has a reference wrapper and a local AWS +
-Kubernetes stand-in to try it without an AWS account.
-
-Upgrading from the earlier format (credentials with `hosts` in the secrets files, personas with
-`credentials: [...]`) happens once on start: originals are kept as `.bak`, existing access is kept
-with `allow: ["* /**"]` rules, and Settings shows what moved.
-
-Complete, commented examples of `config.yaml`, `secrets.yaml` and a persona using every setting
-(Copilot, a company proxy, a GitHub credential under rules): [examples/reference/](examples/reference/).
-More on personas: [docs/ARCHITECTURE.md#personas-workspaces](docs/ARCHITECTURE.md#personas-workspaces).
-
-## Models
-
-`config.yaml` → `providers`. `type: anthropic` uses the Anthropic SDK. `type: openai` works with
-OpenAI or any OpenAI-compatible server: `mlx_lm.server`, Ollama, vLLM or LM Studio. A persona picks
-one with `model: { provider: local, id: <model> }`.
-
-### GitHub Copilot
-
-`type: copilot` uses your Copilot subscription through GitHub's official
-[Copilot SDK](https://github.com/github/copilot-sdk). GitHub has no public model API for
-third-party apps, and this is the supported route.
-
-1. Create a fine-grained personal access token on your **personal** account (not an org) with the
-   **Copilot Requests** account permission. Classic `ghp_` tokens are rejected.
-2. Add it under Settings → Swan → Model providers, or as `COPILOT_GITHUB_TOKEN` in
-   `secrets.yaml`. Model-provider keys are used only by the harness; they are not connections, so
-   no persona rule can name them and they never reach the sandbox.
-3. List the model ids your plan offers:
-   `curl -H "x-ph-token: $(cat ~/.swan/api-token)" http://127.0.0.1:4317/api/providers/copilot/models`
-   (the port is in `~/.swan/server.json` if 4317 was taken)
-4. Use one in a persona: `model: { provider: copilot, id: <id>, effort: high }`.
-
-How it works: the SDK runs Copilot's agent runtime on the host in `empty` mode, with no built-in
-tools, instructions, skills or MCP. The harness declares its own tools without handlers, so the
-runtime hands every tool call back. Calls then go through the persona's permission rules and run
-in the sandbox, exactly as with the other providers. Rotating the token starts a fresh runtime on
-the next turn.
-
-Limits:
-- The runtime keeps its own session state. After an interrupt, a restart or a persona change,
-  earlier turns are replayed to the model as text, so some tool-call detail is lost.
-- Output-token limits and thinking display follow Copilot's runtime, not the persona's `maxTokens`.
-- Usage is billed to your Copilot AI credits; the server log shows credits per model step.
-- To use your GitHub CLI login (`gh auth login`) instead of a token, set `useLoggedInUser: true` on the
-  provider.
-
-To test without any API key, `apps/server/scripts/fake-model.ts` is a scripted model that drives
-real tool calls (isolation checks, credential injection, approvals, skills, interrupt). Its header
-explains how to wire it up.
-
-## Layout
+- How Swan works and its threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- The desktop app, test instances and releases: [docs/DESKTOP.md](docs/DESKTOP.md)
+- Conventions and the security rules every change keeps: [AGENTS.md](AGENTS.md)
+- To try Swan without an API key, `apps/server/scripts/fake-model.ts` is a scripted model; its
+  header explains how to use it.
 
 ```
-apps/server     Node harness: agent loop, providers, MCP, sandbox runtime, egress proxy, API
-apps/desktop    The macOS app: Electron main process (main/) and the React UI (ui/)
-packages/shared Wire protocol types shared by both
-packages/aws-sigv4  AWS Signature V4 signing and verification
-tools/aws-stub  Local AWS + Kubernetes stand-in and a reference connection wrapper (see its README)
-sandbox/        Containerfile for the session image
-examples/       Seed personas, skills, secrets template, demo workspace
+apps/server       The server: agent loop, model providers, MCP, sandbox, egress proxy, API
+apps/desktop      The Mac app: Electron (main/) and the React UI (ui/)
+packages/shared   Types shared by the server and the app
+packages/aws-sigv4  AWS request signing
+tools/aws-stub    A local AWS and Kubernetes stand-in for testing sign-in tools
+sandbox/          The sandbox image
+examples/         Example personas, skills and a complete reference configuration
 ```

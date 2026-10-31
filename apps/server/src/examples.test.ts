@@ -38,8 +38,8 @@ describe("reference examples", () => {
     for (const ref of refs) expect(credentialsOf(ref.connection!), `${ref.connection}/${ref.name}`).toContain(ref.name);
   });
 
-  it("secrets.yaml names only provider keys and the connections' credentials", () => {
-    const secrets = load("reference/secrets.yaml") as Record<string, string>;
+  it("secrets.example.yaml names only provider keys and the connections' credentials", () => {
+    const secrets = load("reference/secrets.example.yaml") as Record<string, string>;
     const providerKeys = Object.values(config.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : []));
     for (const [key, value] of Object.entries(secrets)) {
       expect(key).toMatch(SECRET_KEY);

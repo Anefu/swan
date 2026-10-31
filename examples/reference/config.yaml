@@ -1,7 +1,7 @@
 # A complete ~/.swan/config.yaml for a work laptop: GitHub Copilot as the model, a company proxy and
 # an Artifactory image mirror, and a GitHub credential agents may use under rules.
 # Restart Swan after editing (connections apply immediately). Secret values never go in this file:
-# they live in secrets.yaml (see secrets.yaml next to this file).
+# they live in secrets.yaml (see secrets.example.yaml next to this file).
 
 port: 4317          # Swan's API, on 127.0.0.1 only (the app takes a free port if this one is taken)
 proxyPort: 4318     # the egress proxy the sandbox reaches through the relay
