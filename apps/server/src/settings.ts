@@ -7,7 +7,13 @@ import { exists, expandHome, writeFileAtomic } from "./util.js";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-export const PH_HOME = path.resolve(expandHome(process.env.PH_HOME ?? "~/.persona-harness"));
+// Swan's home was ~/.persona-harness; the default one moves to ~/.swan on first start (home.ts).
+export const HOME_FROM_ENV = !!process.env.PH_HOME;
+export const PH_HOME = path.resolve(expandHome(process.env.PH_HOME ?? "~/.swan"));
+export const LEGACY_HOME = path.resolve(expandHome("~/.persona-harness"));
+
+// The desktop app ships the web build, Containerfile and examples outside the repository layout.
+const RESOURCES = process.env.PH_RESOURCES ? path.resolve(process.env.PH_RESOURCES) : null;
 
 export const paths = {
   home: PH_HOME,
@@ -25,9 +31,10 @@ export const paths = {
   connections: path.join(PH_HOME, "connections"), // per-connection wrapper state and logs
   migrationNote: path.join(PH_HOME, "connections-migration.json"),
   apiToken: path.join(PH_HOME, "api-token"),
-  webDist: path.join(REPO_ROOT, "apps/web/dist"),
-  containerfile: path.join(REPO_ROOT, "sandbox/Containerfile"),
-  examples: path.join(REPO_ROOT, "examples"),
+  serverLock: path.join(PH_HOME, "server.json"), // the server running for this home
+  webDist: RESOURCES ? path.join(RESOURCES, "web") : path.join(REPO_ROOT, "apps/web/dist"),
+  containerfile: path.join(RESOURCES ?? REPO_ROOT, "sandbox/Containerfile"),
+  examples: path.join(RESOURCES ?? REPO_ROOT, "examples"),
 };
 
 const ProviderSchema = z.object({
@@ -74,7 +81,7 @@ const SettingsSchema = z.object({
 export type Settings = z.infer<typeof SettingsSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
 
-const DEFAULT_CONFIG = `# persona-harness settings. Restart the server after editing this file
+const DEFAULT_CONFIG = `# Swan settings. Restart the server after editing this file
 # (except connections, which apply immediately).
 port: 4317          # web UI + API (127.0.0.1 only)
 proxyPort: 4318     # egress proxy the sandbox reaches through the relay

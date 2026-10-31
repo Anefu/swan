@@ -61,6 +61,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
       proxyPort: settings.proxyPort,
       busy: null,
       errors: [],
+      needs: null,
     };
   }
 
@@ -124,15 +125,31 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     return r.stdout.trim();
   }
 
-  /** Bring up network, image and relay. Safe to call repeatedly. */
-  async init(): Promise<void> {
+  private initializing: Promise<void> | null = null;
+
+  /** Bring up network, image and relay. Safe to call repeatedly; concurrent calls share one run. */
+  init(): Promise<void> {
+    this.initializing ??= this.bringUp().finally(() => (this.initializing = null));
+    return this.initializing;
+  }
+
+  private async bringUp(): Promise<void> {
     const errors: string[] = [];
+    this.update({ needs: null });
     try {
       const v = await this.run(["version", "--format", "{{.Client.Version}}"], { timeoutMs: 15_000 });
+      if (v.code === 127) {
+        this.update({ available: false, needs: "install" });
+        throw new Error("Podman is not installed. Install it with `brew install podman` or Podman Desktop, then check again.");
+      }
       if (v.code !== 0) throw new Error((v.stderr || "podman not found").trim());
       this.update({ version: v.stdout.trim() });
       let info = await this.run(["info", "--format", "{{.Host.OS}}"], { timeoutMs: 30_000 });
       if (info.code !== 0) {
+        if (process.platform !== "linux" && !(await this.hasMachine())) {
+          this.update({ available: false, needs: "machine" });
+          throw new Error("Podman has no machine yet. Set it up to run sandboxes (a one-time download of about 1 GB).");
+        }
         log.info("runtime", "podman machine not reachable, trying `podman machine start`");
         this.update({ busy: "starting podman machine" });
         await this.run(["machine", "start"], { timeoutMs: 180_000 });
@@ -152,6 +169,29 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     } finally {
       this.update({ busy: null, errors });
     }
+  }
+
+  private async hasMachine(): Promise<boolean> {
+    const r = await this.run(["machine", "list", "--format", "{{.Name}}"], { timeoutMs: 15_000 });
+    return r.code !== 0 || r.stdout.trim() !== ""; // unknown counts as present, so start is still tried
+  }
+
+  /** Create the default Podman machine (only on the user's request: it downloads a VM image), then bring everything up. */
+  setupMachine(): Promise<void> {
+    this.initializing ??= (async () => {
+      if (!(await this.hasMachine())) {
+        this.update({ busy: "setting up Podman (a one-time download of about 1 GB)", errors: [] });
+        const r = await this.run(["machine", "init"], { timeoutMs: 20 * 60_000 });
+        if (r.code !== 0) {
+          const msg = `podman machine init failed: ${(r.stderr || r.stdout).trim().slice(-800)}`;
+          log.error("runtime", msg);
+          this.update({ busy: null, errors: [msg] });
+          return;
+        }
+      }
+      await this.bringUp();
+    })().finally(() => (this.initializing = null));
+    return this.initializing;
   }
 
   private async ensureNetwork() {

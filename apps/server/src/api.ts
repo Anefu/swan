@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { promises as fs, realpathSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -120,6 +121,14 @@ export async function startApi(d: ApiDeps, hub: Hub) {
 
   // ----- runtime / providers -----
   app.get("/api/runtime", async () => d.runtime.status);
+  app.post("/api/runtime/retry", async () => {
+    void d.runtime.init();
+    return d.runtime.status;
+  });
+  app.post("/api/runtime/setup", async () => {
+    void d.runtime.setupMachine();
+    return d.runtime.status;
+  });
   app.post("/api/runtime/rebuild", async () => {
     void d.runtime.rebuild();
     return d.runtime.status;
@@ -440,7 +449,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     if (!(await exists(index)))
       return reply
         .type("text/html")
-        .send(`<!doctype html><title>persona-harness</title><p style="font-family:system-ui;padding:2rem">The web UI is not built. Run <code>pnpm build</code>, or use <code>pnpm dev</code> and open <a href="http://localhost:5173">localhost:5173</a>.</p>`);
+        .send(`<!doctype html><title>Swan</title><p style="font-family:system-ui;padding:2rem">The web UI is not built. Run <code>pnpm build</code>, or use <code>pnpm dev</code> and open <a href="http://localhost:5173">localhost:5173</a>.</p>`);
     const html = (await fs.readFile(index, "utf8")).replace("__PH_TOKEN__", d.token);
     return reply.type("text/html").header("cache-control", "no-store").send(html);
   };
@@ -455,7 +464,8 @@ export async function startApi(d: ApiDeps, hub: Hub) {
   });
 
   await app.listen({ host: "127.0.0.1", port: d.settings.port });
-  log.info("api", `UI and API on http://127.0.0.1:${d.settings.port}`);
-  return app;
+  const port = (app.server.address() as AddressInfo).port;
+  log.info("api", `UI and API on http://127.0.0.1:${port}`);
+  return { app, port };
 }
 

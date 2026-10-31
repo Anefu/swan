@@ -139,6 +139,8 @@ export type ConnectionAction = "login" | "renew" | "cancel" | "logout";
 export const api = {
   runtime: () => request<RuntimeStatus>("GET", "/api/runtime"),
   rebuildRuntime: () => request<RuntimeStatus>("POST", "/api/runtime/rebuild"),
+  retryRuntime: () => request<RuntimeStatus>("POST", "/api/runtime/retry"),
+  setupRuntime: () => request<RuntimeStatus>("POST", "/api/runtime/setup"),
   providers: () => request<ProviderStatus[]>("GET", "/api/providers"),
 
   personas: () => request<PersonaSummary[]>("GET", "/api/personas"),

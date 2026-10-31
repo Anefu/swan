@@ -1,7 +1,44 @@
 import { useStore } from "../store";
+import { runtimeLevel } from "../util";
+import { PodmanActions, PodmanNeedText } from "./Banners";
 import { IconCheck } from "./icons";
+import { Spinner } from "./ui";
 
-/** One empty-state card: create a persona, add a model key. */
+/** Podman is a prerequisite: agents' tools run in its sandbox. */
+function PodmanStep() {
+  const { state } = useStore();
+  const r = state.runtime;
+  const ready = runtimeLevel(r) === "ok";
+  return (
+    <li>
+      <span className="step-text">
+        <strong>Set up Podman</strong>
+        <span className="muted small">
+          {ready ? (
+            "Sandboxes are ready."
+          ) : r?.busy ? (
+            <>
+              <Spinner size={10} /> {r.busy}…
+            </>
+          ) : r?.needs ? (
+            <PodmanNeedText needs={r.needs} />
+          ) : (
+            (r?.errors[0] ?? "Checking Podman…")
+          )}
+        </span>
+      </span>
+      {ready ? (
+        <span className="status-text tone-muted">
+          <IconCheck /> Done
+        </span>
+      ) : r?.needs && !r.busy ? (
+        <PodmanActions needs={r.needs} />
+      ) : null}
+    </li>
+  );
+}
+
+/** One empty-state card: set up Podman, add a model key, create a persona. */
 export function FirstRun() {
   const { state, actions } = useStore();
   const keyReady = state.providers.some((p) => p.ready);
@@ -14,6 +51,7 @@ export function FirstRun() {
           secret.
         </p>
         <ol className="first-steps">
+          <PodmanStep />
           <li>
             <span className="step-text">
               <strong>Add a model key</strong>

@@ -576,6 +576,8 @@ export interface Actions {
   connectionAction(conn: string, action: ConnectionAction): Promise<boolean>;
   dismissMigration(): Promise<void>;
   rebuildRuntime(): Promise<void>;
+  /** "retry" checks Podman again; "setup" creates its machine. */
+  prepareRuntime(kind: "retry" | "setup"): Promise<void>;
 }
 
 interface Store {
@@ -935,6 +937,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           dispatch({ type: "runtime", runtime: await api.rebuildRuntime() });
         } catch (e) {
           reportError(e, "Rebuild failed");
+        }
+      },
+      prepareRuntime: async (kind) => {
+        try {
+          dispatch({ type: "runtime", runtime: await (kind === "setup" ? api.setupRuntime() : api.retryRuntime()) });
+        } catch (e) {
+          reportError(e, kind === "setup" ? "Could not set up Podman" : "Could not check Podman");
         }
       },
     };

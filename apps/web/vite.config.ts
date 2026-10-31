@@ -9,7 +9,7 @@ const API_TARGET = process.env.PH_SERVER_URL?.trim() || "http://127.0.0.1:4317";
 
 function phHome(): string {
   const env = process.env.PH_HOME?.trim();
-  if (!env) return join(homedir(), ".persona-harness");
+  if (!env) return join(homedir(), ".swan");
   if (env === "~" || env.startsWith("~/")) return join(homedir(), env.slice(1));
   return env;
 }

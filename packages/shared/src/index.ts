@@ -291,6 +291,8 @@ export interface RuntimeStatus {
   proxyPort: number;
   busy: string | null; // e.g. "building sandbox image"
   errors: string[];
+  // What the user has to do first: install Podman, or create its machine (POST /api/runtime/setup).
+  needs: "install" | "machine" | null;
 }
 
 export interface ProviderStatus {
@@ -324,6 +326,8 @@ export interface ProviderModel {
 //
 // GET    /api/runtime                         -> RuntimeStatus
 // POST   /api/runtime/rebuild                 -> RuntimeStatus   (rebuild sandbox image)
+// POST   /api/runtime/retry                   -> RuntimeStatus   (check Podman again and bring the sandbox up)
+// POST   /api/runtime/setup                   -> RuntimeStatus   (create and start the Podman machine)
 // GET    /api/providers                       -> ProviderStatus[]
 // GET    /api/providers/:name/models          -> ProviderModel[] (copilot providers)
 // GET    /api/personas                        -> PersonaSummary[]
@@ -556,3 +560,12 @@ export interface ProviderAllowance {
   usagePage?: string;
   observedAt: string;
 }
+
+// ---------- Launcher ----------
+// When a launcher (the desktop app) starts the server with an IPC channel, the server reports
+// over it and shuts down when the channel closes.
+
+export type LauncherMessage =
+  | { type: "ready"; url: string; port: number; proxyPort: number; home: string; version: string }
+  | { type: "home-in-use"; home: string; url: string | null; pid: number | null }
+  | { type: "fatal"; message: string };

@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs";
+import type { LauncherMessage } from "@ph/shared";
 import { ProviderRegistry } from "./agent/providers.js";
 import { SessionManager } from "./agent/session.js";
 import { Hub, startApi } from "./api.js";
 import { AttachmentStore } from "./attachments.js";
 import { ConnectionManager } from "./connections/manager.js";
+import { HomeInUseError, HomeLock, choosePort, moveLegacyHome } from "./home.js";
 import { migrateConnections } from "./connections/migrate.js";
 import { ModelCatalog } from "./catalog.js";
 import { MemoryStore } from "./memory.js";
@@ -13,7 +15,7 @@ import { CertAuthority } from "./proxy/ca.js";
 import { EgressProxy } from "./proxy/egress.js";
 import { PodmanRuntime } from "./sandbox/podman.js";
 import { SecretStore } from "./secrets.js";
-import { ensureHome, loadSettings, paths } from "./settings.js";
+import { HOME_FROM_ENV, LEGACY_HOME, ensureHome, loadSettings, paths } from "./settings.js";
 import { SkillRegistry } from "./skills.js";
 import { debounce, errMsg, exists, log, randomId, writeFileAtomic } from "./util.js";
 
@@ -27,10 +29,24 @@ async function apiToken(): Promise<string> {
   return t;
 }
 
+const VERSION = process.env.SWAN_VERSION ?? "dev";
+
+// Only when a launcher (the desktop app) started the server with an IPC channel.
+const tellLauncher = (msg: LauncherMessage) =>
+  new Promise<void>((resolve) => {
+    if (!process.send || !process.connected) return resolve();
+    process.send(msg, undefined, {}, () => resolve());
+  });
+
 async function main() {
+  if (!HOME_FROM_ENV) await moveLegacyHome(LEGACY_HOME, paths.home);
   await ensureHome();
   const settings = await loadSettings();
   const token = await apiToken();
+  const lock = await HomeLock.claim({ home: paths.home, file: paths.serverLock, token, configPort: settings.port, version: VERSION });
+  process.on("exit", () => lock.releaseSync());
+  // The app asks for this: a taken port should not stop Swan from starting.
+  const portFallback = process.env.PH_PORT_FALLBACK === "1";
 
   // Model-provider keys stay host-side secrets; everything else becomes a connection once.
   const providerKeys = new Set(Object.values(settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
@@ -54,7 +70,7 @@ async function main() {
 
   const ca = await CertAuthority.load();
   const proxy = new EgressProxy(connections, ca);
-  await proxy.listen(settings.proxyPort);
+  settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));
 
   const runtime = new PodmanRuntime(settings, ca);
   const providers = new ProviderRegistry(settings, secrets);
@@ -96,8 +112,11 @@ async function main() {
   runtime.on("status", (s) => hub.broadcast({ type: "runtime.status", runtime: s }));
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
-  await startApi({ settings, token, secrets, connections, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
+  settings.port = await choosePort(settings.port, portFallback);
+  const { port } = await startApi({ settings, token, secrets, connections, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
+  await lock.update({ port, proxyPort: settings.proxyPort });
   log.info("main", `harness home: ${paths.home}`);
+  void tellLauncher({ type: "ready", url: `http://127.0.0.1:${port}/`, port, proxyPort: settings.proxyPort, home: paths.home, version: VERSION });
 
   void runtime.init().then(() => runtime.removeOrphans());
 
@@ -112,9 +131,13 @@ async function main() {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // The launcher went away (quit or crashed): do not outlive it.
+  process.on("disconnect", shutdown);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   log.error("main", errMsg(e));
-  process.exit(1);
+  if (e instanceof HomeInUseError) await tellLauncher({ type: "home-in-use", home: e.home, url: e.url, pid: e.pid });
+  else await tellLauncher({ type: "fatal", message: errMsg(e) });
+  process.exit(e instanceof HomeInUseError ? 3 : 1);
 });

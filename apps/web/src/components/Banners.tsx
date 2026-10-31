@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import type { RuntimeStatus } from "@ph/shared";
 import { useStore } from "../store";
 import { cls, runtimeLevel, runtimeProblems } from "../util";
 import { IconAlert, IconCheck, IconInfo, IconUnplug, IconWarning, IconX } from "./icons";
-import { Spinner } from "./ui";
+import { CopyButton, Spinner } from "./ui";
 
 function useCountdown(target: number | null): number | null {
   const [now, setNow] = useState(() => Date.now());
@@ -35,11 +36,56 @@ export function ConnectionLine() {
   );
 }
 
+type PodmanNeed = NonNullable<RuntimeStatus["needs"]>;
+
+export function PodmanNeedText({ needs }: { needs: PodmanNeed }) {
+  return needs === "install" ? (
+    <>
+      Podman is not installed. Install it with <code>brew install podman</code> or{" "}
+      <a href="https://podman-desktop.io" target="_blank" rel="noopener noreferrer">
+        Podman Desktop
+      </a>
+      , then check again.
+    </>
+  ) : (
+    <>Podman has no machine yet. Setting one up downloads about 1 GB, once.</>
+  );
+}
+
+export function PodmanActions({ needs }: { needs: PodmanNeed }) {
+  const { actions } = useStore();
+  return needs === "install" ? (
+    <>
+      <CopyButton text="brew install podman" label="Copy command" showLabel />
+      <button type="button" className="btn sm" onClick={() => void actions.prepareRuntime("retry")}>
+        Check again
+      </button>
+    </>
+  ) : (
+    <button type="button" className="btn sm primary" onClick={() => void actions.prepareRuntime("setup")}>
+      Set up Podman
+    </button>
+  );
+}
+
 export function RuntimeLine() {
   const { state, actions } = useStore();
   const r = state.runtime;
   const level = runtimeLevel(r);
   if (!r || level === "ok" || level === "unknown") return null;
+  if (r.needs && !r.busy) {
+    // Before the first persona, the first-run card shows this as its first step.
+    if (state.personas.length === 0) return null;
+    return (
+      <div className="line-banner warn" role="status">
+        <IconWarning size={16} />
+        <span>
+          <PodmanNeedText needs={r.needs} />
+        </span>
+        <PodmanActions needs={r.needs} />
+      </div>
+    );
+  }
   const text = r.busy
     ? `Sandbox: ${r.busy}…`
     : !r.available
@@ -68,7 +114,7 @@ export function ServerGate() {
       <>
         <p>
           The page has no API token. Start the server (for example <code>pnpm dev</code> at the repository root); it writes{" "}
-          <code>~/.persona-harness/api-token</code>.
+          <code>~/.swan/api-token</code>.
         </p>
         <p className="muted">
           <Spinner size={10} /> Waiting for the server. This page reloads by itself.
