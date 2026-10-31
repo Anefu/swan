@@ -31,6 +31,7 @@ export const paths = {
   connections: path.join(PH_HOME, "connections"), // per-connection wrapper state and logs
   migrationNote: path.join(PH_HOME, "connections-migration.json"),
   apiToken: path.join(PH_HOME, "api-token"),
+  extraCa: path.join(PH_HOME, "ca", "extra-roots.pem"), // caFiles combined, for programs Swan starts
   serverLock: path.join(PH_HOME, "server.json"), // the server running for this home
   containerfile: path.join(RESOURCES ?? REPO_ROOT, "sandbox/Containerfile"),
   examples: path.join(RESOURCES ?? REPO_ROOT, "examples"),
@@ -44,7 +45,11 @@ const ProviderSchema = z.object({
   useLoggedInUser: z.boolean().optional(),
 });
 
-const SettingsSchema = z.object({
+// URLs and image references end up in the sandbox image's setup script: nothing that could break out of it.
+const HttpUrl = z.string().regex(/^https?:\/\/[^\s'"#\\`$]+$/, "expected an http(s) URL without spaces, quotes, # or $");
+const ImageRef = z.string().regex(/^[a-z0-9][a-z0-9._\-/:@]*$/i, "expected an image reference such as registry.example.com/library/node:22-bookworm-slim");
+
+export const SettingsSchema = z.object({
   port: z.number().int().default(4317),
   proxyPort: z.number().int().default(4318),
   runtime: z
@@ -67,6 +72,22 @@ const SettingsSchema = z.object({
     .object({ provider: z.string(), id: z.string() })
     .default({ provider: "anthropic", id: "claude-opus-5-5" }),
   skillDirs: z.array(z.string()).default([]), // extra skill roots, e.g. ~/.claude/skills
+  // For networks that reach the internet only through a proxy and internal mirrors.
+  proxy: z
+    .object({
+      url: HttpUrl, // model calls, http MCP servers, the Copilot runtime and connection wrappers use it
+      noProxy: z.array(z.string().regex(/^[^\s,]+$/, "expected a host or .domain")).default([]), // reached directly; localhost always is
+    })
+    .optional(),
+  caFiles: z.array(z.string()).default([]), // extra root certificates (PEM), trusted by Swan and inside the sandbox
+  mirrors: z
+    .object({
+      baseImage: ImageRef.optional(), // instead of docker.io/library/node:22-bookworm-slim
+      apt: z.record(HttpUrl, HttpUrl).default({}), // Debian source URL -> mirror URL
+      pypi: HttpUrl.optional(), // pip and uv index
+      npm: HttpUrl.optional(), // npm registry
+    })
+    .prefault({}),
   connections: z.unknown().optional(), // validated and hot-reloaded by the ConnectionManager
   toolOutputLimit: z.number().int().default(30_000),
   bashTimeoutMs: z.number().int().default(120_000),
@@ -95,6 +116,16 @@ providers:
 defaultModel: { provider: anthropic, id: claude-opus-5-5 }
 # Extra directories to load skills from (each child dir with a SKILL.md is a skill)
 skillDirs: []
+# Behind a proxy or internal mirrors (e.g. an Artifactory), uncomment and adjust:
+# proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }
+# caFiles: [~/certs/company-root.pem]
+# mirrors:
+#   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
+#   apt:
+#     http://deb.debian.org/debian: https://artifactory.example.com/artifactory/debian-remote
+#     http://deb.debian.org/debian-security: https://artifactory.example.com/artifactory/debian-security-remote
+#   pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
+#   npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
 # Where agents' credentials come from. Values live in secrets.yaml as connection/NAME.
 connections:
   github:

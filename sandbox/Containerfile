@@ -1,13 +1,18 @@
-# Sandbox image for persona-harness sessions (and the relay).
+# Sandbox image for Swan sessions (and the relay).
 # Built by the harness with its local egress CA baked in; the tag includes the CA fingerprint.
-FROM docker.io/library/node:22-bookworm-slim
+# config.yaml can set the base image, package mirrors and extra root certificates (mirrors,
+# caFiles): swan/setup.sh applies them before the first download. By default it does nothing.
+ARG BASE_IMAGE=docker.io/library/node:22-bookworm-slim
+FROM ${BASE_IMAGE}
 
-RUN apt-get update \
+COPY swan/ /tmp/swan/
+RUN sh /tmp/swan/setup.sh \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
       bash ca-certificates curl file git jq less openssh-client procps python3 python3-pip \
       python3-venv ripgrep socat tree unzip xz-utils \
- && rm -rf /var/lib/apt/lists/* \
- && python3 -m pip install --no-cache-dir --break-system-packages uv \
+ && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/90swan-bootstrap-ca /tmp/swan \
+ && python3 -m pip install --no-cache-dir --break-system-packages --cert /etc/ssl/certs/ca-certificates.crt uv \
  && git config --system safe.directory '*' \
  && git config --system init.defaultBranch main
 
@@ -19,7 +24,8 @@ RUN update-ca-certificates
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
  && mkdir -p /workspace /skills && chown agent:agent /workspace
 
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/persona-harness.crt \
+# The whole bundle: the harness CA plus any extra roots from caFiles.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \

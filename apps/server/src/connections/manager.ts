@@ -5,6 +5,7 @@ import YAML from "yaml";
 import type { ConnectionCredentialStatus, ConnectionState, ConnectionStatus, CredentialKind, CredentialUpsert, DeviceCode } from "@ph/shared";
 import type { SecretStore } from "../secrets.js";
 import { paths, type Settings } from "../settings.js";
+import { networkEnv } from "../network.js";
 import { TypedEmitter, debounce, errMsg, exists, log, nowIso, sha256Hex, writeFileAtomic } from "../util.js";
 import {
   CONNECTION_NAME,
@@ -391,7 +392,7 @@ export class ConnectionManager extends TypedEmitter<Events> {
     const drop = new Set<string>(["PH_HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "COPILOT_GITHUB_TOKEN"]);
     for (const p of Object.values(this.settings.providers)) if (p.apiKeySecret) drop.add(p.apiKeySecret);
     for (const e of this.secrets.all()) drop.add(e.name);
-    return Object.fromEntries(Object.entries(process.env).filter(([k]) => !drop.has(k)));
+    return { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !drop.has(k))), ...networkEnv() };
   }
 
   private async invoke(conn: string, verb: Verb, signal: AbortSignal): Promise<ConnectionState> {

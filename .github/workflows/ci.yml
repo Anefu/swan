@@ -42,8 +42,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build with a throwaway CA
         run: |
-          mkdir -p /tmp/ctx
+          mkdir -p /tmp/ctx/swan/ca
           cp sandbox/Containerfile /tmp/ctx/Containerfile
+          # What Swan writes with no mirrors or extra CAs configured.
+          printf '#!/bin/sh\nset -eu\n' > /tmp/ctx/swan/setup.sh
+          : > /tmp/ctx/swan/extra-ca.pem
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=ci" -keyout /tmp/ctx/ca.key -out /tmp/ctx/harness-ca.crt
           podman build -t ph-sandbox-ci /tmp/ctx
       - name: Runs as the unprivileged agent user with no network

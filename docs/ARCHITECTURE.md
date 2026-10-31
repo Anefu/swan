@@ -179,6 +179,16 @@ Copilot's own agent runtime. To keep the harness in charge of the loop:
 - Model-provider keys are plain secrets, not connections, so no persona rule can name them and the
   egress proxy can never inject them into sandbox traffic.
 
+## Proxies and mirrors
+
+`config.yaml` can name an upstream `proxy`, extra root certificates (`caFiles`) and `mirrors` for
+the sandbox image. The server's own HTTP clients (fetch: model providers, http MCP servers) use the
+proxy through a process-wide dispatcher and trust the extra roots; the Copilot runtime and
+connection wrappers get the same settings as `HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS`. The
+sandbox image is built from `mirrors.baseImage`, a generated setup script points apt, pip, uv and
+npm at the mirrors, and the extra roots join the image's CA bundle. The egress proxy does not chain
+to the upstream proxy yet, and keeps refusing private addresses.
+
 ## Harness API hardening
 
 - Binds 127.0.0.1 only; rejects requests whose Host is not localhost/127.0.0.1 (DNS rebinding) and

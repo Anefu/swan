@@ -16,6 +16,35 @@ offers to create one (a one-time download of about 1 GB); a stopped machine is s
 When a persona uses folders in Documents, Desktop or Downloads, macOS asks once whether Swan may
 access them. An unsigned build is a new app to macOS each time, so it asks again after an update.
 
+## Behind a proxy or internal mirrors
+
+On a network that reaches the internet only through a proxy and internal mirrors (an Artifactory,
+for example), tell Swan in `~/.swan/config.yaml` and restart it:
+
+```yaml
+proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }
+caFiles: [~/certs/company-root.pem]
+mirrors:
+  baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
+  apt:
+    http://deb.debian.org/debian: https://artifactory.example.com/artifactory/debian-remote
+    http://deb.debian.org/debian-security: https://artifactory.example.com/artifactory/debian-security-remote
+  pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
+  npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
+```
+
+- `proxy`: model calls, http MCP servers, the Copilot runtime and connection wrappers go through it;
+  `noProxy` hosts (and always localhost) are reached directly.
+- `caFiles`: extra root certificates (PEM), for a proxy that inspects HTTPS or mirrors with an
+  internal certificate. Swan trusts them, and so does everything inside the sandbox.
+- `mirrors`: the sandbox image is built from `baseImage` with Debian packages from the `apt`
+  mirrors (each maps a Debian source URL to its mirror), and pip, uv and npm inside the sandbox use
+  `pypi` and `npm`. If the registry needs a login, run `podman login` for it first. Changing any of
+  these builds a new image on the next start.
+
+Not yet: agents' own internet traffic does not go through `proxy`, and Swan's egress proxy refuses
+internal addresses, so an agent cannot reach a mirror that resolves to one.
+
 ## Build and run from a checkout
 
 ```bash

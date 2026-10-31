@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FolderMount, RuntimeStatus } from "@ph/shared";
 import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
+import { buildArgs, buildFiles, buildKey } from "./image.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
 
 export interface RunResult {
@@ -44,9 +45,12 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   status: RuntimeStatus;
   private rt: Settings["runtime"];
 
+  private buildKey: string | null = null; // set by ensureImage when mirrors or extra CAs are configured
+
   constructor(
     private settings: Settings,
     private ca: CertAuthority,
+    private extraCas: string[] = [],
   ) {
     super();
     this.rt = settings.runtime;
@@ -66,7 +70,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   }
 
   get imageTag() {
-    return `${this.rt.image}:ca-${this.ca.fingerprint}`;
+    return `${this.rt.image}:ca-${this.ca.fingerprint}${this.buildKey ? `-${this.buildKey}` : ""}`;
   }
 
   private update(patch: Partial<RuntimeStatus>) {
@@ -206,22 +210,31 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   }
 
   async ensureImage(force = false): Promise<void> {
+    const containerfile = await fs.readFile(paths.containerfile, "utf8");
+    const mirrors = this.settings.mirrors;
+    const files = buildFiles(mirrors, this.extraCas);
+    this.buildKey = buildKey(containerfile, mirrors, files);
     if (!force && (await this.run(["image", "exists", this.imageTag])).code === 0) return;
     this.update({ busy: "building sandbox image (first run takes a few minutes)", imageReady: false });
     const ctx = path.join(paths.build, "sandbox");
     await fs.rm(ctx, { recursive: true, force: true });
-    await fs.mkdir(ctx, { recursive: true });
-    await fs.copyFile(paths.containerfile, path.join(ctx, "Containerfile"));
+    await fs.mkdir(path.join(ctx, "swan", "ca"), { recursive: true });
+    await fs.writeFile(path.join(ctx, "Containerfile"), containerfile);
     await fs.writeFile(path.join(ctx, "harness-ca.crt"), this.ca.certPem);
-    log.info("runtime", `building ${this.imageTag}`);
-    const r = await this.run(["build", "-t", this.imageTag, "-f", path.join(ctx, "Containerfile"), ctx], {
+    for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(ctx, name), content);
+    log.info("runtime", `building ${this.imageTag}${mirrors.baseImage ? ` from ${mirrors.baseImage}` : ""}`);
+    const r = await this.run(["build", ...buildArgs(mirrors), "-t", this.imageTag, "-f", path.join(ctx, "Containerfile"), ctx], {
       timeoutMs: 20 * 60_000,
       onStdout: (s) => {
         const line = s.trim().split("\n").pop();
         if (line?.startsWith("STEP")) this.update({ busy: `building sandbox image: ${line.slice(0, 80)}` });
       },
     });
-    if (r.code !== 0) throw new Error(`image build failed: ${(r.stderr || r.stdout).trim().slice(-1500)}`);
+    if (r.code !== 0) {
+      // The failing command's own output (apt's "Could not connect…") is on stdout; Podman's summary on stderr.
+      const tail = r.stdout.trim().split("\n").slice(-15).join("\n");
+      throw new Error(`image build failed: ${r.stderr.trim().slice(-600)}\n${tail.slice(-1500)}`);
+    }
     log.info("runtime", "sandbox image ready");
   }
 

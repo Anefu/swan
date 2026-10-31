@@ -60,7 +60,7 @@ pnpm typecheck && pnpm test
 
 | Path | What |
 |---|---|
-| `config.yaml` | Ports, model providers, extra skill directories (restart to apply); `connections` (hot-reloaded) |
+| `config.yaml` | Ports, model providers, extra skill directories, proxy and mirrors ([docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors)) (restart to apply); `connections` (hot-reloaded) |
 | `secrets.yaml`, `secrets.env` | Secret values: model-provider keys, and static connection credentials as `connection/NAME` (hot-reloaded, mode 0600) |
 | `connections/<name>/` | A command connection's working directory: the wrapper's own state and a redacted `wrapper.log` |
 | `personas/<id>.yaml` | Personas (hot-reloaded; also editable in the UI) |
@@ -70,7 +70,7 @@ pnpm typecheck && pnpm test
 | `audit/usage-YYYY-MM-DD.jsonl` | Every model request: persona, purpose, tokens, estimated cost or Copilot credits |
 | `attachments/<session>/` | Uploaded attachments and their metadata |
 | `memory/<persona>.json` | Persona memory records, change history and checkpoints; never mounted into a sandbox |
-| `ca/` | Local CA used to terminate TLS for credential hosts; trusted only inside the sandbox image |
+| `ca/` | Local CA used to terminate TLS for credential hosts; trusted only inside the sandbox image. `extra-roots.pem` holds `caFiles`, combined |
 | `copilot-runtime/` | Working and state directory of the Copilot SDK runtime (copilot provider only) |
 | `api-token` | Token the UI uses for the API |
 | `server.json` | The server running for this folder (pid, ports, version); one at a time |

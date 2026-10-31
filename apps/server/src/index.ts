@@ -6,6 +6,7 @@ import { Hub, startApi } from "./api.js";
 import { AttachmentStore } from "./attachments.js";
 import { ConnectionManager } from "./connections/manager.js";
 import { HomeInUseError, HomeLock, choosePort, moveLegacyHome } from "./home.js";
+import { applyNetwork, loadExtraCas } from "./network.js";
 import { migrateConnections } from "./connections/migrate.js";
 import { ModelCatalog } from "./catalog.js";
 import { MemoryStore } from "./memory.js";
@@ -47,6 +48,8 @@ async function main() {
   process.on("exit", () => lock.releaseSync());
   // The app asks for this: a taken port should not stop Swan from starting.
   const portFallback = process.env.PH_PORT_FALLBACK === "1";
+  const extraCas = await loadExtraCas(settings.caFiles);
+  await applyNetwork(settings, extraCas, paths.extraCa);
 
   // Model-provider keys stay host-side secrets; everything else becomes a connection once.
   const providerKeys = new Set(Object.values(settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
@@ -72,7 +75,7 @@ async function main() {
   const proxy = new EgressProxy(connections, ca);
   settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));
 
-  const runtime = new PodmanRuntime(settings, ca);
+  const runtime = new PodmanRuntime(settings, ca, extraCas);
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
   const memory = new MemoryStore();

@@ -3,6 +3,7 @@ import path from "node:path";
 import { CopilotClient, type CopilotSession, type ModelInfo, type PermissionHandler, type SessionEvent } from "@github/copilot-sdk";
 import type { Effort, ProviderModel, Usage } from "@ph/shared";
 import { paths, type ProviderConfig } from "../settings.js";
+import { networkEnv } from "../network.js";
 import { errMsg, log, randomId, sha256Hex } from "../util.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ToolUse, type TurnCallbacks, type TurnRequest, type TurnResult } from "./providers.js";
 
@@ -76,6 +77,8 @@ const NETWORK_ENV = [
   "no_proxy",
   "all_proxy",
   "NODE_EXTRA_CA_CERTS",
+  "NODE_USE_SYSTEM_CA",
+  "NODE_USE_ENV_PROXY",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "CURL_CA_BUNDLE",
@@ -92,6 +95,7 @@ function runtimeEnv(): Record<string, string> {
     const v = process.env[k];
     if (v !== undefined) env[k] = v;
   }
+  Object.assign(env, networkEnv()); // config.yaml's proxy and caFiles win over the shell's
   // Keep any runtime scratch files inside its own directory, not the host $TMPDIR.
   env.TMPDIR = path.join(paths.copilotRuntime, "tmp");
   env.COPILOT_HOME = path.join(paths.copilotRuntime, "home");
