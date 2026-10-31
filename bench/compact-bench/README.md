@@ -59,7 +59,9 @@ podman run --rm --env-file $B/.env -v $B/data:/bench/data -v $B/results:/bench/r
 ```
 
 `--model` is the model that writes the summary; `CB_AGENT_MODEL` continues from it. Run a method per
-`--prompt`; the full-history baseline is computed once per agent model and reused. Retention:
+`--prompt`. Upstream keeps full-history baselines per run folder, and each prompt gets its own
+folder, so set `CB_BASELINE_DIR` (one folder per continuation agent) to compute them once and share
+them between methods. Retention:
 `--track retention --variants swan-full,swan-minimal,claude --model <summarizer> --limit 40`.
 
 No-API checks: `--track production`, `--track retention --baseline-only`, and the tests

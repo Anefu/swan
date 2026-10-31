@@ -72,10 +72,32 @@ index b869ccf..60afc4c 100644
  
      os.makedirs(args.out, exist_ok=True)
 diff --git a/run.py b/run.py
-index 4e0e865..06f8ef5 100644
+index 4e0e865..8dc5335 100644
 --- a/run.py
 +++ b/run.py
-@@ -110,7 +110,9 @@ def main(argv=None):
+@@ -61,7 +61,11 @@ def task_track(args, C, ensure_data, out):
+     for inst in instances:
+         iid = inst["instance_id"]
+         baseline_path = out / f"{iid}__baseline.json"
++        # CB_BASELINE_DIR shares full-history baselines between runs with the same continuation agent.
++        shared = Path(os.environ["CB_BASELINE_DIR"]) / f"{iid}__baseline.json" if os.environ.get("CB_BASELINE_DIR") else None
+         try:
++            if not baseline_path.is_file() and shared and shared.is_file():
++                shutil.copyfile(shared, baseline_path)
+             if baseline_path.is_file():
+                 baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+             else:
+@@ -82,6 +86,9 @@ def task_track(args, C, ensure_data, out):
+                 baseline = {"instance_id": iid, "pre_pass": passed, "f2p": f2p,
+                             "tools": tools, "test_err": error, "logs_tail": logs[-3:]}
+                 C.save_json(str(baseline_path), baseline)
++                if shared:
++                    shared.parent.mkdir(parents=True, exist_ok=True)
++                    shutil.copyfile(baseline_path, shared)
+             for model in args.model:
+                 stem = f"{iid}__xb-{C.file_id(model)}.{args.prompt}"
+                 first = out / f"{stem}.json"
+@@ -110,7 +117,9 @@ def main(argv=None):
      parser.add_argument("--track", choices=("all", "task", "retention", "production"), default="all")
      parser.add_argument("--limit", type=int, default=0, help="limit task instances and retention sessions (0=all)")
      parser.add_argument("--instance", action="append", help="task instance ID; repeat to select multiple")
@@ -86,7 +108,7 @@ index 4e0e865..06f8ef5 100644
      parser.add_argument("--rounds", type=int, choices=(1, 3), default=3, help="task verification rounds")
      parser.add_argument("--workers", type=int, default=8)
      parser.add_argument("--output", type=Path, default=ROOT / "results")
-@@ -143,7 +145,7 @@ def main(argv=None):
+@@ -143,7 +152,7 @@ def main(argv=None):
              C.key_for_model(C.AGENT_MODEL)
      # The hash prevents incompatible models/settings from reusing old results.
      config = {"models": args.model, "dataset": args.dataset, "revision": args.revision,
@@ -95,7 +117,7 @@ index 4e0e865..06f8ef5 100644
                "summarizer_api": os.environ.get("CB_SUMMARIZER_API", "auto"),
                "summary_max_tokens": C.SUMMARIZER_MAX_TOKENS,
                "baseline_only": args.baseline_only,
-@@ -165,7 +167,7 @@ def main(argv=None):
+@@ -165,7 +174,7 @@ def main(argv=None):
      if args.track in ("all", "retention"):
          for model in args.model:
              options = ["--model", model, "--n", args.limit, "--workers", args.workers,
