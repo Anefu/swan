@@ -230,10 +230,13 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
         if (line?.startsWith("STEP")) this.update({ busy: `building sandbox image: ${line.slice(0, 80)}` });
       },
     });
+    // The whole output stays in a file; the error carries the end of it.
+    const logFile = path.join(paths.build, "sandbox-build.log");
+    await fs.writeFile(logFile, `${r.stdout}\n${r.stderr}`, { mode: 0o600 }).catch(() => {});
     if (r.code !== 0) {
-      // The failing command's own output (apt's "Could not connect…") is on stdout; Podman's summary on stderr.
+      // The failing command's own output (apt's "Failed to fetch…") is on stdout; Podman's summary on stderr.
       const tail = r.stdout.trim().split("\n").slice(-15).join("\n");
-      throw new Error(`image build failed: ${r.stderr.trim().slice(-600)}\n${tail.slice(-1500)}`);
+      throw new Error(`image build failed (full output in ${logFile}): ${r.stderr.trim().slice(-600)}\n${tail.slice(-1500)}`);
     }
     log.info("runtime", "sandbox image ready");
   }

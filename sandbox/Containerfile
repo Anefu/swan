@@ -6,8 +6,10 @@ ARG BASE_IMAGE=docker.io/library/node:22-bookworm-slim
 FROM ${BASE_IMAGE}
 
 COPY swan/ /tmp/swan/
+# --error-on=any: stop at a source that cannot be fetched, with apt's reason, instead of failing
+# later with "Unable to locate package".
 RUN sh /tmp/swan/setup.sh \
- && apt-get update \
+ && apt-get update --error-on=any \
  && apt-get install -y --no-install-recommends \
       bash ca-certificates curl file git jq less openssh-client procps python3 python3-pip \
       python3-venv ripgrep socat tree unzip xz-utils \
