@@ -1,4 +1,5 @@
 import { promises as fs, statSync } from "node:fs";
+import os from "node:os";
 import chokidar from "chokidar";
 import YAML from "yaml";
 import { z } from "zod";
@@ -61,7 +62,17 @@ export function envKeys(key: string): string[] {
   return [...new Set([`${conn.toUpperCase()}__${name}`, `${conn}__${name}`])];
 }
 
-type Events = { changed: [string[]]; error: [string] };
+type Events = { changed: [string[]]; status: [string | null] };
+
+const FORMAT_HINT = "Each line is NAME: value, with a space after the colon.";
+
+/**
+ * A YAML problem without the text it quotes: the quoted line may hold a secret, and this message
+ * reaches the log and the UI.
+ */
+function yamlProblem(e: unknown): string {
+  return errMsg(e).split("\n")[0]!.replace(/:\s*$/, "");
+}
 
 /**
  * Secret values live only on the host, in secrets.yaml and/or secrets.env under PH_HOME. Both
@@ -92,10 +103,15 @@ export class SecretStore extends TypedEmitter<Events> {
     }
 
     if (await exists(paths.secretsYaml)) {
-      const doc = YAML.parse(await fs.readFile(paths.secretsYaml, "utf8")) ?? {};
-      if (typeof doc !== "object" || Array.isArray(doc)) throw new Error("secrets.yaml must be a mapping of NAME: value");
+      let doc: unknown;
+      try {
+        doc = YAML.parse(await fs.readFile(paths.secretsYaml, "utf8")) ?? {};
+      } catch (e) {
+        throw new Error(`secrets.yaml: ${yamlProblem(e)}. ${FORMAT_HINT}`);
+      }
+      if (typeof doc !== "object" || Array.isArray(doc)) throw new Error(`secrets.yaml is not a list of names and values. ${FORMAT_HINT}`);
       const t = fileTime(paths.secretsYaml);
-      for (const [name, rawEntry] of Object.entries(doc)) {
+      for (const [name, rawEntry] of Object.entries(doc as Record<string, unknown>)) {
         if (!SECRET_KEY.test(name)) throw new Error(`invalid secret name "${name}" (use connection/NAME, or a plain NAME for model-provider keys)`);
         if (rawEntry == null) continue;
         const parsed = YamlEntry.safeParse(rawEntry);
@@ -127,20 +143,31 @@ export class SecretStore extends TypedEmitter<Events> {
     }
     for (const name of this.entries.keys()) if (!next.has(name)) changed.push(name);
     this.entries = next;
-    this.lastError = null;
+    this.setError(null);
     if (changed.length) this.emit("changed", changed);
+  }
+
+  /** load(), keeping the previous values when the files cannot be read, and remembering why (Swan settings shows it). */
+  async tryLoad(): Promise<boolean> {
+    try {
+      await this.load();
+      return true;
+    } catch (e) {
+      this.setError(errMsg(e));
+      log.error("secrets", `could not read the secrets, keeping the previous values: ${this.lastError}`);
+      return false;
+    }
+  }
+
+  private setError(error: string | null) {
+    if (error === this.lastError) return;
+    this.lastError = error;
+    this.emit("status", error);
   }
 
   watch(): void {
     const reload = debounce(() => {
-      this.load()
-        .then(() => log.info("secrets", "reloaded"))
-        .catch((e) => {
-          // Keep serving the last good set; surface the parse error.
-          this.lastError = errMsg(e);
-          log.error("secrets", `reload failed, keeping previous values: ${this.lastError}`);
-          this.emit("error", this.lastError);
-        });
+      void this.tryLoad().then((ok) => ok && log.info("secrets", "reloaded"));
     }, 150);
     chokidar.watch([paths.secretsYaml, paths.secretsEnv], { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 80 } }).on("all", reload);
   }
@@ -174,6 +201,10 @@ export class SecretStore extends TypedEmitter<Events> {
     if (!SECRET_KEY.test(key)) throw new Error("invalid credential name");
     const text = (await exists(paths.secretsYaml)) ? await fs.readFile(paths.secretsYaml, "utf8") : "";
     const doc = YAML.parseDocument(text || "{}");
+    // Never rewrite a file Swan cannot read: that would drop what is in it.
+    const where = paths.secretsYaml.replace(os.homedir(), "~");
+    if (doc.errors.length) throw new Error(`Not saved: ${where} has a mistake (${yamlProblem(doc.errors[0])}). ${FORMAT_HINT} Fix it, then save again.`);
+    if (doc.contents !== null && !YAML.isMap(doc.contents)) throw new Error(`Not saved: ${where} is not a list of names and values. ${FORMAT_HINT} Fix it, then save again.`);
     const current = (doc.toJS() ?? {})[key];
     doc.set(key, current && typeof current === "object" ? doc.createNode({ ...current, value }) : value);
     await writeFileAtomic(paths.secretsYaml, doc.toString(), 0o600);

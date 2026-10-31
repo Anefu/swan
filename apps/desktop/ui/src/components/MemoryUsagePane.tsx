@@ -311,12 +311,12 @@ function MemoryForm({
       </div>
       {error && <span className="field-error">{error}</span>}
       <div className="row gap end">
-        <button type="button" className="btn sm" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
         <button type="submit" className="btn primary sm" disabled={busy || !content.trim()}>
           {busy && <Spinner size={10} />}
           {submitLabel}
+        </button>
+        <button type="button" className="btn sm" onClick={onCancel} disabled={busy}>
+          Cancel
         </button>
       </div>
     </form>
@@ -429,12 +429,12 @@ function RecordRow({
                 conversation.
               </p>
               <div className="row gap end">
-                <button type="button" className="btn sm" onClick={() => setMode(null)}>
-                  Cancel
-                </button>
                 <button type="button" className="btn sm danger" disabled={!!busy} onClick={() => void act("forget")}>
                   {busy === "forget" && <Spinner size={10} />}
                   Forget
+                </button>
+                <button type="button" className="btn sm" onClick={() => setMode(null)}>
+                  Cancel
                 </button>
               </div>
             </div>

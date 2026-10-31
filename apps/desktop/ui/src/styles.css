@@ -623,6 +623,7 @@ textarea::placeholder {
 .line-banner > span {
   flex: 1 1 auto;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .line-banner.warn {
   background: var(--attention-soft);
@@ -1525,8 +1526,10 @@ button.line:focus-visible .chev,
 }
 .step-text {
   flex: 1 1 240px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Dock ---------- */

@@ -6,7 +6,7 @@ import { CONNECTION_STATE } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
 import { PaneHead } from "./Cards";
 import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
-import { IconPlus } from "./icons";
+import { IconPlus, IconWarning } from "./icons";
 import { Spinner } from "./ui";
 
 /** Swan's own settings, shared by every persona: model providers, connections and the sandbox. */
@@ -15,10 +15,23 @@ export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
     <div className="pane">
       <PaneHead title="Swan settings" onClose={onClose} closeLabel="Close Swan settings" />
       <div className="pane-body">
+        <SecretsProblem />
         <Providers />
         <Connections />
         <Sandbox />
       </div>
+    </div>
+  );
+}
+
+/** secrets.yaml or secrets.env cannot be read: until it is fixed, Swan keeps using the values it had. */
+function SecretsProblem() {
+  const { state } = useStore();
+  if (!state.secretsError) return null;
+  return (
+    <div className="line-banner warn" role="alert">
+      <IconWarning size={16} />
+      <span>{state.secretsError} Until it is fixed, Swan keeps the keys and credentials it had.</span>
     </div>
   );
 }
@@ -115,9 +128,6 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
             Remove the {providerLabel(p)} key from Swan? Personas using this provider stop working until a key is added again.
           </p>
           <div className="row gap end">
-            <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
-              Cancel
-            </button>
             <button
               type="button"
               className="btn sm danger"
@@ -135,6 +145,9 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
               }}
             >
               Disconnect
+            </button>
+            <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
+              Cancel
             </button>
           </div>
         </div>
@@ -199,12 +212,12 @@ function SecretForm({
       </label>
       {error && <span className="field-error">{error}</span>}
       <div className="row gap end">
-        <button type="button" className="btn sm" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
         <button type="submit" className="btn primary sm" disabled={busy || !value}>
           {busy && <Spinner size={10} />}
           {submitLabel}
+        </button>
+        <button type="button" className="btn sm" onClick={onCancel} disabled={busy}>
+          Cancel
         </button>
       </div>
     </form>
@@ -385,9 +398,6 @@ function CredentialRow({ conn, c }: { conn: ConnectionStatus; c: ConnectionCrede
           </p>
           {error && <span className="field-error">{error}</span>}
           <div className="row gap end">
-            <button type="button" className="btn sm" onClick={() => setMode(null)} disabled={busy}>
-              Cancel
-            </button>
             <button
               type="button"
               className="btn sm danger"
@@ -405,6 +415,9 @@ function CredentialRow({ conn, c }: { conn: ConnectionStatus; c: ConnectionCrede
             >
               {busy && <Spinner size={10} />}
               Remove
+            </button>
+            <button type="button" className="btn sm" onClick={() => setMode(null)} disabled={busy}>
+              Cancel
             </button>
           </div>
         </div>
@@ -581,12 +594,12 @@ function AddCredential({ onDone }: { onDone: () => void }) {
       {injectError && <span className="field-error">{injectError}</span>}
       {error && <span className="field-error">{error}</span>}
       <div className="row gap end">
-        <button type="button" className="btn sm" onClick={onDone} disabled={busy}>
-          Cancel
-        </button>
         <button type="submit" className="btn primary sm" disabled={busy || !ready}>
           {busy && <Spinner size={10} />}
           Add credential
+        </button>
+        <button type="button" className="btn sm" onClick={onDone} disabled={busy}>
+          Cancel
         </button>
       </div>
     </form>
@@ -615,11 +628,19 @@ function Sandbox() {
       </div>
       {r?.imageTag && <p className="small muted mono">{r.imageTag}</p>}
       {r && level === "error" && (
-        <ul className="small plain-list">
-          {[...runtimeProblems(r), ...r.errors].map((p) => (
-            <li key={p}>{p}</li>
+        <>
+          <ul className="small plain-list">
+            {runtimeProblems(r).map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+          {/* Build errors run to many lines with long paths and URLs: keep their lines, wrap, scroll. */}
+          {r.errors.map((e) => (
+            <pre key={e} className="code-plain small">
+              {e}
+            </pre>
           ))}
-        </ul>
+        </>
       )}
       <div>
         <button

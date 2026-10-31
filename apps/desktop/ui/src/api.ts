@@ -149,6 +149,7 @@ export const api = {
   providers: () => request<ProviderStatus[]>("GET", "/api/providers"),
 
   personas: () => request<PersonaSummary[]>("GET", "/api/personas"),
+  secretsStatus: () => request<{ error: string | null }>("GET", "/api/secrets/status"),
   createPersona: (id: string, yaml: string) => request<PersonaSummary>("POST", "/api/personas", { id, yaml }),
   personaSource: (id: string) => request<PersonaSource>("GET", `/api/personas/${enc(id)}/source`),
   savePersonaSource: (id: string, yaml: string) =>

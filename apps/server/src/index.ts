@@ -56,7 +56,7 @@ async function main() {
   await migrateConnections(providerKeys).catch((e) => log.error("connections", `could not convert credentials to connections: ${errMsg(e)}`));
 
   const secrets = new SecretStore();
-  await secrets.load().catch((e) => log.error("secrets", `could not load secrets: ${errMsg(e)}`));
+  await secrets.tryLoad();
   secrets.watch();
 
   const connections = new ConnectionManager(secrets, settings);
@@ -94,6 +94,7 @@ async function main() {
   await sessions.loadAll();
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
+  secrets.on("status", (error) => hub.broadcast({ type: "secrets.status", error }));
   secrets.on("changed", () => {
     catalog.invalidate();
     hub.broadcast({ type: "providers.updated", providers: providers.status() });

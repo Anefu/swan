@@ -846,12 +846,12 @@ function DecisionButtons({
           />
         </label>
         <div className="deny-actions">
-          <button type="button" className="btn sm" onClick={() => setDenying(false)} disabled={busy !== null}>
-            Cancel
-          </button>
           <button type="submit" className="btn sm danger" disabled={busy !== null}>
             {busy === "deny" && <Spinner size={10} />}
             Deny
+          </button>
+          <button type="button" className="btn sm" onClick={() => setDenying(false)} disabled={busy !== null}>
+            Cancel
           </button>
         </div>
       </form>

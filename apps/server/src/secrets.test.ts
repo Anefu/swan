@@ -53,4 +53,40 @@ describe("SecretStore", () => {
     await expect(s.load()).rejects.toThrow(/invalid secret name/);
     expect(s.value("A")).toBe("two");
   });
+
+  // "NAME:value" (no space) and "NAME=value" are not YAML mappings; the quoted line would hold the value.
+  for (const [what, text] of [
+    ["a missing space after the colon", "github/GITHUB_TOKEN:ghp_secret123\n"],
+    ["an env-style line", "github/GITHUB_TOKEN=ghp_secret123\n"],
+    ["a broken line among good ones", 'ANTHROPIC_API_KEY: ""\ngithub/GITHUB_TOKEN:ghp_secret123\n'],
+  ]) {
+    it(`explains ${what} without the value, keeps the file, and clears the error once fixed`, async () => {
+      const s = new SecretStore();
+      const statuses: (string | null)[] = [];
+      s.on("status", (e) => statuses.push(e));
+      await fs.writeFile(paths.secretsYaml, text);
+      expect(await s.tryLoad()).toBe(false);
+      expect(s.error).toMatch(/NAME: value, with a space after the colon/);
+      expect(s.error).not.toContain("ghp_secret123");
+
+      await expect(s.setValue("github/GITHUB_TOKEN", "ghp_new")).rejects.toThrow(/Not saved: .*Fix it, then save again/);
+      expect(await fs.readFile(paths.secretsYaml, "utf8")).toBe(text);
+
+      await fs.writeFile(paths.secretsYaml, "github/GITHUB_TOKEN: ghp_fixed\n");
+      expect(await s.tryLoad()).toBe(true);
+      expect(s.error).toBeNull();
+      expect(s.value("github/GITHUB_TOKEN")).toBe("ghp_fixed");
+      expect(statuses).toHaveLength(2);
+      expect(statuses[1]).toBeNull();
+      for (const st of statuses) expect(st ?? "").not.toContain("ghp_secret123");
+    });
+  }
+
+  it("saves into a file that holds only comments", async () => {
+    await fs.writeFile(paths.secretsYaml, "# my keys\n");
+    const s = new SecretStore();
+    await s.setValue("github/GITHUB_TOKEN", "ghp_new");
+    expect(s.value("github/GITHUB_TOKEN")).toBe("ghp_new");
+    expect(await fs.readFile(paths.secretsYaml, "utf8")).toContain("# my keys");
+  });
 });

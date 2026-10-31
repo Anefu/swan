@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { FolderMount, RuntimeStatus } from "@ph/shared";
@@ -234,9 +235,11 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     const logFile = path.join(paths.build, "sandbox-build.log");
     await fs.writeFile(logFile, `${r.stdout}\n${r.stderr}`, { mode: 0o600 }).catch(() => {});
     if (r.code !== 0) {
-      // The failing command's own output (apt's "Failed to fetch…") is on stdout; Podman's summary on stderr.
-      const tail = r.stdout.trim().split("\n").slice(-15).join("\n");
-      throw new Error(`image build failed (full output in ${logFile}): ${r.stderr.trim().slice(-600)}\n${tail.slice(-1500)}`);
+      // The cause first: the failing command's own output (apt's "Failed to fetch…") is on stdout. Podman's
+      // summary on stderr repeats the whole RUN command; drop that.
+      const tail = r.stdout.trim().split("\n").slice(-15).join("\n").slice(-1500);
+      const summary = r.stderr.trim().replace(/STEP "(?:[^"\\]|\\.)*"/g, "a step").slice(-400);
+      throw new Error(`image build failed:\n${tail}\n\n${summary}\nFull output: ${logFile.replace(os.homedir(), "~")}`);
     }
     log.info("runtime", "sandbox image ready");
   }

@@ -934,12 +934,12 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
             <span className="grow tone-attention">
               {errorCount > 0 ? `Fix ${plural(errorCount, "field")} to save` : isNew ? "New persona, not saved" : "Unsaved changes"}
             </span>
-            <button type="button" className="btn" onClick={discard} disabled={saving}>
-              Discard
-            </button>
             <button type="button" className="btn primary" onClick={() => void save()} disabled={saving || errorCount > 0}>
               {saving && <Spinner size={12} />}
               {isNew ? "Create persona" : "Save changes"}
+            </button>
+            <button type="button" className="btn" onClick={discard} disabled={saving}>
+              Discard
             </button>
           </div>
         )}
@@ -968,9 +968,6 @@ function DeletePersona({ persona }: { persona: PersonaSummary }) {
         Delete {persona.name}? Its conversation, memory and attachments are deleted too. The folders it used are not touched.
       </p>
       <div className="row gap end">
-        <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
-          Cancel
-        </button>
         <button
           type="button"
           className="btn sm danger"
@@ -987,6 +984,9 @@ function DeletePersona({ persona }: { persona: PersonaSummary }) {
         >
           {busy && <Spinner size={10} />}
           Delete
+        </button>
+        <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
+          Cancel
         </button>
       </div>
     </div>
@@ -1215,12 +1215,12 @@ function FolderEditor({
       </Field>
       <p className="hint">Changes apply at the next container start.</p>
       <div className="row gap">
-        <button type="button" className="btn sm danger" onClick={onRemove}>
-          Remove
-        </button>
-        <span className="grow" />
         <button type="button" className="btn sm" onClick={onDone}>
           Done
+        </button>
+        <span className="grow" />
+        <button type="button" className="btn sm danger" onClick={onRemove}>
+          Remove
         </button>
       </div>
     </div>

@@ -130,6 +130,7 @@ export interface State {
   /** Static credential ref -> when it last changed, for the "reloaded, no restart" line. */
   credentialFlash: Record<string, number>;
   migration: MigrationNote | null;
+  secretsError: string | null; // why secrets.yaml / secrets.env cannot be read
   skills: SkillSummary[];
   /** null = not loaded or the server has no /api/models. */
   models: ModelOption[] | null;
@@ -193,6 +194,7 @@ function initState(): State {
     connections: [],
     credentialFlash: {},
     migration: null,
+    secretsError: null,
     skills: [],
     models: null,
     approvals: null,
@@ -234,6 +236,7 @@ type Action =
   | { type: "connection.upsert"; connection: ConnectionStatus; changed?: string }
   | { type: "connection.remove"; name: string }
   | { type: "migration"; note: MigrationNote | null }
+  | { type: "secrets"; error: string | null }
   | { type: "skills"; skills: SkillSummary[] }
   | { type: "models"; models: ModelOption[] | null }
   | { type: "approvals"; approvals: PendingApproval[] | null }
@@ -347,6 +350,8 @@ function reducer(state: State, a: Action): State {
       return { ...state, connections: state.connections.filter((c) => c.name !== a.name) };
     case "migration":
       return { ...state, migration: a.note };
+    case "secrets":
+      return { ...state, secretsError: a.error };
     case "skills":
       return { ...state, skills: a.skills };
     case "models":
@@ -680,7 +685,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const loadAll = async () => {
-      const [runtime, providers, personas, connections, egress, sessions, skills, migration] = await Promise.allSettled([
+      const [runtime, providers, personas, connections, egress, sessions, skills, migration, secrets] = await Promise.allSettled([
         api.runtime(),
         api.providers(),
         api.personas(),
@@ -689,11 +694,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.sessions(),
         api.skills(),
         api.migrationNote(),
+        api.secretsStatus(),
       ]);
       if (runtime.status === "fulfilled") dispatch({ type: "runtime", runtime: runtime.value });
       if (providers.status === "fulfilled") dispatch({ type: "providers", providers: providers.value });
       if (connections.status === "fulfilled") dispatch({ type: "connections", connections: connections.value });
       if (migration.status === "fulfilled") dispatch({ type: "migration", note: migration.value ?? null });
+      if (secrets.status === "fulfilled") dispatch({ type: "secrets", error: secrets.value.error });
       if (egress.status === "fulfilled") dispatch({ type: "egress.merge", events: egress.value });
       if (sessions.status === "fulfilled") dispatch({ type: "sessions", sessions: sessions.value });
       if (skills.status === "fulfilled") dispatch({ type: "skills", skills: skills.value });
@@ -1019,6 +1026,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         break;
       case "approvals.updated":
         dispatch({ type: "approvals", approvals: ev.approvals });
+        break;
+      case "secrets.status":
+        dispatch({ type: "secrets", error: ev.error });
         break;
       case "providers.updated":
         dispatch({ type: "providers", providers: ev.providers });

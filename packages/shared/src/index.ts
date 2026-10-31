@@ -328,6 +328,7 @@ export interface ProviderModel {
 // POST   /api/runtime/rebuild                 -> RuntimeStatus   (rebuild sandbox image)
 // POST   /api/runtime/retry                   -> RuntimeStatus   (check Podman again and bring the sandbox up)
 // POST   /api/runtime/setup                   -> RuntimeStatus   (create and start the Podman machine)
+// GET    /api/secrets/status                  -> { error: string | null } (why secrets.yaml cannot be read)
 // GET    /api/providers                       -> ProviderStatus[]
 // GET    /api/providers/:name/models          -> ProviderModel[] (copilot providers)
 // GET    /api/personas                        -> PersonaSummary[]
@@ -387,6 +388,7 @@ export type ServerEvent =
   | { type: "egress"; event: EgressEvent }
   | { type: "approvals.updated"; approvals: PendingApproval[] } // every waiting call, all personas
   | { type: "providers.updated"; providers: ProviderStatus[] } // a model-provider key changed
+  | { type: "secrets.status"; error: string | null } // secrets.yaml / secrets.env cannot be read (null: fine again)
   | { type: "usage.updated"; personaId: string }
   | { type: "memory.updated"; personaId: string };
 

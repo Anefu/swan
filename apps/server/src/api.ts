@@ -267,6 +267,8 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     return connection(c.name);
   });
 
+  app.get("/api/secrets/status", async () => ({ error: d.secrets.error }));
+
   // Model-provider keys: host-side only, never a connection.
   const providerKey = (name: string) => {
     const cfg = d.settings.providers[name];
