@@ -198,3 +198,8 @@ tools/aws-stub    A local AWS and Kubernetes stand-in for testing sign-in tools
 sandbox/          The sandbox image
 examples/         Example personas, skills and a complete reference configuration
 ```
+
+## License
+
+Swan is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Anefu; see [NOTICE](NOTICE).
+Contributions are accepted under the same license.

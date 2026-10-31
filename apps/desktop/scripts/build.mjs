@@ -43,6 +43,7 @@ await build({ root: path.join(desktop, "ui"), logLevel: "warn", build: { outDir:
 fs.mkdirSync(path.join(out, "sandbox"));
 fs.copyFileSync(path.join(repo, "sandbox", "Containerfile"), path.join(out, "sandbox", "Containerfile"));
 fs.cpSync(path.join(repo, "examples"), path.join(out, "examples"), { recursive: true });
+for (const f of ["LICENSE", "NOTICE"]) fs.copyFileSync(path.join(repo, f), path.join(out, f)); // Apache 2.0: ship both
 
 if (process.argv.includes("--node")) await addNode();
 if (!process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) ensureElectron();
