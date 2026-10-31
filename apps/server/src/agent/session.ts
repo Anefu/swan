@@ -1366,8 +1366,8 @@ export class SessionManager {
     deps.connections.on("updated", () => {
       for (const s of this.sessions.values()) s.creds.syncSignIns();
     });
-    deps.connections.on("stateChanged", (conn, state) => {
-      for (const s of this.sessions.values()) s.creds.onState(conn, state);
+    deps.connections.on("needsSignIn", (conn) => {
+      for (const s of this.sessions.values()) s.creds.onNeedsSignIn(conn);
     });
   }
 

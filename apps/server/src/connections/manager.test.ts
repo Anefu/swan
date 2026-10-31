@@ -87,6 +87,19 @@ describe("command connections", () => {
     expect(changed.flat()).toContain("stub/aws");
   });
 
+  it("asks for a sign-in only when a check finds it gone, not when the user signs out or cancels", async () => {
+    stub.state.options.autoApprove = true;
+    const { m } = await setup(stubConnection());
+    const asked: string[] = [];
+    m.on("needsSignIn", (c) => asked.push(c));
+    expect(await m.ensure("stub")).toBe("login_required");
+    expect(asked).toEqual(["stub"]);
+    expect(await m.login("stub")).toBe("ready");
+    m.logout("stub");
+    expect(m.status()[0]).toMatchObject({ state: "login_required", credentials: [] });
+    expect(asked).toEqual(["stub"]);
+  });
+
   it("can cancel a sign-in that waits on the user", async () => {
     const { m } = await setup(stubConnection());
     const login = m.login("stub");

@@ -62,6 +62,7 @@ type Events = {
   updated: []; // anything in status() changed
   materials: [string]; // a command connection's files or env changed
   stateChanged: [string, ConnectionState];
+  needsSignIn: [string]; // a check or renewal (not the user) found the sign-in gone
   configLoaded: [];
   configError: [string];
 };
@@ -445,6 +446,7 @@ export class ConnectionManager extends TypedEmitter<Events> {
       st.state = r.state;
       st.message = redact(r.message) || (r.state === "login_required" ? "Sign-in required" : "The wrapper failed");
       st.stale = false;
+      if (r.state === "login_required" && verb !== "login") this.emit("needsSignIn", conn);
     }
     if (st.state !== "ready") log.info("connections", `${conn} ${verb}: ${st.state}${st.message ? ` (${st.message})` : ""}`);
     this.schedule(conn);

@@ -246,13 +246,12 @@ export class SessionCredentials {
     }
   }
 
-  /** A connection this session uses changed state. */
-  onState(conn: string, state: ConnectionState) {
+  /** A check or renewal found the connection signed out (not the user signing out). */
+  onNeedsSignIn(conn: string) {
     if (!this.host.container() || !this.commandConnections().includes(conn)) return;
-    if (state === "login_required" && !this.signIns.get(conn)?.state.match(/starting|waiting/)) {
-      this.host.notice("warn", `${conn} needs a new sign-in; requests that use it fail until then.`);
-      void this.signIn(conn);
-    }
+    if (this.signIns.get(conn)?.state.match(/starting|waiting/)) return;
+    this.host.notice("warn", `${conn} needs a new sign-in; requests that use it fail until then.`);
+    void this.signIn(conn);
   }
 
   // ---------- rules ----------
