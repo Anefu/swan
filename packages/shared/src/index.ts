@@ -188,10 +188,11 @@ export type ChatItem =
       approvalReason?: string; // why it needs approval (matched rule)
       denyReason?: string;
       parentId?: string; // set on calls made by a sub-agent: the id of its `agent` call
+      agent?: AgentRun; // on `agent` calls: the sub-agent it started, kept current while it runs
     }
   | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string }
   // One-line record of a harness action: /dream, a context rollover, a queued steering message.
-  | { kind: "receipt"; id: string; ts: string; action: "dream" | "rollover" | "steer" | "command"; title: string; detail: string; status: "running" | "done" | "error" }
+  | { kind: "receipt"; id: string; ts: string; action: "dream" | "rollover" | "steer" | "command" | "agent"; title: string; detail: string; status: "running" | "done" | "error" }
   // A command connection needs the user to sign in. Only the user sees the code and opens the link.
   | {
       kind: "sign_in";
@@ -218,6 +219,22 @@ export type ChatItem =
 
 // allow: this call (network: until stopped); allow_session: until stopped (credential use);
 // allow_always: until stopped plus a persona change; deny.
+/** A sub-agent started by an `agent` call. */
+export interface AgentRun {
+  id: string; // what agent_message / agent_stop take
+  name: string; // the persona's sub-agent, or "auto"
+  model: { provider: string; id: string; effort?: Effort };
+  context: "brief" | "fork";
+  background: boolean;
+  maxTurns: number;
+  turns: number;
+  state: "running" | "asking" | "done" | "error" | "stopped";
+  question?: string; // while asking
+  brief: string;
+  startedAt: string;
+  endedAt?: string;
+}
+
 export type ApprovalDecision = "allow" | "allow_session" | "allow_always" | "deny";
 
 export interface ApprovalBody {
@@ -331,6 +348,7 @@ export interface ProviderModel {
 // POST   /api/sessions/:id/interrupt          -> { ok: true }
 // POST   /api/sessions/:id/approvals/:toolUseId ApprovalBody -> { ok: true }
 // POST   /api/sessions/:id/stop               -> SessionSummary (removes container, keeps transcript)
+// POST   /api/sessions/:id/agents/:agentId/stop -> { ok: true } (one sub-agent; "all" stops every one)
 // DELETE /api/sessions/:id                    -> { ok: true }  (also deletes transcript)
 // GET    /api/egress?sessionId=&limit=200     -> EgressEvent[] (newest last)
 
@@ -455,6 +473,13 @@ export interface PersonaConfigView {
   skills: string[];
   mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON
   memory: { autoBrief: boolean; briefTokens: number };
+  subagents: SubagentsConfig;
+}
+
+export interface SubagentsConfig {
+  agents: { name: string; model: string }[]; // model: "provider/id" or "auto"
+  maxBackground: number;
+  maxTurns: number;
 }
 
 export interface SaveResult {

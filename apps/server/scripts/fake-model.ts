@@ -9,7 +9,9 @@
 // next step. Steps are tool calls or a final text reply.
 import http from "node:http";
 
-type Step = { text?: string; tool?: string; args?: Record<string, unknown> };
+// args may depend on the user message that started the script (e.g. an agent id in a notification).
+type Step = { text?: string; tool?: string; args?: Record<string, unknown> | ((userText: string) => Record<string, unknown>) };
+let lastUserText = "";
 
 const SCRIPTS: Record<string, Step[]> = {
   isolation: [
@@ -43,6 +45,26 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "echo \"profile=$AWS_PROFILE kubeconfig=$KUBECONFIG github=${GITHUB_TOKEN:0:4}…\"; cat ~/.aws/credentials; grep -E 'server|token' ~/.kube/config; ls -l ~/.aws ~/.kube" } },
     { text: "Those are the connection files; every value is a placeholder." },
   ],
+  // Sub-agents: a foreground agent, then a background one that asks the parent a question.
+  "agents-demo": [
+    { text: "Counting files with a foreground agent first.", tool: "agent", args: { description: "Count workspace files", prompt: "subtask-count: count the entries under /workspace/demo", max_turns: 5 } },
+    { tool: "agent", args: { description: "Check hidden files", prompt: "subtask-ask: check the hidden files under /workspace/demo", background: true } },
+    { text: "A background agent is checking hidden files; I'll answer it when it asks." },
+  ],
+  "subtask-count": [
+    { tool: "bash", args: { command: "ls -1 /workspace/demo | wc -l" } },
+    { text: "Report: /workspace/demo has the entries listed above." },
+  ],
+  "subtask-ask": [
+    { tool: "bash", args: { command: "sleep 2; ls -A1 /workspace/demo | head -5" } },
+    { tool: "ask_parent", args: { question: "Should I include dotfiles like .git in the count?" } },
+    { text: "Report: counted with dotfiles included, as the parent asked." },
+  ],
+  "asked a question]": [
+    { tool: "agent_message", args: (t) => ({ id: /ag_[0-9a-f]+/.exec(t)?.[0] ?? "", message: "Yes, include them." }) },
+    { text: "Answered the background agent." },
+  ],
+  "finished]": [{ text: "The background agent is done." }],
   slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
 };
 
@@ -59,7 +81,8 @@ function pick(messages: Msg[]): Step {
   messages.forEach((m, i) => {
     if (m.role === "user") lastUser = i;
   });
-  const text = String(messages[lastUser]?.content ?? "").toLowerCase();
+  lastUserText = String(messages[lastUser]?.content ?? "");
+  const text = lastUserText.toLowerCase();
   const key = Object.keys(SCRIPTS).find((k) => text.includes(k));
   if (!key) return { text: `Scripted model. Say one of: ${Object.keys(SCRIPTS).join(", ")}.` };
   const done = messages.slice(lastUser + 1).filter((m) => m.role === "assistant").length;
@@ -86,7 +109,7 @@ const server = http.createServer((req, res) => {
       }
     }
     if (step.tool) {
-      send({ tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: "function", function: { name: step.tool, arguments: JSON.stringify(step.args ?? {}) } }] });
+      send({ tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: "function", function: { name: step.tool, arguments: JSON.stringify((typeof step.args === "function" ? step.args(lastUserText) : step.args) ?? {}) } }] });
       send({}, "tool_calls");
     } else send({}, "stop");
     res.end("data: [DONE]\n\n");

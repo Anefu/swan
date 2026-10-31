@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Ajv, type ValidateFunction } from "ajv";
 import { z } from "zod";
+import type { ChatItem } from "@ph/shared";
 import type { PodmanRuntime } from "../sandbox/podman.js";
 import type { SkillRegistry } from "../skills.js";
 import { truncateMiddle } from "../util.js";
@@ -9,6 +10,8 @@ export interface ToolOutput {
   text: string;
   isError?: boolean;
   images?: { mediaType: string; data: string }[];
+  /** Applied to the tool's chat item last (e.g. an agent call that keeps running in the background). */
+  itemPatch?: Partial<Extract<ChatItem, { kind: "tool_call" }>>;
 }
 
 export interface ToolContext {

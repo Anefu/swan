@@ -67,7 +67,7 @@ async function main() {
   // eslint-disable-next-line prefer-const
   let sessions: SessionManager;
   sessions = new SessionManager({
-    settings, runtime, proxy, connections, personas, skills, providers, memory, usage, attachments,
+    settings, runtime, proxy, connections, personas, skills, providers, memory, usage, attachments, catalog,
     broadcast: hub.broadcast,
     onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
   });

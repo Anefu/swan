@@ -22,7 +22,7 @@ rules for the credentials it may use, a network allowlist and tool permissions.
 | One conversation per persona | Long conversations roll over into new context epochs with a structured checkpoint; nothing is rewritten, and `history_search` recovers older turns |
 | Memory | Persona-private records (preferences, decisions, observations, procedures, episodes) the agent reads and proposes through host-side tools; `/dream` consolidates them |
 | Slash commands | `/dream`, `/stop`, `/usage`, plus `/<skill>` for every skill on the persona |
-| Sub-agents | An `agent` tool runs focused sub-loops (in parallel when the model calls it several times) with the same sandbox and permissions |
+| Sub-agents | An `agent` tool runs focused sub-loops with the same sandbox, credentials and permissions: in parallel, in the background (the parent is told when they finish or ask), with a named sub-agent or a model the parent picks, a forked or brief-only context, and a turn limit per task. Sub-agents can ask the parent a question (`ask_parent`); the parent answers with `agent_message` |
 | Attachments | Paperclip, paste or drag-and-drop; files are copied into the sandbox at `/home/agent/attachments/`, images and PDFs also go to the model |
 | Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, subagent, checkpoint, dream), context occupancy, estimated cost where rates are known |
 | UI | Swan: persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |

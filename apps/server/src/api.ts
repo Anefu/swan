@@ -323,6 +323,10 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     session(req.params.id).approve(req.params.toolUseId, body);
     return { ok: true };
   });
+  app.post("/api/sessions/:id/agents/:agentId/stop", async (req: P<{ id: string; agentId: string }>) => {
+    session(req.params.id).stopAgents(req.params.agentId === "all" ? undefined : req.params.agentId);
+    return { ok: true };
+  });
   app.post("/api/sessions/:id/stop", async (req: P) => {
     const s = session(req.params.id);
     await s.stop();

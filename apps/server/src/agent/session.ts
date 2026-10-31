@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ApprovalBody, ChatItem, Checkpoint, FolderMount, PendingApproval, ServerEvent, SessionStatus, SessionSummary, SlashCommand, ToolCallStatus, ToolSummary } from "@ph/shared";
+import type { ApprovalBody, ChatItem, Checkpoint, Effort, FolderMount, PendingApproval, ServerEvent, SessionStatus, SessionSummary, SlashCommand, ToolCallStatus, ToolSummary } from "@ph/shared";
 import type { AttachmentMeta } from "@ph/shared";
 import type { AttachmentStore } from "../attachments.js";
 import type { MemoryStore } from "../memory.js";
@@ -13,7 +13,9 @@ import { paths, type Settings } from "../settings.js";
 import type { SkillRegistry } from "../skills.js";
 import type { UsageLedger, UsagePurpose } from "../usage.js";
 import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeFileAtomic } from "../util.js";
+import type { ModelCatalog } from "../catalog.js";
 import { SessionMcp } from "./mcp.js";
+import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./subagents.js";
 import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { PermissionPolicy } from "./permissions.js";
@@ -21,7 +23,15 @@ import { ProviderError, type ContentBlockParam, type MessageParam, type Provider
 import { z } from "zod";
 import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
 
-const MAX_SUBAGENT_TURNS = 60;
+const DEFAULT_SUBAGENT_TURNS = 60;
+// Tools that manage sub-agents: allowed by default for the main agent, refused inside a sub-agent.
+const AGENT_TOOLS = new Set(["agent", "agent_message", "agent_status", "agent_stop"]);
+
+interface AgentEntry {
+  sub: SubAgent;
+  toolUseId: string; // the `agent` call that started it
+  description: string;
+}
 
 export interface SessionDeps {
   settings: Settings;
@@ -34,6 +44,7 @@ export interface SessionDeps {
   memory: MemoryStore;
   usage: UsageLedger;
   attachments: AttachmentStore;
+  catalog: ModelCatalog;
   broadcast: (ev: ServerEvent) => void;
   onApprovalsChanged: () => void;
 }
@@ -153,6 +164,8 @@ function parseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+const fmtElapsed = (ms: number) => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60_000)}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`);
+
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 40) : []);
 
 export class Session {
@@ -168,7 +181,8 @@ export class Session {
   private liveTools = new Map<string, ToolDef>();
   private workdir = "/workspace";
   private starting: Promise<void> | null = null;
-  private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[] }[] = [];
+  private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean }[] = [];
+  private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
   private dreaming = false;
   private abort: AbortController | null = null;
@@ -256,6 +270,7 @@ export class Session {
     data.summary = { ...data.summary, status: "stopped", statusDetail: undefined, allowances: [], queued: 0, epoch: data.epochs.at(-1)?.n ?? 0 };
     for (const it of data.items) {
       if (it.kind === "tool_call" && (it.status === "running" || it.status === "pending_approval")) it.status = "interrupted";
+      if (it.kind === "tool_call" && it.agent && (it.agent.state === "running" || it.agent.state === "asking")) it.agent = { ...it.agent, state: "stopped", question: undefined };
       if ((it.kind === "assistant_text" || it.kind === "thinking") && it.streaming) it.streaming = false;
       if (it.kind === "receipt" && it.status === "running") it.status = "error";
       if (it.kind === "sign_in" && (it.state === "starting" || it.state === "waiting")) Object.assign(it, { state: "cancelled", code: undefined, message: "Swan restarted before the sign-in finished" });
@@ -343,7 +358,7 @@ export class Session {
     this.addItem({ kind: "notice", id: randomId("it_", 6), ts: nowIso(), level, text });
   }
 
-  private receipt(action: "dream" | "rollover" | "steer" | "command", title: string, detail: string, status: "running" | "done" | "error" = "running") {
+  private receipt(action: "dream" | "rollover" | "steer" | "command" | "agent", title: string, detail: string, status: "running" | "done" | "error" = "running") {
     const it: Extract<ChatItem, { kind: "receipt" }> = { kind: "receipt", id: randomId("it_", 6), ts: nowIso(), action, title, detail, status };
     this.addItem(it);
     return {
@@ -538,7 +553,7 @@ export class Session {
       ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
       ...this.creds.tools(),
-      this.agentTool(),
+      ...(await this.agentTools()),
       ...(await this.mcp.tools()),
     ];
     this.liveTools = new Map(tools.map((t) => [t.name, t]));
@@ -550,6 +565,7 @@ export class Session {
   }
 
   private async teardown() {
+    this.stopAgents();
     this.deps.providers.releaseSession(this.id);
     await this.mcp?.close().catch(() => {});
     this.mcp = null;
@@ -878,6 +894,7 @@ export class Session {
     this.abort?.abort();
     // Pending network requests are refused; "until stopped" decisions end here too.
     for (const [id, a] of [...this.approvals]) if (a.info.name === "network_access" || a.info.name === "credential_use") this.approvals.get(id)?.resolve({ decision: "deny", reason: "stopped" });
+    this.stopAgents();
     this.netDenied.clear();
     this.creds.reset();
     for (const q of this.queue) if (q.receiptId) this.finishReceipt(q.receiptId, "Dropped by Stop", "error");
@@ -1051,9 +1068,9 @@ export class Session {
       // Steering: messages that arrived while tools ran ride along with their results.
       if (this.queue.length && !ac.signal.aborted) {
         const steer = this.queue.splice(0);
-        results.push({ type: "text", text: "New message from the user while you were working:" });
         for (const q of steer) {
           await this.placeFiles(q.files);
+          results.push({ type: "text", text: q.fromAgent ? "Update from a background agent:" : "New message from the user while you were working:" });
           if (typeof q.text === "string") results.push({ type: "text", text: q.text });
           else results.push(...q.text);
         }
@@ -1132,61 +1149,241 @@ export class Session {
     };
   }
 
-  /** The `agent` tool: a sub-agent with this epoch's tools (minus `agent`), sandbox and rules. */
-  private agentTool(): ToolDef {
-    return zodTool({
-      name: "agent",
-      description:
-        "Start a sub-agent for one self-contained task and get back its report. It has your tools, sandbox, network and permission rules but not this conversation, so the prompt must contain everything it needs. Call it several times in one response to run independent tasks in parallel.",
-      schema: z.object({
-        description: z.string().min(1).max(80).describe("3-6 word label shown to the user"),
-        prompt: z.string().min(1).describe("Complete brief: the goal, relevant paths and facts, and what to report back"),
+  // ---------- sub-agents ----------
+
+  /** agent, agent_message, agent_status, agent_stop and ask_parent (which only a sub-agent can use). */
+  private async agentTools(): Promise<ToolDef[]> {
+    const sub = this.deps.personas.get(this.personaId)?.config?.subagents;
+    const named = (sub?.agents ?? []).map((a) => `${a.name} (${a.model === "auto" ? "auto: you choose model and effort" : a.model})`);
+    const models = (await this.deps.catalog.list().catch(() => []))
+      .filter((m) => m.ready)
+      .slice(0, 24)
+      .map((m) => `${m.provider}/${m.id}`);
+    const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
+    return [
+      zodTool({
+        name: "agent",
+        description: [
+          "Start a sub-agent for one self-contained task and get back its report. It has your tools, sandbox, network and permission rules. Call it several times in one response to run independent tasks in parallel.",
+          named.length ? `This persona's sub-agents: ${named.join("; ")}.` : "",
+          `With agent "auto" (the default) you may pick the model ("provider/model") and effort; ready models: ${models.join(", ") || "your own"}.`,
+          'context "brief" (default) gives it only your prompt, so the prompt must contain everything it needs; "fork" gives it this conversation as well.',
+          "background: true returns at once; you get a message when it finishes or asks something, and can keep working. A sub-agent may pause with a question: answer it with agent_message.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        schema: z.object({
+          description: z.string().min(1).max(80).describe("3-6 word label shown to the user"),
+          prompt: z.string().min(1).describe("The task: goal, relevant paths and facts, and what to report back"),
+          agent: z.string().optional().describe('A sub-agent of this persona, or "auto" (default)'),
+          model: z.string().optional().describe('Auto only: "provider/model"; default: your own model'),
+          effort: z.enum(efforts).optional().describe("Auto only; default: your own effort"),
+          context: z.enum(["brief", "fork"]).optional().describe('"brief" (default) or "fork"'),
+          max_turns: z.number().int().min(1).max(1000).optional().describe(`Most model turns for this task (default ${DEFAULT_SUBAGENT_TURNS})`),
+          background: z.boolean().optional().describe("Run in the background and return at once"),
+        }),
+        preview: (i) => i.description,
+        primaryArg: (i) => i.description,
+        run: (i, ctx) => this.startAgent(i, ctx),
       }),
-      preview: (i) => i.description,
-      primaryArg: (i) => i.description,
-      run: (i, ctx) => this.runSubagent(i.prompt, ctx.toolUseId, ctx.signal),
-    });
+      zodTool({
+        name: "agent_message",
+        description:
+          "Answer a sub-agent's question, or send a running background agent new instructions. For an agent you did not start in the background, its next report or question comes back as this tool's result.",
+        schema: z.object({ id: z.string().describe("Agent id, e.g. ag_3f9c1a"), message: z.string().min(1) }),
+        preview: (i) => i.message,
+        primaryArg: (i) => i.id,
+        run: (i, ctx) => this.messageAgent(i.id, i.message, ctx.signal),
+      }),
+      zodTool({
+        name: "agent_status",
+        description: "List the sub-agents of this conversation: state, model, turns used and any open question.",
+        schema: z.object({}),
+        preview: () => "agents",
+        run: async () => ({ text: this.agentStatus() }),
+      }),
+      zodTool({
+        name: "agent_stop",
+        description: "Stop a sub-agent.",
+        schema: z.object({ id: z.string() }),
+        preview: (i) => i.id,
+        primaryArg: (i) => i.id,
+        run: async (i) => {
+          const a = this.agents.get(i.id);
+          if (!a) return { text: `No agent ${i.id} in this conversation.`, isError: true };
+          if (!a.sub.active) return { text: `Agent ${i.id} already ended (${a.sub.run.state}).` };
+          this.stopAgents(i.id);
+          return { text: `Stopped agent ${i.id}.` };
+        },
+      }),
+      zodTool({
+        name: "ask_parent",
+        description: "Sub-agents only: ask the agent that started you one question and wait for its answer.",
+        schema: z.object({ question: z.string().min(1) }),
+        preview: (i) => i.question,
+        run: async () => ({ text: "You are the main agent and have no parent: ask the user in your reply instead.", isError: true }),
+      }),
+    ];
   }
 
-  private async runSubagent(prompt: string, parentId: string, signal: AbortSignal): Promise<ToolOutput> {
-    const e = this.epoch!;
+  private async startAgent(
+    i: { description: string; prompt: string; agent?: string; model?: string; effort?: Effort; context?: "brief" | "fork"; max_turns?: number; background?: boolean },
+    ctx: ToolContext,
+  ): Promise<ToolOutput> {
     const cfg = this.deps.personas.get(this.personaId)?.config;
-    const tools: ToolDef[] = e.frozen.tools
-      .filter((f) => f.name !== "agent")
-      .map((f) => {
-        const live = this.liveTools.get(f.name);
-        return live ? { ...live, description: f.description, inputSchema: f.inputSchema } : this.unavailableTool(f);
-      });
-    const system = `${e.frozen.system}\n\n# You are a sub-agent\nAnother agent delegated one task to you. Work on it independently with your tools; you cannot ask the user questions. Finish with a concise report of what you found or changed (paths, commands, results, open issues): that report is all the other agent will see.`;
-    const messages: MessageParam[] = [{ role: "user", content: prompt }];
-    const subId = `${this.id}:sub:${parentId}`;
-    let report = "";
-    const noop = { onBlockStart: () => {}, onDelta: () => {}, onBlockStop: () => {} };
-    try {
-      for (let turn = 0; turn < MAX_SUBAGENT_TURNS; turn++) {
-        if (signal.aborted) return { text: "Sub-agent interrupted.", isError: true };
-        const result = await this.deps.providers.runTurn(
-          e.model.provider,
-          { model: e.model.id, system, tools, messages, maxTokens: cfg?.model?.maxTokens ?? DEFAULT_MAX_TOKENS, effort: cfg?.model?.effort, signal, sessionId: subId },
-          noop,
-        );
-        this.recordUsage(result, "subagent", e.model.provider, e.model.id);
-        if (result.stopReason === "refusal") return { text: result.notice ?? "The sub-agent's model declined the task.", isError: true };
-        if (result.stopReason === "max_tokens" && result.toolUses.length) return { text: `${report}\n[sub-agent hit its output limit mid tool call]`.trim(), isError: true };
-        messages.push({ role: "assistant", content: result.content });
-        const text = result.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
-        if (text) report = text;
-        if (result.stopReason === "pause_turn") continue;
-        if (!result.toolUses.length) break;
-        messages.push({ role: "user", content: await this.runTools(result.toolUses, signal, parentId) });
-      }
-    } catch (err) {
-      if (signal.aborted) return { text: "Sub-agent interrupted.", isError: true };
-      return { text: `Sub-agent failed: ${err instanceof ProviderError ? err.message : errMsg(err)}`, isError: true };
-    } finally {
-      this.deps.providers.releaseSession(subId);
+    const limits = cfg?.subagents ?? { agents: [], maxBackground: 4, maxTurns: 200 };
+    const e = this.epoch!;
+    const fail = (text: string): ToolOutput => ({ text, isError: true });
+
+    const name = i.agent ?? "auto";
+    const named = name === "auto" ? undefined : limits.agents.find((a) => a.name === name);
+    if (name !== "auto" && !named) return fail(`No sub-agent named "${name}". This persona has ${limits.agents.map((a) => a.name).join(", ") || "none"}; use "auto" to choose a model yourself.`);
+    const fixed = named && named.model !== "auto" ? named.model : undefined;
+    if (fixed && (i.model || i.effort)) return fail(`"${name}" always runs on ${fixed}. Leave model and effort out, or use an auto sub-agent.`);
+    const spec = fixed ?? i.model;
+    let model = { provider: e.model.provider, id: e.model.id };
+    if (spec) {
+      const slash = spec.indexOf("/");
+      if (slash <= 0 || slash === spec.length - 1) return fail(`model must be "provider/model", e.g. "${e.model.provider}/${e.model.id}".`);
+      model = { provider: spec.slice(0, slash), id: spec.slice(slash + 1) };
     }
-    return { text: truncateMiddle(report || "(the sub-agent finished without a report)", this.deps.settings.toolOutputLimit) };
+    if (!this.deps.settings.providers[model.provider]) return fail(`Provider "${model.provider}" is not defined in config.yaml.`);
+    if (!this.deps.providers.status().find((p) => p.name === model.provider)?.ready) return fail(`Provider "${model.provider}" has no key, so it cannot run a sub-agent.`);
+    let effort = fixed ? cfg?.model?.effort : (i.effort ?? cfg?.model?.effort);
+    const option = (await this.deps.catalog.list().catch(() => [])).find((m) => m.provider === model.provider && m.id === model.id);
+    if (option && effort && !option.efforts.includes(effort)) effort = undefined; // the model takes no such setting
+    const maxTurns = Math.min(i.max_turns ?? DEFAULT_SUBAGENT_TURNS, limits.maxTurns);
+    if (i.background) {
+      const running = [...this.agents.values()].filter((a) => a.sub.active && a.sub.run.background).length;
+      if (running >= limits.maxBackground) return fail(`${running} background agents are already running (this persona's limit is ${limits.maxBackground}). Wait for one, stop one, or run this one in the foreground.`);
+    }
+
+    const id = randomId("ag_", 3);
+    const brief = `${PREAMBLE(!!i.background)}\n\n# Your task\n${i.prompt}`;
+    const sameModel = model.provider === e.model.provider && model.id === e.model.id;
+    const messages = i.context === "fork" ? forkMessages(e.messages, ctx.toolUseId, sameModel, brief) : [{ role: "user" as const, content: brief }];
+    // The parent's exact tool list and system prompt, so a same-model sub-agent shares its prompt cache.
+    const defs: ToolDef[] = e.frozen.tools.map((f) => {
+      const live = this.liveTools.get(f.name);
+      const def = live ? { ...live, description: f.description, inputSchema: f.inputSchema } : this.unavailableTool(f);
+      return AGENT_TOOLS.has(f.name) ? refusedTool(def, "Only the main agent can start or manage sub-agents.") : def;
+    });
+    const maxTokens = cfg?.model?.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const noop = { onBlockStart: () => {}, onDelta: () => {}, onBlockStop: () => {} };
+    const sub = new SubAgent(
+      { id, name, model: { ...model, ...(effort ? { effort } : {}) }, context: i.context ?? "brief", background: !!i.background, maxTurns, brief: i.prompt },
+      {
+        runTurn: async (r) => {
+          const res = await this.deps.providers.runTurn(r.model.provider, { model: r.model.id, system: r.system, tools: r.tools, messages: r.messages, maxTokens, effort: r.model.effort, signal: r.signal, sessionId: r.sessionId }, noop);
+          this.recordUsage(res, "subagent", r.model.provider, r.model.id);
+          this.persistSoon();
+          return res;
+        },
+        runTools: (uses, signal, tools) => this.runTools(uses, signal, ctx.toolUseId, tools),
+        release: (key) => this.deps.providers.releaseSession(key),
+        outputLimit: this.deps.settings.toolOutputLimit,
+      },
+      e.frozen.system,
+      defs,
+      messages,
+      `${this.id}:sub:${id}`,
+    );
+    const entry: AgentEntry = { sub, toolUseId: ctx.toolUseId, description: i.description };
+    this.agents.set(id, entry);
+    sub.onChange = () => this.patchAgentItem(entry, { agent: { ...sub.run } });
+    sub.start();
+
+    if (i.background) {
+      void this.watchBackground(entry);
+      return {
+        text: `Started background agent ${id} ("${i.description}") on ${model.id}. You'll get a message when it finishes or asks something; carry on meanwhile. agent_status lists agents, agent_message sends one instructions, agent_stop stops one.`,
+        itemPatch: { status: "running", agent: { ...sub.run } },
+      };
+    }
+    const o = await sub.next();
+    this.onAgentOutcome(entry, o);
+    return this.outcomeOutput(entry, o);
+  }
+
+  /** The tool result for an outcome; the `agent` item itself stays running while its agent waits for an answer. */
+  private outcomeOutput(entry: AgentEntry, o: Outcome): ToolOutput {
+    const text = entry.sub.describe(o, entry.description);
+    const agent = { ...entry.sub.run };
+    if (o.kind === "question") return { text, itemPatch: { status: "running", agent } };
+    if (o.kind === "report") return { text, itemPatch: { agent } };
+    return { text, isError: true, itemPatch: { agent, status: o.kind === "stopped" ? "interrupted" : "error" } };
+  }
+
+  private patchAgentItem(entry: AgentEntry, patch: Partial<Extract<ChatItem, { kind: "tool_call" }>>) {
+    const it = this.items.find((x) => x.kind === "tool_call" && x.id === entry.toolUseId);
+    if (it?.kind !== "tool_call") return;
+    Object.assign(it, patch);
+    this.updateItem(it);
+  }
+
+  /** Keep the `agent` line in step with how its agent ended (or that it waits for an answer). */
+  private onAgentOutcome(entry: AgentEntry, o: Outcome) {
+    const agent = { ...entry.sub.run };
+    if (o.kind === "question") this.patchAgentItem(entry, { status: "running", agent });
+    else if (o.kind === "report") this.patchAgentItem(entry, { status: "done", isError: false, output: o.text, agent, durationMs: Date.now() - Date.parse(agent.startedAt) });
+    else this.patchAgentItem(entry, { status: o.kind === "stopped" ? "interrupted" : "error", isError: true, ...(o.kind === "error" ? { output: o.text } : {}), agent });
+  }
+
+  /** A background agent's reports, questions and failures reach the parent as messages; an idle parent wakes up. */
+  private async watchBackground(entry: AgentEntry) {
+    for (;;) {
+      const o = await entry.sub.next();
+      this.onAgentOutcome(entry, o);
+      if (o.kind === "stopped") return;
+      const run = entry.sub.run;
+      const uses = this.items.filter((x) => x.kind === "tool_call" && x.parentId === entry.toolUseId).length;
+      const title = o.kind === "report" ? "Background agent finished" : o.kind === "question" ? "Background agent asked a question" : "Background agent failed";
+      const detail = `${entry.description} · ${fmtElapsed(Date.now() - Date.parse(run.startedAt))} · ${uses} tool ${uses === 1 ? "use" : "uses"}`;
+      this.receipt("agent", title, detail, o.kind === "error" ? "error" : "done");
+      const state = o.kind === "report" ? "finished" : o.kind === "question" ? "asked a question" : "failed";
+      this.queue.push({ text: `[Background agent ${run.id} ("${entry.description}") ${state}]\n${entry.sub.describe(o, entry.description)}`, fromAgent: true });
+      this.touch();
+      if (!this.loopRunning) void this.runLoop();
+      if (o.kind !== "question") return;
+    }
+  }
+
+  private async messageAgent(id: string, message: string, signal: AbortSignal): Promise<ToolOutput> {
+    const a = this.agents.get(id);
+    if (!a) return { text: `No agent ${id} in this conversation. agent_status lists them.`, isError: true };
+    const asking = a.sub.run.state === "asking";
+    const next = a.sub.next();
+    const r = a.sub.message(message);
+    if (r === "ended") return { text: `Agent ${id} already ended (${a.sub.run.state}).`, isError: true };
+    if (a.sub.run.background) return { text: r === "answered" ? "Answer sent; the agent continues in the background." : "Sent; it reads it before its next step." };
+    if (!asking) return { text: "Sent; it reads it before its next step." };
+    // A foreground agent was waiting on this answer: its next report or question is this call's result.
+    const aborted = new Promise<null>((res) => signal.addEventListener("abort", () => res(null), { once: true }));
+    const o = await Promise.race([next, aborted]);
+    if (!o) return { text: "Interrupted while waiting for the agent.", isError: true };
+    this.onAgentOutcome(a, o);
+    return { text: a.sub.describe(o, a.description), isError: o.kind === "error" || o.kind === "stopped" };
+  }
+
+  private agentStatus(): string {
+    if (!this.agents.size) return "No sub-agents in this conversation yet.";
+    return [...this.agents.values()]
+      .map(({ sub, description }) => {
+        const r = sub.run;
+        return `${r.id} "${description}": ${r.state}${r.question ? ` (asks: ${r.question})` : ""} · ${r.name} · ${r.model.provider}/${r.model.id}${r.model.effort ? ` ${r.model.effort}` : ""} · ${r.background ? "background" : "foreground"} · ${r.turns}/${r.maxTurns} turns`;
+      })
+      .join("\n");
+  }
+
+  /** Stop one sub-agent, or all of them (Stop, interrupt, the UI's Stop all). */
+  stopAgents(id?: string) {
+    for (const [key, a] of this.agents) {
+      if (id && key !== id) continue;
+      if (!a.sub.active) continue;
+      // Nobody may be waiting on a paused foreground agent: settle its line here.
+      void a.sub.next().then((o) => this.onAgentOutcome(a, o));
+      a.sub.stop();
+    }
   }
 
   private policy() {
@@ -1194,14 +1391,14 @@ export class Session {
     return new PermissionPolicy(cfg?.permissions ?? { default: "ask", allow: [], ask: [], deny: [] }, this.summary.allowances);
   }
 
-  private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string) {
+  private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>) {
     const policy = this.policy();
-    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, parentId)));
+    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, parentId, tools)));
   }
 
-  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal, parentId?: string): Promise<ContentBlockParam> {
+  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>): Promise<ContentBlockParam> {
     const frozenDef = this.epoch?.frozen.tools.find((t) => t.name === tu.name);
-    const tool = this.liveTools.get(tu.name) ?? (frozenDef ? this.unavailableTool(frozenDef) : undefined);
+    const tool = (tools ?? this.liveTools).get(tu.name) ?? (frozenDef ? this.unavailableTool(frozenDef) : undefined);
     const item: Extract<ChatItem, { kind: "tool_call" }> = {
       kind: "tool_call",
       id: tu.id,
@@ -1222,11 +1419,16 @@ export class Session {
       }
     };
     const finish = (status: ToolCallStatus, out: ToolOutput, extra: Partial<typeof item> = {}): ContentBlockParam => {
-      Object.assign(item, extra, {
-        status,
-        output: out.text + (out.images?.length ? `\n[${out.images.length} image(s)]` : ""),
-        isError: !!out.isError,
-      });
+      Object.assign(
+        item,
+        extra,
+        {
+          status,
+          output: out.text + (out.images?.length ? `\n[${out.images.length} image(s)]` : ""),
+          isError: !!out.isError,
+        },
+        out.itemPatch,
+      );
       show();
       return {
         type: "tool_result",
@@ -1250,7 +1452,7 @@ export class Session {
     // Connection status and sign-in requests only show the user a card: allowed by default.
     if (perm.rule.startsWith("default") && CONNECTION_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "connection tool" };
     // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
-    if (perm.rule.startsWith("default") && tool.name === "agent") perm = { mode: "allow", rule: "sub-agent" };
+    if (perm.rule.startsWith("default") && (AGENT_TOOLS.has(tool.name) || tool.name === "ask_parent")) perm = { mode: "allow", rule: "sub-agent" };
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
     if (perm.mode === "ask") {
       item.status = "pending_approval";
@@ -1343,7 +1545,7 @@ export class Session {
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
       : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...this.creds.tools()];
-    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || CONNECTION_TOOLS.has(n);
+    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
     return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
   }
 

@@ -54,6 +54,16 @@ export const PersonaSchema = z.strictObject({
   connections: PersonaConnectionsSchema.default({}),
   env: z.record(z.string(), z.string()).default({}),
   network: z.strictObject({ allow: z.array(z.string()).default([]) }).prefault({}),
+  subagents: z
+    .strictObject({
+      // Named sub-agents the model can delegate to: a fixed "provider/id" model, or "auto" (the model picks per task).
+      agents: z
+        .array(z.strictObject({ name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, "sub-agent names are lowercase letters, digits and dashes"), model: z.string().min(1) }))
+        .default([]),
+      maxBackground: z.number().int().min(0).max(32).default(4),
+      maxTurns: z.number().int().min(1).max(1000).default(200),
+    })
+    .prefault({}),
   memory: z
     .strictObject({
       autoBrief: z.boolean().default(true), // load saved memories at the start of each context
@@ -201,6 +211,17 @@ export class PersonaStore extends TypedEmitter<Events> {
 
     for (const s of cfg.skills) if (!this.skills.get(s)) errors.push(`skill "${s}" not found`);
 
+    const agentNames = new Set<string>();
+    cfg.subagents.agents.forEach((a, i) => {
+      if (agentNames.has(a.name)) errors.push(`subagents.agents[${i}]: "${a.name}" appears twice`);
+      if (a.name === "auto") errors.push(`subagents.agents[${i}]: "auto" is reserved`);
+      agentNames.add(a.name);
+      if (a.model === "auto") return;
+      const slash = a.model.indexOf("/");
+      if (slash <= 0 || slash === a.model.length - 1) errors.push(`subagents.agents[${i}].model must be "provider/model" or "auto"`);
+      else if (!this.settings.providers[a.model.slice(0, slash)]) errors.push(`subagents.agents[${i}]: provider "${a.model.slice(0, slash)}" is not defined in config.yaml`);
+    });
+
     for (const [conn, pc] of Object.entries(cfg.connections)) {
       const c = this.connections.configOf(conn);
       if (!c) {
@@ -305,6 +326,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       skills: c.skills,
       mcpServers: c.mcpServers as Record<string, unknown>,
       memory: c.memory,
+      subagents: c.subagents,
     };
   }
 
@@ -325,6 +347,8 @@ export class PersonaStore extends TypedEmitter<Events> {
     doc.set("skills", doc.createNode(v.skills));
     doc.set("mcpServers", doc.createNode(v.mcpServers));
     doc.set("memory", doc.createNode(v.memory));
+    const sub = v.subagents;
+    if (sub.agents.length || sub.maxBackground !== 4 || sub.maxTurns !== 200 || doc.has("subagents")) doc.set("subagents", doc.createNode(sub));
     const saved = await this.save(id, doc.toString());
     const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const appliedNow: string[] = [];
@@ -334,6 +358,7 @@ export class PersonaStore extends TypedEmitter<Events> {
     if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (newly named credentials from the next container start)");
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
+    if (!before || !eq(before.subagents, v.subagents)) appliedNow.push("sub-agents (from the next delegation)");
     if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
       nextStart.push("folders, skills and MCP servers (next container start)");
     return { persona: this.summary(saved), appliedNow, nextStart };
