@@ -2,18 +2,16 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ConnectionStatus, CredentialRule, FolderMode, ModelOption, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi, SubagentsConfig } from "@ph/shared";
 import { api } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
-import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, personaModelLine, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
+import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
 import { Card, CardHead, focusPaneHead, PaneHead } from "./Cards";
-import { ModelSelectors } from "./Composer";
 import { IconPlus, IconTrash } from "./icons";
 import { Empty, Spinner } from "./ui";
 
 /** Section titles, for the head of a section opened from the list. */
 const SECTION_TITLE: Record<string, string> = {
   name: "Name and instructions",
-  model: "Model",
   folders: "Folders",
   hosts: "Allowed hosts",
   connections: "Connections",
@@ -265,10 +263,6 @@ const PERMISSION_LABEL: Record<PermissionMode, string> = { allow: "Allow", ask: 
 function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: PersonaSummary | null }) {
   const { state, actions } = useStore();
   const isNew = draftKey === NEW_PERSONA;
-  // A new persona has no Model section (its model is chosen under Name and instructions).
-  useEffect(() => {
-    if (isNew && state.settingsSection === "model") actions.setSettingsSection(null);
-  }, [isNew, state.settingsSection]); // eslint-disable-line react-hooks/exhaustive-deps
   const entry: SettingsDraft | undefined = state.drafts[draftKey];
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -483,7 +477,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     <>
       {/* Keyed by the open section, so each screen starts at the top. */}
       <div className={cls("pane-body", !state.settingsSection && "rail-cards")} key={state.settingsSection ?? "list"}>
-        <Section id="name" title="Name and instructions" summary={d.name} invalid={!!(errors.name || errors.id)}>
+        <Section id="name" title="Name and instructions" invalid={!!(errors.name || errors.id)}>
           {isNew && (
             <Field label="File name" error={errors.id} hint={`Saved as personas/${newId || "<name>"}.yaml`}>
               {(id) => (
@@ -562,15 +556,6 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
             </Field>
           )}
         </Section>
-
-        {!isNew && persona && (
-          <Section id="model" title="Model" summary={personaModelLine(state, persona)}>
-            <div className="row gap wrap">
-              <ModelSelectors persona={persona} />
-            </div>
-            <p className="hint">Saved to the persona right away. The same choice sits under the composer.</p>
-          </Section>
-        )}
 
         <Section
           id="folders"

@@ -1,12 +1,12 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import type { PersonaSummary, SessionSummary } from "@ph/shared";
+import type { ConnectionState, ConnectionStatus, PersonaSummary } from "@ph/shared";
 import { api } from "../api";
 import { agentLive, describeTool, type ToolItem } from "../receipts";
 import { conversationSession, useSelectedPersona, useStore, type DockMode } from "../store";
-import { personaModelLine, plural } from "../status";
+import { CONNECTION_STATE, plural } from "../status";
 import { fmtDuration, relTime, useNow } from "../util";
 import { Card, CardHead, focusPaneHead, MeterSm } from "./Cards";
-import { IconBox, IconCheck, IconFile, IconFolder, IconImage, IconSparkles } from "./icons";
+import { IconCheck, IconFile, IconImage } from "./icons";
 import { useLoad } from "./MemoryUsagePane";
 import { Empty, Spinner } from "./ui";
 
@@ -34,7 +34,10 @@ function useFold(id: string): [boolean, () => void] {
   ];
 }
 
-/** The rail's first screen: what the selected persona is working with, one card per thing, each leading to its detail. */
+/**
+ * The rail's first screen: what is happening in this conversation, one card per thing, each leading to its detail.
+ * How the persona is set up (model, folders, rules) lives in Settings, so it is not repeated here.
+ */
 export function OverviewPane() {
   const persona = useSelectedPersona();
   if (!persona) {
@@ -50,7 +53,6 @@ export function OverviewPane() {
     <div className="pane">
       <h2 className="sr-only">Overview of {persona.name}</h2>
       <div className="pane-body rail-cards">
-        <PersonaCard persona={persona} />
         <ContextCard persona={persona} />
         <AgentsCard persona={persona} />
         <ConnectionsCard persona={persona} />
@@ -78,62 +80,6 @@ function Row({ icon, children, end }: { icon?: ReactNode; children: ReactNode; e
       <span className="grow">{children}</span>
       {end !== undefined && <span className="end">{end}</span>}
     </div>
-  );
-}
-
-function folderName(path: string): string {
-  return path.replace(/\/+$/, "").split("/").pop() || path;
-}
-
-function sandboxState(session: SessionSummary | null, available: boolean | undefined): { text: string; tone?: string } {
-  if (available === false) return { text: "Unavailable", tone: "tone-error" };
-  switch (session?.status) {
-    case undefined:
-      return { text: "Not started" };
-    case "starting":
-      return { text: "Starting" };
-    case "error":
-      return { text: "Error", tone: "tone-error" };
-    case "stopped":
-      return { text: "Stopped" };
-    default:
-      return { text: "Running", tone: "tone-ok" };
-  }
-}
-
-function PersonaCard({ persona }: { persona: PersonaSummary }) {
-  const { state } = useStore();
-  const [open, toggle] = useFold("persona");
-  const bodyId = useId();
-  const session = conversationSession(state, persona.id);
-  // Named by where the sandbox sees them, as Settings names them.
-  const names = persona.folders.map((f) => folderName(f.mountPath));
-  const canChange = persona.folders.filter((f) => f.mode === "rw").length;
-  const sandbox = sandboxState(session, state.runtime?.available);
-  return (
-    <Card>
-      <CardHead title="Persona" open={open} onToggle={toggle} controls={bodyId} summary={open ? undefined : persona.name} />
-      {open && (
-        <div className="rcard-rows" id={bodyId}>
-          <Row icon={<IconSparkles size={16} />} end={persona.model.provider}>
-            {personaModelLine(state, persona)}
-          </Row>
-          <Row
-            icon={<IconFolder size={16} />}
-            end={names.length ? (canChange ? `${canChange} can change` : "Read only") : undefined}
-          >
-            {names.length ? (
-              <span className="mono">{names.length > 2 ? `${names.slice(0, 2).join(" · ")} +${names.length - 2}` : names.join(" · ")}</span>
-            ) : (
-              <span className="muted">No folders</span>
-            )}
-          </Row>
-          <Row icon={<IconBox size={16} />} end={<span className={sandbox.tone}>{sandbox.text}</span>}>
-            Sandbox
-          </Row>
-        </div>
-      )}
-    </Card>
   );
 }
 
@@ -225,24 +171,50 @@ function AgentsCard({ persona }: { persona: PersonaSummary }) {
   );
 }
 
+/** Connection states that wait on the user. */
+const NEEDS_YOU: ReadonlySet<ConnectionState> = new Set<ConnectionState>(["login_required", "signing_in", "incomplete", "error"]);
+
+/** Only while a connection this persona uses needs the user, with the way to fix it. Values and sign-in live in Swan settings. */
 function ConnectionsCard({ persona }: { persona: PersonaSummary }) {
   const { state, actions } = useStore();
-  const used = state.connections.filter((c) => persona.connections.includes(c.name));
-  const waiting = used.filter((c) => c.state !== "ready").length;
-  const summary = !persona.connections.length ? (
-    "None"
-  ) : waiting ? (
-    <span className="tone-attention">{waiting === 1 ? "1 needs attention" : `${waiting} need attention`}</span>
-  ) : (
-    `${used.length} ready`
-  );
+  const [busy, setBusy] = useState<string | null>(null);
+  const waiting = state.connections.filter((c) => persona.connections.includes(c.name) && NEEDS_YOU.has(c.state));
+  if (!waiting.length) return null;
+  const openSwan = () => {
+    actions.openSwanSettings();
+    focusPaneHead();
+  };
+  const fix = async (c: ConnectionStatus) => {
+    if (c.state === "login_required") {
+      setBusy(c.name);
+      await actions.connectionAction(c.name, "login");
+      setBusy(null);
+    }
+    // The sign-in code, and the place to set a value, are in Swan settings.
+    openSwan();
+  };
   return (
-    <Card line>
-      <CardHead id="ov-connections" title="Connections" summary={summary} onOpen={() => {
-          actions.openSettings({ section: "connections" });
-          focusPaneHead();
-        }}
+    <Card>
+      <CardHead
+        title="Connections"
+        onOpen={openSwan}
+        summary={<span className="tone-attention">{waiting.length === 1 ? "1 needs attention" : `${waiting.length} need attention`}</span>}
       />
+      <div className="rcard-rows">
+        {waiting.map((c) => {
+          const st = CONNECTION_STATE[c.state];
+          return (
+            <div className="rcard-row" key={c.name}>
+              <span className="grow" title={c.message ?? undefined}>
+                <span className="mono">{c.name}</span> <span className={`small tone-${st.tone}`}>· {st.label}</span>
+              </span>
+              <button type="button" className="link-btn small" disabled={busy === c.name} onClick={() => void fix(c)}>
+                {c.state === "login_required" ? "Sign in" : c.state === "signing_in" ? "Show code" : "Fix"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </Card>
   );
 }
