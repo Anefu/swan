@@ -15,8 +15,12 @@ const CheckSchema = z
     file: z
       .object({ path: z.string(), exists: z.boolean().optional(), contains: z.string().optional(), notContains: z.string().optional(), matches: z.string().optional() })
       .optional(),
-    /** A command run in a throwaway container over a copy of the workspace (never on the host). */
-    command: z.object({ run: z.string(), exitCode: z.number().int().default(0) }).optional(),
+    /**
+     * A command run in a throwaway container over a copy of the workspace (never on the host).
+     * `include` is a directory of hidden files (such as gold tests) copied to .gold/ in that copy
+     * only: the agent never sees it.
+     */
+    command: z.object({ run: z.string(), exitCode: z.number().int().default(0), include: z.string().optional() }).optional(),
     /** The agent's final reply in the last stage. */
     reply: z.object({ matches: z.string().optional(), notMatches: z.string().optional() }).optional(),
     /** Tool calls in the whole transcript: "none" means no call may match, "some" means one must. */
@@ -131,7 +135,9 @@ export async function loadCampaign(file: string): Promise<{ campaign: Campaign; 
   const cases: Case[] = [];
   for (const c of campaign.cases) {
     const k = await loadYaml(path.resolve(dir, c), CaseSchema);
-    if (k.workspace) k.workspace = path.resolve(path.dirname(path.resolve(dir, c)), k.workspace);
+    const caseDir = path.dirname(path.resolve(dir, c));
+    if (k.workspace) k.workspace = path.resolve(caseDir, k.workspace);
+    for (const check of k.checks) if (check.command?.include) check.command.include = path.resolve(caseDir, check.command.include);
     cases.push(k);
   }
   return { campaign, cases };

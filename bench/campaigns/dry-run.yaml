@@ -9,6 +9,7 @@ cases:
   - ../cases/mem-license-header.yaml
   - ../cases/mem-ruled-out-api.yaml
   - ../cases/cost-fix-sum.yaml
+  - ../cases/cost-ledger-review.yaml
 providers:
   fake: { type: openai, baseURL: "http://127.0.0.1:8299/v1" }
 configs:

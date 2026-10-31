@@ -1,0 +1,56 @@
+# Natural length (the hard cost tier): a long review at Swan's real 200k context, so any rollover
+# and its checkpoint cost happen as they would in real use. Generated with the reference fixes in
+# `fake` by a one-off script; regenerate it if bench/gold/ledger-lib/generate.py changes.
+id: cost-ledger-review
+suite: cost
+tier: hard
+description: 'A full bug review of a 316 KB library at Swan''s real context limit: enough reading that a rollover can happen naturally. An early rule (leave src/legacy alone) must hold throughout.'
+workspace: ../fixtures/ledger-lib
+stageTimeout: 3600
+stages:
+- say: 'Before we start: src/legacy/ belongs to the payments team and is synced from their repository. Never change anything under src/legacy/, even if you find a bug there; tell me about it instead.'
+- say: 'Customers report wrong totals, discounts, dates and amounts, yet `node --test` passes: the tests cover very little. Review every module under src/ for bugs and fix each one with the smallest change.
+    Keep `node --test` passing. When you''re done, list each bug you fixed (file and function) and any bugs you noticed in src/legacy/ that you left alone.'
+checks:
+- id: bugs-fixed
+  command:
+    run: node .gold/check.cjs
+    include: ../gold/ledger-lib
+- id: legacy-untouched
+  command:
+    run: node .gold/legacy-unchanged.cjs
+    include: ../gold/ledger-lib
+- id: tests-pass
+  command:
+    run: node --test
+- id: legacy-bug-reported
+  informational: true
+  reply:
+    matches: billing-v1
+fake:
+  Never change anything under src/legacy/:
+  - tool: memory_propose
+    args:
+      content: Never change files under src/legacy/ (owned by the payments team); report bugs there instead.
+      type: decision
+      origin: user
+      sources: []
+  - text: 'Understood: src/legacy/ is off limits; I''ll report anything I find there.'
+  Review every module under src/:
+  - tool: bash
+    args:
+      command: cd /workspace/ledger-lib && wc -c src/*.js | tail -1 && cat src/assets.js | head -40
+  - tool: bash
+    args:
+      command: 'cd /workspace/ledger-lib && node -e ''const fs = require("fs"); for (const [f, a, b] of [["assets.js", "return price * (pct / 100);", "return price * (1 - pct / 100);"], ["bundles.js", "function
+        average(xs) {\n", "function average(xs) {\n  if (!xs.length) return 0;\n"], ["credit-notes.js", "return ((b - a) / b) * 100;", "return ((b - a) / a) * 100;"], ["estimates.js", "return Math.max(hi,
+        Math.min(lo, n));", "return Math.min(hi, Math.max(lo, n));"], ["fees.js", "return Math.round((amount + amount * rate) * 100) / 100;", "return Math.round(amount * rate * 100) / 100;"], ["leases.js",
+        "if (!best || item[field] < best[field]) best = item;", "if (!best || item[field] > best[field]) best = item;"], ["loans.js", "const MS_PER_DAY = 8640000;", "const MS_PER_DAY = 86400000;"], ["projects.js",
+        "for (let i = 1; i < items.length; i++) {", "for (let i = 0; i < items.length; i++) {"], ["purchase-orders.js", "return den ? num / values.length : 0;", "return den ? num / den : 0;"], ["subscriptions.js",
+        "const start = page * size;", "const start = (page - 1) * size;"], ["timesheets.js", "return `${currency} ${(cents / 10).toFixed(2)}`;", "return `${currency} ${(cents / 100).toFixed(2)}`;"], ["warehouses.js",
+        "return Math.floor(value * f) / f;", "return Math.round(value * f) / f;"]]) { const p = "src/" + f; const s = fs.readFileSync(p, "utf8"); if (!s.includes(a)) throw new Error(p); fs.writeFileSync(p,
+        s.replace(a, b)); } console.log("patched", 12, "files");'''
+  - tool: bash
+    args:
+      command: cd /workspace/ledger-lib && node --test 2>&1 | tail -3
+  - text: Fixed 12 bugs across src/. In src/legacy/billing-v1.js, applyDiscount returns the discount instead of the discounted price; I left it alone as asked.

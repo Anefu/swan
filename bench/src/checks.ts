@@ -62,6 +62,7 @@ async function evaluate(c: Omit<Check, "informational">, ev: Evidence): Promise<
     const copy = await fs.mkdtemp(path.join(os.homedir(), ".swan-bench", "check-"));
     try {
       await fs.cp(ev.workspace, copy, { recursive: true });
+      if (c.command.include) await fs.cp(c.command.include, path.join(copy, ".gold"), { recursive: true });
       const r = await run(
         "podman",
         ["run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", "1g", "--pids-limit", "256", "-v", `${copy}:/w`, "-w", "/w", ev.imageTag, "sh", "-c", c.command.run],

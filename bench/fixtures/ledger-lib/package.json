@@ -1,0 +1,9 @@
+{
+  "name": "ledger-lib",
+  "version": "2.3.0",
+  "private": true,
+  "description": "Finance helpers shared by the billing services",
+  "scripts": {
+    "test": "node --test"
+  }
+}

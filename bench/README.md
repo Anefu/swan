@@ -54,7 +54,11 @@ rollovers and time. A config's `contextTokens` applies to rollover runs only, to
 ## Writing a case
 
 See `cases/`. A case names its suite and tier, a workspace from `fixtures/`, the variants it runs,
-its stages and its checks (`file`, `command`, `reply`, `toolCalls`, `memory`, `egress`). `fake` holds
+its stages and its checks (`file`, `command`, `reply`, `toolCalls`, `memory`, `egress`). A `command`
+check can `include` a directory from `gold/` (hidden tests, original files): it is copied to
+`.gold/` in the check's container only, never into the agent's workspace. Each fixture with hidden
+checks has an oracle test (`src/fixtures.test.ts`): the shipped workspace fails them and the
+reference solution passes. `fake` holds
 scripts for the dry run's scripted model, keyed by a phrase from the user's message; they only prove
 the plumbing and say nothing about model quality. Keep facts the agent must remember out of the
 workspace files, so a check measures memory rather than reading.

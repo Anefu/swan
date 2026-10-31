@@ -1,0 +1,29 @@
+# Main campaign. The cap is $0 until we agree it after reviewing the cases: with priced models the
+# runner refuses to start at $0.
+#   pnpm bench run bench/campaigns/main.yaml --secrets ~/.persona-harness/secrets.yaml
+name: main
+cap: 0
+trials: 3
+cases:
+  - ../cases/mem-pnpm-convention.yaml
+  - ../cases/mem-correction.yaml
+  - ../cases/mem-license-header.yaml
+  - ../cases/mem-ruled-out-api.yaml
+  - ../cases/cost-fix-sum.yaml
+  # Natural length: runs at Swan's real 200k context (contextTokens below applies to rollover runs only).
+  - ../cases/cost-ledger-review.yaml
+providers:
+  anthropic: { type: anthropic, apiKeySecret: ANTHROPIC_API_KEY }
+  # openrouter: see pilot.yaml for pinning an open model to one host, with its price.
+configs:
+  # Today's default.
+  - id: full-sonnet
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: full
+    contextTokens: 16000
+  # The setup the checkpoint comparison favoured.
+  - id: minimal-haiku
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: minimal
+    contextTokens: 16000
+    memoryModel: { provider: anthropic, id: claude-haiku-5-5 }
