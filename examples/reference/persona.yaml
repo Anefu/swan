@@ -1,0 +1,73 @@
+# A complete persona, using every setting. Save it as ~/.swan/personas/<id>.yaml (the file name is
+# its id: lowercase letters, digits and dashes) or build one in Settings → New persona. Edits apply
+# immediately. It uses the connections in config.yaml next to this file.
+name: Payments dev
+description: Works on the payments service and reads the design docs
+
+model:
+  provider: copilot
+  id: gpt-5             # an id from the model menu; your Copilot plan decides which exist
+  effort: high          # low | medium | high | xhigh | max, where the model supports it
+  maxTokens: 32000      # output limit per reply (Copilot sets its own)
+
+instructions: |         # added to the system prompt
+  Prefer small, reviewed changes. Run the tests before saying something works.
+
+# All the agent can see of this Mac: these folders, under /workspace.
+folders:
+  - { path: ~/code/payments, mode: rw }                           # /workspace/payments, can change
+  - { path: ~/docs/design, mount: /workspace/design, mode: ro }   # can read only
+
+skills: [repo-tour]     # from ~/.swan/skills or skillDirs, mounted read-only at /skills/<name>
+
+mcpServers:
+  github:               # stdio: runs inside the sandbox and only ever sees a placeholder token
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-github"]
+    env: { GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github/GITHUB_TOKEN}}" }
+  # docs:               # http: called from this Mac, with the real value in the header
+  #   url: https://docs.example.com/mcp
+  #   headers: { Authorization: "Bearer {{credential:docs/DOCS_TOKEN}}" }
+
+# Which credentials the agent may use, and for what. Deny wins over ask, ask over allow; a request
+# no rule matches goes out with the placeholder (so it fails) and Swan offers to add a rule.
+connections:
+  github:
+    rules:
+      - credential: GITHUB_TOKEN
+        api: http       # http: "METHOD /path" (* within a segment, ** across); also kubernetes and aws
+        allow: ["GET /**", "HEAD /**"]
+        ask: ["POST /repos/*/*/issues", "POST /repos/*/*/pulls", "PATCH /repos/*/*/issues/*"]
+        deny: ["DELETE /**", "PUT /repos/*/*/collaborators/**"]
+
+env: { NODE_ENV: development }   # extra variables in the sandbox; never secrets (use credentials)
+
+# Hosts the agent may reach, besides its credentials' hosts. On a company network, agents' traffic
+# does not go through the company proxy yet (docs/DESKTOP.md).
+network:
+  allow: [registry.npmjs.org, pypi.org, files.pythonhosted.org]
+
+subagents:
+  agents:
+    - { name: reviewer, model: copilot/gpt-5 }   # "provider/id", or "auto" to let the agent choose per task
+  maxBackground: 4      # sub-agents running in the background at once
+  maxTurns: 200         # model turns per sub-agent task
+
+memory:
+  autoBrief: true       # load saved memories at the start of each context
+  briefTokens: 1500
+
+# Tool permissions: deny > allow > ask > default. A rule is a tool name or glob (mcp__github__*),
+# or tool(argument glob) such as bash(git status*). "Always allow" in a conversation adds a rule
+# for that conversation only.
+permissions:
+  default: ask
+  allow: [read_file, list_dir, glob, grep, load_skill, "bash(git status*)", "bash(git diff*)", "bash(npm test*)", "mcp__github__get_*", "mcp__github__list_*"]
+  ask: [bash, write_file, edit_file, "mcp__github__create_*"]
+  deny: ["mcp__github__delete_*", "mcp__github__merge_*"]
+
+sandbox:
+  cpus: 2
+  memory: 4g
+  pidsLimit: 512
+  workdir: /workspace/payments   # where bash starts

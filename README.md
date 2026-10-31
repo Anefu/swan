@@ -130,8 +130,9 @@ Upgrading from the earlier format (credentials with `hosts` in the secrets files
 `credentials: [...]`) happens once on start: originals are kept as `.bak`, existing access is kept
 with `allow: ["* /**"]` rules, and Settings shows what moved.
 
-Persona reference: [docs/ARCHITECTURE.md#personas-workspaces](docs/ARCHITECTURE.md#personas-workspaces)
-and `examples/personas/`.
+Complete, commented examples of `config.yaml`, `secrets.yaml` and a persona using every setting
+(Copilot, a company proxy, a GitHub credential under rules): [examples/reference/](examples/reference/).
+More on personas: [docs/ARCHITECTURE.md#personas-workspaces](docs/ARCHITECTURE.md#personas-workspaces).
 
 ## Models
 

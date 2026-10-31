@@ -1,0 +1,60 @@
+# A complete ~/.swan/config.yaml for a work laptop: GitHub Copilot as the model, a company proxy and
+# an Artifactory image mirror, and a GitHub credential agents may use under rules.
+# Restart Swan after editing (connections apply immediately). Secret values never go in this file:
+# they live in secrets.yaml (see secrets.yaml next to this file).
+
+port: 4317          # Swan's API, on 127.0.0.1 only (the app takes a free port if this one is taken)
+proxyPort: 4318     # the egress proxy the sandbox reaches through the relay
+
+# Model providers. Their keys live in secrets.yaml under apiKeySecret; Swan uses them itself and
+# no agent ever can.
+providers:
+  copilot: { type: copilot, apiKeySecret: COPILOT_GITHUB_TOKEN }
+  anthropic: { type: anthropic, apiKeySecret: ANTHROPIC_API_KEY }
+  local: { type: openai, baseURL: http://127.0.0.1:8080/v1 }   # any OpenAI-compatible server
+# The model new personas start with. Copilot ids depend on your plan: pick one from the model menu.
+defaultModel: { provider: copilot, id: gpt-5 }
+
+skillDirs: [~/.claude/skills]   # extra skill folders; each child folder with a SKILL.md is a skill
+
+# The company network (docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors).
+proxy:
+  url: http://proxy.example.com:8080   # model calls, the Copilot runtime, wrappers and the image build
+  noProxy: [.example.com]              # reached directly; localhost always is
+caFiles: [~/certs/company-root.pem]    # only if the proxy inspects HTTPS or a mirror uses your company CA
+mirrors:
+  baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
+  # Only where these mirrors exist; without them Debian packages and PyPI come through the proxy.
+  # apt:
+  #   http://deb.debian.org/debian: https://artifactory.example.com/artifactory/debian-remote
+  #   http://deb.debian.org/debian-security: https://artifactory.example.com/artifactory/debian-security-remote
+  # pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
+  # npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
+
+# Podman names. Change all four only to run a second Swan beside this one.
+runtime:
+  network: ph-internal
+  subnet: 10.213.0.0/24
+  relayIp: 10.213.0.2
+  relayName: ph-relay
+
+bashTimeoutMs: 120000      # a single bash command is stopped after this long
+rolloverAt: 0.75           # share of the model's context at which a long conversation rolls over
+rolloverStrategy: full     # full | minimal | retrieval: how much the new context starts with
+
+# Where agents' credentials come from (hot-reloaded). A persona gets a credential only through its
+# rules, and the egress proxy sends the real value only to the hosts listed here.
+connections:
+  github:
+    type: static                       # values in secrets.yaml as github/NAME
+    credentials:
+      GITHUB_TOKEN:
+        hosts: [api.github.com]
+        inject: { header: Authorization, format: "Bearer {value}" }   # added when a request lacks it
+  # A wrapper around your own sign-in tool (SSO, cloud CLI) that speaks Swan's connection protocol
+  # (docs/connection-protocol-v1.schema.json); Swan runs it on this Mac and keeps the values here.
+  # corp-aws:
+  #   type: command
+  #   command: [~/bin/corp-swan, --role, ReadOnly]
+  #   hosts: ["*.amazonaws.com"]
+  #   renewBefore: 5m
