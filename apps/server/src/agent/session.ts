@@ -87,7 +87,7 @@ const SWAN_COMMANDS: SlashCommand[] = [
   { name: "usage", description: "Open usage for this persona", source: "swan" },
 ];
 
-function systemPrompt(o: {
+export function systemPrompt(o: {
   name: string;
   instructions: string;
   folders: FolderMount[];

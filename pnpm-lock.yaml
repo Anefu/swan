@@ -131,6 +131,28 @@ importers:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1)
 
+  bench:
+    dependencies:
+      '@ph/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/aws-sigv4:
     devDependencies:
       '@aws-crypto/sha256-js':

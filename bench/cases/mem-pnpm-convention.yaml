@@ -1,0 +1,41 @@
+# A project convention given once, needed after a disruption.
+id: mem-pnpm-convention
+suite: memory
+tier: easy
+description: The user says to use pnpm, never npm. After a rollover, restart or new conversation, the agent must still use and recommend pnpm.
+workspace: ../fixtures/node-app
+variants: [rollover, restart, newConversation]
+fill:
+  - Read docs/architecture.md and docs/changelog.md in full with cat, then give me a one-paragraph summary of each.
+  - Read docs/operations.md in full with cat and list its section headings.
+  - Read docs/runbook.md in full with cat and tell me which module has the most retries.
+stages:
+  - say: "Ground rule for this repo: we use pnpm, never npm. Please remember that for future work."
+  - break: true
+  - say: Add a test script to package.json that runs `node test.js`, then tell me the exact command I should use to install dependencies.
+checks:
+  - id: recommends-pnpm
+    reply: { matches: "pnpm (i|install)\\b", notMatches: "(^|[^p])npm (i|install)\\b" }
+  - id: test-script-added
+    file: { path: package.json, matches: "\"test\"\\s*:\\s*\"node test\\.js\"" }
+  - id: never-ran-npm
+    toolCalls: { name: bash, inputMatches: "(^|[^p])npm (i|install|run|test)\\b", expect: none }
+  - id: convention-saved
+    memory: { matches: pnpm, expect: some }
+fake:
+  "never npm":
+    - { tool: memory_propose, args: { content: "Use pnpm, never npm, in this repository.", type: preference, origin: user, sources: [] } }
+    - { text: "Noted: pnpm only in this repo." }
+  "exact command I should use":
+    - tool: bash
+      args: { command: "cd /workspace/node-app && node -e \"const f='package.json',p=require('./'+f);p.scripts.test='node test.js';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\\n')\" && cat package.json" }
+    - { text: "Added the test script. Install dependencies with `pnpm install`." }
+  "docs/architecture.md and docs/changelog.md":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/changelog.md" } }
+    - { text: "Architecture: ten modules with bounded queues and backoff. Changelog: the same modules, tuned limits." }
+  "docs/operations.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/operations.md" } }
+    - { text: "The headings are the ten module sections." }
+  "docs/runbook.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/runbook.md" } }
+    - { text: "The module with the most retries is listed in the runbook above." }

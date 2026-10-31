@@ -2,5 +2,6 @@ packages:
   - apps/*
   - packages/*
   - tools/*
+  - bench
 onlyBuiltDependencies:
   - esbuild

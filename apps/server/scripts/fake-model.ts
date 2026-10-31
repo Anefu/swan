@@ -6,7 +6,9 @@
 // and set a persona's model to { provider: fake, id: scripted }.
 //
 // Each user message picks a script by keyword (see SCRIPTS); every model turn after it plays the
-// next step. Steps are tool calls or a final text reply.
+// next step. Steps are tool calls or a final text reply. FAKE_MODEL_SCRIPTS may name a JSON file of
+// more scripts in the same shape (the benchmark runner's dry runs use it).
+import { readFileSync } from "node:fs";
 import http from "node:http";
 
 // args may depend on the user message that started the script (e.g. an agent id in a notification).
@@ -68,6 +70,9 @@ const SCRIPTS: Record<string, Step[]> = {
   slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
 };
 
+// Scripts from FAKE_MODEL_SCRIPTS are matched first, so a case's phrase wins over a short built-in keyword.
+const EXTRA: Record<string, Step[]> = process.env.FAKE_MODEL_SCRIPTS ? JSON.parse(readFileSync(process.env.FAKE_MODEL_SCRIPTS, "utf8")) : {};
+
 type Msg = { role: string; content?: string | null; tool_calls?: unknown[] };
 
 function pick(messages: Msg[]): Step {
@@ -83,10 +88,17 @@ function pick(messages: Msg[]): Step {
   });
   lastUserText = String(messages[lastUser]?.content ?? "");
   const text = lastUserText.toLowerCase();
-  const key = Object.keys(SCRIPTS).find((k) => text.includes(k));
+  // The keyword that appears last wins: a carried-over checkpoint can repeat earlier keywords first.
+  const find = (scripts: Record<string, Step[]>) =>
+    Object.keys(scripts)
+      .filter((k) => text.includes(k.toLowerCase()))
+      .sort((a, b) => text.lastIndexOf(b.toLowerCase()) - text.lastIndexOf(a.toLowerCase()))[0];
+  const extraKey = find(EXTRA);
+  const scripts = extraKey ? EXTRA : SCRIPTS;
+  const key = extraKey ?? find(SCRIPTS);
   if (!key) return { text: `Scripted model. Say one of: ${Object.keys(SCRIPTS).join(", ")}.` };
   const done = messages.slice(lastUser + 1).filter((m) => m.role === "assistant").length;
-  return SCRIPTS[key][done] ?? { text: "(script finished)" };
+  return scripts[key][done] ?? { text: "(script finished)" };
 }
 
 const server = http.createServer((req, res) => {

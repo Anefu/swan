@@ -8,7 +8,8 @@
     "start": "pnpm --filter @ph/server start",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
-    "aws-stub": "pnpm --filter @ph/aws-stub start"
+    "aws-stub": "pnpm --filter @ph/aws-stub start",
+    "bench": "pnpm --filter @ph/bench bench"
   },
   "packageManager": "pnpm@10.17.1",
   "engines": {

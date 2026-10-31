@@ -22,6 +22,7 @@ packages/aws-sigv4  AWS Signature V4 signing and verification (no dependencies)
 tools/aws-stub    Local AWS + Kubernetes stand-in and a reference connection wrapper, for tests without an AWS account
 sandbox/          Containerfile for the session image
 examples/         Seed personas, skills, secrets template, demo workspace
+bench/            Benchmark runner for memory and cost per task (see bench/README.md)
 ```
 
 ## Commands
@@ -34,6 +35,7 @@ pnpm build            # web UI
 pnpm start            # server on http://127.0.0.1:4317 (needs Podman)
 pnpm dev              # server with restart + Vite with HMR
 pnpm aws-stub         # local AWS/Kubernetes stub, see tools/aws-stub/README.md
+pnpm bench run bench/campaigns/dry-run.yaml   # benchmark dry run, scripted model (needs Podman)
 ```
 
 - Node ≥ 22.12, pnpm 10 (see `packageManager`).

@@ -1,0 +1,7 @@
+{
+  "name": "node-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Small fixture project for Swan benchmark runs",
+  "scripts": {}
+}

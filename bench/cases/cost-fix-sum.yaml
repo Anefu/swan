@@ -1,0 +1,30 @@
+# An easy, verifiable fix: cost per success on the easiest tier.
+id: cost-fix-sum
+suite: cost
+tier: easy
+description: sum() skips the first element. Fix it so the tests pass, without changing the tests.
+workspace: ../fixtures/node-app
+stages:
+  - say: The tests fail. Fix the bug in src/sum.js so `node test.js` passes. Don't change test.js.
+checks:
+  - id: tests-pass
+    command: { run: node test.js }
+  - id: tests-unchanged
+    file: { path: test.js, contains: "assert.strictEqual(sum([1, 2, 3, 4]), 10);" }
+fake:
+  "Fix the bug in src/sum.js":
+    - { tool: bash, args: { command: "cd /workspace/node-app && node test.js; cat src/sum.js" } }
+    - tool: write_file
+      args:
+        path: /workspace/node-app/src/sum.js
+        content: |
+          // Sum of the numbers in a list.
+          function sum(xs) {
+            let total = 0;
+            for (let i = 0; i < xs.length; i++) total += xs[i];
+            return total;
+          }
+
+          module.exports = { sum };
+    - { tool: bash, args: { command: "cd /workspace/node-app && node test.js" } }
+    - { text: "The loop started at index 1; it now starts at 0 and the tests pass." }

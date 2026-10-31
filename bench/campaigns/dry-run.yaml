@@ -1,0 +1,23 @@
+# Phase 0: proves the runner, Swan's plumbing and the checks with the scripted model. Spends nothing.
+name: dry-run
+cap: 0
+trials: 1
+fakeModel: true
+cases:
+  - ../cases/mem-pnpm-convention.yaml
+  - ../cases/mem-correction.yaml
+  - ../cases/cost-fix-sum.yaml
+providers:
+  fake: { type: openai, baseURL: "http://127.0.0.1:8299/v1" }
+configs:
+  # Small contexts so the fill messages force a rollover quickly.
+  - id: scripted-full
+    model: { provider: fake, id: scripted }
+    rolloverStrategy: full
+    contextTokens: 6000
+    allowUnpriced: true
+  - id: scripted-none
+    model: { provider: fake, id: scripted }
+    rolloverStrategy: none
+    contextTokens: 6000
+    allowUnpriced: true
