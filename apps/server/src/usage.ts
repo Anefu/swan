@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { UsageReport, UsageTotals } from "@ph/shared";
-import { paths } from "./settings.js";
+import { paths, type ModelPrice } from "./settings.js";
 import { TypedEmitter, nowIso, randomId } from "./util.js";
 
 export type UsagePurpose = "foreground" | "subagent" | "checkpoint" | "dream";
@@ -16,7 +16,7 @@ export interface UsageEvent {
   providerType: string;
   model: string;
   purpose: UsagePurpose;
-  inputTokens: number; // as reported; for Anthropic excludes cached input
+  inputTokens: number; // uncached input (OpenAI-style prompt_tokens minus cached_tokens)
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -33,9 +33,20 @@ const RATES: Record<string, [number, number, number, number]> = {
   "claude-haiku-5-5": [0.1, 0.5, 0.01, 0.125],
 };
 
-export function estimateCost(e: Pick<UsageEvent, "providerType" | "model" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">): number | null {
-  if (e.providerType !== "anthropic") return null; // subscriptions and local models have no per-token price here
-  const r = RATES[e.model];
+/**
+ * Estimated USD for one request. `inputTokens` is uncached input for every provider. A price from
+ * config.yaml wins; otherwise only Anthropic models have built-in rates, and subscriptions and local
+ * models without a configured price have none.
+ */
+export function estimateCost(
+  e: Pick<UsageEvent, "providerType" | "model" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">,
+  price?: ModelPrice,
+): number | null {
+  const r: [number, number, number, number] | undefined = price
+    ? [price.input, price.output, price.cacheRead ?? price.input, price.cacheWrite ?? price.input]
+    : e.providerType === "anthropic"
+      ? RATES[e.model]
+      : undefined;
   if (!r) return null;
   return (e.inputTokens * r[0] + e.outputTokens * r[1] + e.cacheReadTokens * r[2] + e.cacheWriteTokens * r[3]) / 1e6;
 }
@@ -56,6 +67,11 @@ function add(t: UsageTotals, e: UsageEvent) {
 /** Local usage ledger: one redacted line per model request in audit/usage-YYYY-MM-DD.jsonl. */
 export class UsageLedger extends TypedEmitter<{ recorded: [UsageEvent] }> {
   private events: UsageEvent[] = [];
+
+  /** `priceFor` returns a model's configured price, if config.yaml sets one. */
+  constructor(private priceFor: (provider: string, model: string) => ModelPrice | undefined = () => undefined) {
+    super();
+  }
   private context = new Map<string, { usedTokens: number; limitTokens: number; estimated: boolean; epoch: number }>();
 
   async load() {
@@ -73,7 +89,7 @@ export class UsageLedger extends TypedEmitter<{ recorded: [UsageEvent] }> {
   }
 
   record(e: Omit<UsageEvent, "id" | "ts" | "costUsd">): UsageEvent {
-    const ev: UsageEvent = { id: randomId("u_", 6), ts: nowIso(), ...e, costUsd: estimateCost(e) };
+    const ev: UsageEvent = { id: randomId("u_", 6), ts: nowIso(), ...e, costUsd: estimateCost(e, this.priceFor(e.provider, e.model)) };
     this.events.push(ev);
     const file = path.join(paths.audit, `usage-${ev.ts.slice(0, 10)}.jsonl`);
     void fs.appendFile(file, JSON.stringify({ ...ev, ratesVersion: RATES_VERSION }) + "\n", { mode: 0o600 }).catch(() => {});

@@ -13,7 +13,7 @@ import { CertAuthority } from "./proxy/ca.js";
 import { EgressProxy } from "./proxy/egress.js";
 import { PodmanRuntime } from "./sandbox/podman.js";
 import { SecretStore } from "./secrets.js";
-import { ensureHome, loadSettings, paths } from "./settings.js";
+import { ensureHome, loadSettings, modelSettings, paths } from "./settings.js";
 import { SkillRegistry } from "./skills.js";
 import { debounce, errMsg, exists, log, randomId, writeFileAtomic } from "./util.js";
 
@@ -60,7 +60,7 @@ async function main() {
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
   const memory = new MemoryStore();
-  const usage = new UsageLedger();
+  const usage = new UsageLedger((provider, model) => modelSettings(settings, provider, model)?.price);
   await usage.load();
   const catalog = new ModelCatalog(settings, secrets, providers);
   const attachments = new AttachmentStore();

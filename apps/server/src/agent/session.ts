@@ -9,7 +9,7 @@ import type { EgressProxy } from "../proxy/egress.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
 import type { ConnectionManager } from "../connections/manager.js";
 import type { Verdict } from "../connections/rules.js";
-import { paths, type Settings } from "../settings.js";
+import { contextLimit, paths, type Settings } from "../settings.js";
 import type { SkillRegistry } from "../skills.js";
 import type { UsageLedger, UsagePurpose } from "../usage.js";
 import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeFileAtomic } from "../util.js";
@@ -98,6 +98,8 @@ function systemPrompt(o: {
   skills: { name: string; description: string }[];
   brief: string;
   epoch: number;
+  /** False for the no-memory baseline: no history or memory tools to point at. */
+  memory: boolean;
 }): string {
   const lines: string[] = [];
   lines.push(`You are an autonomous agent working as the persona "${o.name}" inside Swan.`);
@@ -120,12 +122,18 @@ function systemPrompt(o: {
     "",
     "# Working in parallel",
     "You can delegate with the `agent` tool: it starts a sub-agent with your tools, sandbox and permissions, which works on its own and returns a report. When a task splits into independent parts (reading several areas of a codebase, researching several sources, checking separate hypotheses, editing unrelated files), launch several `agent` calls in the same response so they run in parallel, then combine their reports. Give each sub-agent a complete, self-contained brief: it does not see this conversation. Do small or tightly coupled work yourself.",
-    "",
-    "# Memory",
-    "This is one long-running conversation. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
   );
-  if (o.epoch > 1) lines.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
-  if (o.brief) lines.push("", "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
+  if (!o.memory) {
+    lines.push("", "# Context", "This is one long-running conversation. When it grows too long, the oldest turns are dropped and only the most recent events remain.");
+  } else {
+    lines.push(
+      "",
+      "# Memory",
+      "This is one long-running conversation. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
+    );
+    if (o.epoch > 1) lines.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
+    if (o.brief) lines.push("", "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
+  }
   if (o.skills.length) {
     lines.push(
       "",
@@ -551,7 +559,7 @@ export class Session {
     const tools = [
       ...builtinTools(),
       ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
-      ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
+      ...this.memoryTools(),
       ...this.creds.tools(),
       ...(await this.agentTools()),
       ...(await this.mcp.tools()),
@@ -618,6 +626,15 @@ export class Session {
     return this.deps.settings.providers[provider]?.type ?? "openai";
   }
 
+  /** The no-memory baseline (rolloverStrategy "none") has no persona memory, history tools or brief. */
+  private get usesMemory() {
+    return this.deps.settings.rolloverStrategy !== "none";
+  }
+
+  private memoryTools() {
+    return this.usesMemory ? memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }) : [];
+  }
+
   /** Build a fresh epoch: current persona model, current tools, memory brief, frozen until the next one. */
   private async openEpoch() {
     const { personas, skills } = this.deps;
@@ -625,7 +642,7 @@ export class Session {
     const cfg = persona.config!;
     const m = this.currentModel();
     const n = (this.epoch?.n ?? 0) + 1;
-    const brief = cfg.memory.autoBrief ? await this.deps.memory.brief(this.personaId, cfg.memory.briefTokens * 4) : "";
+    const brief = cfg.memory.autoBrief && this.usesMemory ? await this.deps.memory.brief(this.personaId, cfg.memory.briefTokens * 4) : "";
     const tools = [...this.liveTools.values()];
     this.epochs.push({
       n,
@@ -642,6 +659,7 @@ export class Session {
           skills: cfg.skills.flatMap((s) => (skills.get(s) ? [{ name: s, description: skills.get(s)!.description }] : [])),
           brief,
           epoch: n,
+          memory: this.usesMemory,
         }),
         tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
       },
@@ -661,14 +679,14 @@ export class Session {
     // A fresh epoch must do some work before it can roll over again, or an oversized carry-over thrashes.
     if (e.messages.filter((x) => x.role === "assistant").length < 2) return null;
     const used = e.contextTokens ?? Math.ceil(JSON.stringify(e.messages).length / 4);
-    const limit = this.deps.settings.contextLimitTokens;
+    const limit = contextLimit(this.deps.settings, e.model.provider, e.model.id);
     if (used > limit * this.deps.settings.rolloverAt) return `context reached ${Math.round((used / limit) * 100)}% of ${Math.round(limit / 1000)}k tokens`;
     return null;
   }
 
   /** One model call outside the conversation (checkpoint, /dream). Usage is recorded under its purpose. */
   private async auxCall(system: string, prompt: string, purpose: UsagePurpose): Promise<{ text: string; result: TurnResult }> {
-    const m = this.currentModel();
+    const m = this.deps.settings.memoryModel ?? this.currentModel();
     const auxId = `${this.id}:${purpose}`;
     const ac = new AbortController();
     const abortAux = () => ac.abort();
@@ -731,12 +749,13 @@ export class Session {
     const epochItems = this.items.filter((it) => it.ts >= since);
     const transcript = truncateMiddle(epochItems.map(itemLine).filter(Boolean).join("\n\n"), 150_000);
     const strategy = this.deps.settings.rolloverStrategy;
+    const summarises = strategy === "full" || strategy === "minimal";
     const ask =
       strategy === "minimal"
         ? `Write a SMALL continuity checkpoint as JSON with exactly these keys: "objective" (the active goal), "constraints" (explicit user constraints, verbatim), "openQuestions" (unfinished work, one line each), "completed" (artifact references only: file paths, commits, URLs), "nextAction" (one concrete next step), "sources" (event ids to retrieve for details). Do not summarise rationale, attempts or tool output: the agent will retrieve those from history. Arrays of strings except objective and nextAction.`
         : `Write the checkpoint for ALL unfinished work as JSON with exactly these keys: "objective" (the user's goal and acceptance criteria), "constraints" (explicit user constraints, verbatim where possible), "decisions" (with rationale), "completed" (work done, with file paths/artifacts), "failures" (what failed and test evidence), "openQuestions", "nextAction" (one concrete next step), "sources" (event ids that support the above). Arrays of strings except objective and nextAction.`;
     let cp: Checkpoint | null = null;
-    for (let attempt = 0; attempt < 2 && !cp && strategy !== "retrieval"; attempt++) {
+    for (let attempt = 0; attempt < 2 && !cp && summarises; attempt++) {
       try {
         const { text } = await this.auxCall(
           "You write checkpoints that let an agent continue a long task in a fresh context. Output only one JSON object, no prose.",
@@ -764,10 +783,11 @@ export class Session {
       }
     }
     if (cp) await this.deps.memory.addCheckpoint(this.personaId, cp);
-    else if (strategy !== "retrieval") this.notice("warn", "Could not write a structured checkpoint; the new context carries the recent conversation instead. Earlier turns stay searchable with history_search.");
+    else if (summarises) this.notice("warn", "Could not write a structured checkpoint; the new context carries the recent conversation instead. Earlier turns stay searchable with history_search.");
 
     // The carried tail gets at most a quarter of the context (about 3.5 characters per token).
-    const tailChars = Math.min(strategy === "full" ? 16_000 : 4_000, Math.floor(this.deps.settings.contextLimitTokens * 0.25 * 3.5));
+    const limit = contextLimit(this.deps.settings, old.model.provider, old.model.id);
+    const tailChars = Math.min(strategy === "full" ? 16_000 : 4_000, Math.floor(limit * 0.25 * 3.5));
     const tail = truncateMiddle(this.items.slice(strategy === "full" ? -24 : -6).map(itemLine).filter(Boolean).join("\n\n"), tailChars);
     const parts = [`[Carried over from earlier in this conversation — context ${old.n + 1} starts here (${reason}).]`];
     if (cp) {
@@ -784,7 +804,10 @@ export class Session {
         cp.sources.length ? `Sources: ${cp.sources.join(", ")}` : "",
       );
     }
-    if (strategy === "retrieval") {
+    if (strategy === "none") {
+      parts[0] = `[Earlier turns were dropped — context ${old.n + 1} starts here (${reason}). Only the most recent events remain.]`;
+      parts.push("## Most recent events", tail, "[End of carried-over context.]");
+    } else if (strategy === "retrieval") {
       const lastUser = [...this.items].reverse().find((it) => it.kind === "user");
       parts.push(
         "Earlier turns of this conversation are no longer in your context; nothing has been summarised. Before continuing, use history_search and history_read to recover what you need verbatim: the user's goal, their constraints and corrections, and the state of unfinished work.",
@@ -795,8 +818,14 @@ export class Session {
     this.carry = parts.filter(Boolean).join("\n\n");
     await this.openEpoch();
     r.done(
-      strategy === "retrieval" ? `Context ${old.n + 1}: history pointer only (${reason})` : cp ? `Context ${old.n + 1}: ${strategy} checkpoint saved (${reason})` : `Context ${old.n + 1}: recent events carried over (${reason})`,
-      cp || strategy === "retrieval" ? "done" : "error",
+      strategy === "none"
+        ? `Context ${old.n + 1}: recent events only (${reason})`
+        : strategy === "retrieval"
+          ? `Context ${old.n + 1}: history pointer only (${reason})`
+          : cp
+            ? `Context ${old.n + 1}: ${strategy} checkpoint saved (${reason})`
+            : `Context ${old.n + 1}: recent events carried over (${reason})`,
+      cp || !summarises ? "done" : "error",
     );
     await this.persist();
   }
@@ -1042,12 +1071,12 @@ export class Session {
 
       this.recordUsage(result, "foreground", e.model.provider, e.model.id);
       const u = result.usage;
-      // Anthropic reports cached input separately; OpenAI-style prompt tokens already include it.
-      const reported = this.providerType(e.model.provider) === "anthropic" ? u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens : u.inputTokens;
+      // Providers report uncached input; the context is that plus cached reads and writes.
+      const reported = this.providerType(e.model.provider) === "copilot" ? u.inputTokens : u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
       // Providers that report no usage (some local servers) fall back to a conservative estimate.
       const estimated = reported <= 0;
       e.contextTokens = estimated ? Math.ceil((e.frozen.system.length + JSON.stringify(e.messages).length) / 3.5) : reported;
-      this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: this.deps.settings.contextLimitTokens, estimated, epoch: e.n });
+      this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: contextLimit(this.deps.settings, e.model.provider, e.model.id), estimated, epoch: e.n });
       this.deps.broadcast({ type: "usage.updated", personaId: this.personaId });
 
       if (result.notice) this.notice(result.stopReason === "refusal" ? "warn" : "info", result.notice);
@@ -1548,7 +1577,7 @@ export class Session {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
-      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...this.creds.tools()];
+      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...this.memoryTools(), ...this.creds.tools()];
     const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
     return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
   }

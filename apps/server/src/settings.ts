@@ -30,12 +30,29 @@ export const paths = {
   examples: path.join(REPO_ROOT, "examples"),
 };
 
+/** USD per million tokens. Estimates for reports, not invoices; cached rates default to the input rate. */
+const PriceSchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative().optional(),
+  cacheWrite: z.number().nonnegative().optional(),
+});
+
+const ModelSettingsSchema = z.object({
+  contextTokens: z.number().int().positive().optional(), // the model's context window; default contextLimitTokens
+  price: PriceSchema.optional(), // overrides the built-in Anthropic rates; required for a dollar estimate elsewhere
+  // openai providers only: extra fields sent with every request for this model (e.g. OpenRouter's
+  // `provider: { order: [...], allow_fallbacks: false }` to pin the host). Never overrides model, messages or tools.
+  extraBody: z.record(z.string(), z.unknown()).optional(),
+});
+
 const ProviderSchema = z.object({
   type: z.enum(["anthropic", "openai", "copilot"]),
   baseURL: z.string().optional(),
   apiKeySecret: z.string().optional(), // name in the secrets store
   // copilot only: fall back to the host's `copilot login` when no token is in the secrets store
   useLoggedInUser: z.boolean().optional(),
+  models: z.record(z.string(), ModelSettingsSchema).optional(), // per-model settings, keyed by model id
 });
 
 const SettingsSchema = z.object({
@@ -68,11 +85,26 @@ const SettingsSchema = z.object({
   rolloverAt: z.number().min(0.3).max(0.95).default(0.75), // share of the context that triggers a new epoch
   // What opens a new epoch: "full" structured checkpoint + recent events, "minimal" continuity
   // checkpoint + short tail, or "retrieval" (a continuation pointer only; the agent pulls history).
-  rolloverStrategy: z.enum(["full", "minimal", "retrieval"]).default("full"),
+  // "none" is the no-memory baseline for benchmarks: no memory or history tools, no brief, and a
+  // new epoch carries only the most recent events.
+  rolloverStrategy: z.enum(["full", "minimal", "retrieval", "none"]).default("full"),
+  // Model for checkpoints and /dream; default: the conversation's own model.
+  memoryModel: z.object({ provider: z.string(), id: z.string() }).optional(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
+export type ModelPrice = z.infer<typeof PriceSchema>;
+
+/** A model's settings from its provider's `models` map, if any. */
+export function modelSettings(s: Settings, provider: string, model: string) {
+  return s.providers[provider]?.models?.[model];
+}
+
+/** The context window to plan rollovers against: the model's own, else the configured default. */
+export function contextLimit(s: Settings, provider: string, model: string): number {
+  return modelSettings(s, provider, model)?.contextTokens ?? s.contextLimitTokens;
+}
 
 const DEFAULT_CONFIG = `# persona-harness settings. Restart the server after editing this file
 # (except connections, which apply immediately).

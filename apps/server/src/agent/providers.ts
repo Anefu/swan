@@ -197,15 +197,19 @@ class OpenAIProvider implements Provider {
   async runTurn(req: TurnRequest, cb: TurnCallbacks): Promise<TurnResult> {
     const client = new OpenAI({ apiKey: this.apiKey() ?? "not-needed", baseURL: this.cfg.baseURL, maxRetries: 2 });
     const isOpenAI = (this.cfg.baseURL ?? "").includes("api.openai.com");
+    const extra = this.cfg.models?.[req.model]?.extraBody ?? {};
     let stream;
     try {
       stream = await client.chat.completions.create(
         {
+          ...extra,
           model: req.model,
           messages: this.toOpenAI(req.system, req.messages),
           tools: req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
           stream: true,
-          ...(isOpenAI ? { stream_options: { include_usage: true }, max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
+          // Without include_usage most OpenAI-compatible servers report no tokens, so cost and context are unknown.
+          stream_options: { include_usage: true },
+          ...(isOpenAI ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
         },
         { signal: req.signal },
       );
@@ -222,9 +226,10 @@ class OpenAIProvider implements Provider {
     const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     for await (const chunk of stream) {
       if (chunk.usage) {
-        usage.inputTokens = chunk.usage.prompt_tokens ?? 0;
-        usage.outputTokens = chunk.usage.completion_tokens ?? 0;
+        // prompt_tokens includes cached input; Swan counts input as uncached, like Anthropic does.
         usage.cacheReadTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0;
+        usage.inputTokens = Math.max(0, (chunk.usage.prompt_tokens ?? 0) - usage.cacheReadTokens);
+        usage.outputTokens = chunk.usage.completion_tokens ?? 0;
       }
       const choice = chunk.choices[0];
       if (!choice) continue;
