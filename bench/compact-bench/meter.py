@@ -5,7 +5,9 @@ Compact-Bench neither records token usage nor limits spend. This runs a local Me
 that forwards each request to the real one, records the response's token usage and estimated cost,
 and refuses further requests once the cap is reached. It then runs the command after `--` with
 CB_MESSAGES_URL pointing at itself, and prints the totals when it ends. Spend already in the log
-counts toward the cap, so a stopped run can resume with the same log and cap.
+counts toward the cap, so a stopped run can resume with the same log and cap. The meter listens on
+a fixed port because Compact-Bench names a run's folder after its endpoints: a new port would start
+a new folder and repeat finished tasks.
 
     python scripts/meter.py --cap 4 --log results/usage.jsonl -- python run.py --track task ...
 
@@ -143,10 +145,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--cap", type=float, required=True)
     ap.add_argument("--log", required=True)
+    ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv[:i])
     upstream = os.environ.get("CB_MESSAGES_URL", "https://api.anthropic.com/v1/messages")
     meter = Meter(upstream, args.cap, args.log)
-    server = meter.serve()
+    server = meter.serve(args.port)
     env = dict(os.environ, CB_MESSAGES_URL=f"http://127.0.0.1:{server.server_address[1]}/v1/messages")
     try:
         code = subprocess.run(argv[i + 1 :], env=env).returncode
