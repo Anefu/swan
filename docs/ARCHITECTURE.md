@@ -185,8 +185,9 @@ Copilot's own agent runtime. To keep the harness in charge of the loop:
 the sandbox image. The server's own HTTP clients (fetch: model providers, http MCP servers) use the
 proxy through a process-wide dispatcher and trust the extra roots; the Copilot runtime and
 connection wrappers get the same settings as `HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS`. The
-sandbox image is built from `mirrors.baseImage`, a generated setup script points apt, pip, uv and
-npm at the mirrors, and the extra roots join the image's CA bundle. The egress proxy does not chain
+sandbox image is built from `mirrors.baseImage` with the proxy as predefined build arguments (not
+kept in the image; a loopback proxy becomes `host.containers.internal`), a generated setup script
+points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. The egress proxy does not chain
 to the upstream proxy yet, and keeps refusing private addresses.
 
 ## Harness API hardening

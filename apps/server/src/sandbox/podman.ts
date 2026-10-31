@@ -223,7 +223,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     await fs.writeFile(path.join(ctx, "harness-ca.crt"), this.ca.certPem);
     for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(ctx, name), content);
     log.info("runtime", `building ${this.imageTag}${mirrors.baseImage ? ` from ${mirrors.baseImage}` : ""}`);
-    const r = await this.run(["build", ...buildArgs(mirrors), "-t", this.imageTag, "-f", path.join(ctx, "Containerfile"), ctx], {
+    const r = await this.run(["build", ...buildArgs(mirrors, this.settings.proxy), "-t", this.imageTag, "-f", path.join(ctx, "Containerfile"), ctx], {
       timeoutMs: 20 * 60_000,
       onStdout: (s) => {
         const line = s.trim().split("\n").pop();

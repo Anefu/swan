@@ -47,6 +47,21 @@ describe("sandbox image setup", () => {
     expect(buildArgs(m)).toEqual(["--build-arg", "BASE_IMAGE=art.example.com/docker/library/node:22-bookworm-slim"]);
   });
 
+  it("sends the build's downloads through the proxy, reaching a proxy on this Mac from Podman's VM", () => {
+    const args = (url: string) => buildArgs(mirrors(), SettingsSchema.parse({ proxy: { url, noProxy: [".corp.example.com"] } }).proxy);
+    expect(args("http://proxy.corp.example.com:8080")).toEqual([
+      "--build-arg", "HTTP_PROXY=http://proxy.corp.example.com:8080",
+      "--build-arg", "HTTPS_PROXY=http://proxy.corp.example.com:8080",
+      "--build-arg", "http_proxy=http://proxy.corp.example.com:8080",
+      "--build-arg", "https_proxy=http://proxy.corp.example.com:8080",
+      "--build-arg", "NO_PROXY=localhost,127.0.0.1,::1,.corp.example.com",
+      "--build-arg", "no_proxy=localhost,127.0.0.1,::1,.corp.example.com",
+    ]);
+    expect(args("http://127.0.0.1:3128")[1]).toBe("HTTP_PROXY=http://host.containers.internal:3128");
+    expect(args("http://localhost:3128/")[1]).toBe("HTTP_PROXY=http://host.containers.internal:3128/");
+    expect(args("http://localhost.corp.example.com:3128")[1]).toBe("HTTP_PROXY=http://localhost.corp.example.com:3128");
+  });
+
   it("adds extra certificates for apt's first download and for the system store", () => {
     const files = buildFiles(mirrors(), [CERT, CERT.replace("fake", "other")]);
     expect(files["swan/ca/swan-extra-1.crt"]).toContain("MIIBfake");
@@ -86,6 +101,13 @@ describe("sandbox image setup", () => {
       expect(out).toContain("https://art.example.com/artifactory/debian-security-remote");
       expect(out).not.toContain("deb.debian.org");
     }
+  });
+});
+
+describe("proxy settings", () => {
+  it("refuses a proxy URL with a username and password", () => {
+    expect(() => SettingsSchema.parse({ proxy: { url: "http://me:secret@proxy.corp.example.com:8080" } })).toThrow(/username and password/);
+    expect(SettingsSchema.parse({ proxy: { url: "http://proxy.corp.example.com:8080" } }).proxy?.noProxy).toEqual([]);
   });
 });
 

@@ -75,7 +75,8 @@ export const SettingsSchema = z.object({
   // For networks that reach the internet only through a proxy and internal mirrors.
   proxy: z
     .object({
-      url: HttpUrl, // model calls, http MCP servers, the Copilot runtime and connection wrappers use it
+      // Model calls, http MCP servers, the Copilot runtime, connection wrappers and the image build use it.
+      url: HttpUrl.refine((u) => !/^https?:\/\/[^/]*@/.test(u), "a proxy that needs a username and password is not supported (config.yaml is not for secrets)"),
       noProxy: z.array(z.string().regex(/^[^\s,]+$/, "expected a host or .domain")).default([]), // reached directly; localhost always is
     })
     .optional(),
@@ -116,16 +117,12 @@ providers:
 defaultModel: { provider: anthropic, id: claude-opus-5-5 }
 # Extra directories to load skills from (each child dir with a SKILL.md is a skill)
 skillDirs: []
-# Behind a proxy or internal mirrors (e.g. an Artifactory), uncomment and adjust:
+# Behind a proxy or internal mirrors (e.g. an Artifactory), uncomment and adjust (docs/DESKTOP.md):
 # proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }
 # caFiles: [~/certs/company-root.pem]
 # mirrors:
 #   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
-#   apt:
-#     http://deb.debian.org/debian: https://artifactory.example.com/artifactory/debian-remote
-#     http://deb.debian.org/debian-security: https://artifactory.example.com/artifactory/debian-security-remote
 #   pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
-#   npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
 # Where agents' credentials come from. Values live in secrets.yaml as connection/NAME.
 connections:
   github:

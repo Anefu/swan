@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { noProxyList } from "../network.js";
 import type { Settings } from "../settings.js";
 
 type Mirrors = Settings["mirrors"];
@@ -49,7 +50,20 @@ export function buildFiles(m: Mirrors, extraCas: string[]): Record<string, strin
   return files;
 }
 
-export const buildArgs = (m: Mirrors): string[] => (m.baseImage ? ["--build-arg", `BASE_IMAGE=${m.baseImage}`] : []);
+/**
+ * Build arguments: the base image, and the upstream proxy for the build's downloads (apt, pip).
+ * Proxy variables are predefined build arguments, so RUN steps see them but the image does not keep
+ * them. A proxy on this Mac's loopback is reached from Podman's VM as host.containers.internal.
+ */
+export function buildArgs(m: Mirrors, proxy?: Settings["proxy"]): string[] {
+  const args = m.baseImage ? ["--build-arg", `BASE_IMAGE=${m.baseImage}`] : [];
+  if (!proxy) return args;
+  const url = proxy.url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i, "$1host.containers.internal");
+  const noProxy = noProxyList(proxy).join(",");
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) args.push("--build-arg", `${k}=${url}`);
+  args.push("--build-arg", `NO_PROXY=${noProxy}`, "--build-arg", `no_proxy=${noProxy}`);
+  return args;
+}
 
 /**
  * Part of the image tag, so changing the mirrors or certificates builds a new image. Null when none

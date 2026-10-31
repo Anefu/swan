@@ -23,24 +23,24 @@ for example), tell Swan in `~/.swan/config.yaml` and restart it:
 
 ```yaml
 proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }
-caFiles: [~/certs/company-root.pem]
+caFiles: [~/certs/company-root.pem]        # only if the proxy or a mirror uses your company's own CA
 mirrors:
   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
-  apt:
-    http://deb.debian.org/debian: https://artifactory.example.com/artifactory/debian-remote
-    http://deb.debian.org/debian-security: https://artifactory.example.com/artifactory/debian-security-remote
-  pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
-  npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
 ```
 
-- `proxy`: model calls, http MCP servers, the Copilot runtime and connection wrappers go through it;
-  `noProxy` hosts (and always localhost) are reached directly.
+- `proxy`: model calls, http MCP servers, the Copilot runtime, connection wrappers and the image
+  build (Debian packages, PyPI) go through it; `noProxy` hosts (and always localhost) are reached
+  directly. A proxy on this Mac's loopback (`127.0.0.1`) also works for the build. A proxy that needs
+  a username and password is not supported.
 - `caFiles`: extra root certificates (PEM), for a proxy that inspects HTTPS or mirrors with an
   internal certificate. Swan trusts them, and so does everything inside the sandbox.
-- `mirrors`: the sandbox image is built from `baseImage` with Debian packages from the `apt`
-  mirrors (each maps a Debian source URL to its mirror), and pip, uv and npm inside the sandbox use
-  `pypi` and `npm`. If the registry needs a login, run `podman login` for it first. Changing any of
+- `mirrors`: the sandbox image is built from `baseImage`. If the registry needs a login, run
+  `podman login` for it first. Where there are mirrors for those too, `apt` maps a Debian source URL
+  to its mirror (`http://deb.debian.org/debian: https://…/debian-remote`), and `pypi` and `npm` set
+  the index and registry for pip, uv and npm, in the build and inside the sandbox. Changing any of
   these builds a new image on the next start.
+
+A complete `config.yaml`, `secrets.yaml` and persona for this setup: [examples/reference/](../examples/reference/).
 
 Not yet: agents' own internet traffic does not go through `proxy`, and Swan's egress proxy refuses
 internal addresses, so an agent cannot reach a mirror that resolves to one.
