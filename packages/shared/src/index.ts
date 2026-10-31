@@ -334,7 +334,7 @@ export interface ProviderModel {
 // POST   /api/personas            {id,yaml}   -> PersonaSummary
 // GET    /api/personas/:id/source             -> PersonaSource
 // PUT    /api/personas/:id/source {yaml}      -> PersonaSummary
-// DELETE /api/personas/:id                    -> { ok: true }
+// DELETE /api/personas/:id                    -> { ok: true }  (also its conversation, memory and attachments)
 // GET    /api/personas/:id/tools              -> ToolSummary[]  (built-in + skill tools; MCP tools appear once a session runs)
 // GET    /api/personas/:id/files?path=/workspace/x -> { path, entries: FileEntry[] } (path inside sandbox)
 // GET    /api/personas/:id/file?path=...      -> { path, content, truncated }

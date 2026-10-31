@@ -576,6 +576,8 @@ export interface Actions {
   connectionAction(conn: string, action: ConnectionAction): Promise<boolean>;
   dismissMigration(): Promise<void>;
   rebuildRuntime(): Promise<void>;
+  /** Deletes the persona with its conversation and memory, and closes its settings. Throws on failure. */
+  deletePersona(id: string): Promise<void>;
   /** "retry" checks Podman again; "setup" creates its machine. */
   prepareRuntime(kind: "retry" | "setup"): Promise<void>;
 }
@@ -938,6 +940,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           reportError(e, "Rebuild failed");
         }
+      },
+      deletePersona: async (id) => {
+        await api.deletePersona(id);
+        dispatch({ type: "dock", dock: null });
+        dispatch({ type: "personas", personas: await api.personas() });
       },
       prepareRuntime: async (kind) => {
         try {

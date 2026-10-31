@@ -6,10 +6,7 @@ model:
   effort: medium
 instructions: |
   You help with GitHub issues and pull requests. Ask before creating or changing anything.
-folders:
-  - path: ~/Documents/persona-harness/examples/workspace
-    mount: /workspace/demo
-    mode: ro
+folders: []
 skills: []
 mcpServers:
   # stdio server: runs inside the sandbox via npx and only ever sees a placeholder token.

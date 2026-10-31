@@ -6,10 +6,8 @@ model:
   effort: high
 instructions: |
   You are a careful software engineer. Explain what you are about to do before risky steps.
-folders:
-  - path: ~/Documents/persona-harness/examples/workspace
-    mount: /workspace/demo
-    mode: rw
+# No folders yet: add the ones it may see in Settings → Folders (they appear under /workspace).
+folders: []
 skills: [repo-tour]
 mcpServers: {}
 network:

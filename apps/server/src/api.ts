@@ -158,8 +158,11 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     persona(req.params.id);
     return d.personas.summary(await d.personas.save(req.params.id, req.body?.yaml ?? ""));
   });
+  // What belongs to the persona goes with it (its conversation stops first); its folders are the user's.
   app.delete("/api/personas/:id", async (req: P) => {
     persona(req.params.id);
+    for (const s of d.sessions.list(req.params.id)) await d.sessions.remove(s.id);
+    await d.memory.removePersona(req.params.id);
     await d.personas.remove(req.params.id);
     return { ok: true };
   });

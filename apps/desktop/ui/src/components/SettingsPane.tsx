@@ -919,6 +919,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           </Field>
           <p className="hint">Memory is private to this persona. Review it in Memory &amp; Usage.</p>
         </Section>
+        {!isNew && persona && !state.settingsSection && <DeletePersona persona={persona} />}
       </div>
 
       <div className="pane-foot" aria-live="polite">
@@ -945,6 +946,50 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         {!dirty && !entry.result && <span className="muted small">All changes saved.</span>}
       </div>
     </>
+  );
+}
+
+/** Removes the persona with its conversation, memory and attachments, after a confirmation. */
+function DeletePersona({ persona }: { persona: PersonaSummary }) {
+  const { actions } = useStore();
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!confirm)
+    return (
+      <div>
+        <button type="button" className="btn sm danger" onClick={() => setConfirm(true)}>
+          Delete persona…
+        </button>
+      </div>
+    );
+  return (
+    <div className="inline-form" role="group" aria-label={`Delete ${persona.name}`}>
+      <p className="small">
+        Delete {persona.name}? Its conversation, memory and attachments are deleted too. The folders it used are not touched.
+      </p>
+      <div className="row gap end">
+        <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn sm danger"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await actions.deletePersona(persona.id);
+            } catch (e) {
+              actions.reportError(e, "Could not delete the persona");
+              setBusy(false);
+            }
+          }}
+        >
+          {busy && <Spinner size={10} />}
+          Delete
+        </button>
+      </div>
+    </div>
   );
 }
 

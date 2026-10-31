@@ -13,7 +13,17 @@ const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "swan-smoke-"));
 fs.writeFileSync(
   path.join(home, "config.yaml"),
-  ["port: 0", "proxyPort: 0", "runtime:", "  binary: /nonexistent/podman", "  network: swan-smoke", "  relayName: swan-smoke-relay", ""].join("\n"),
+  [
+    "port: 0",
+    "proxyPort: 0",
+    "runtime:",
+    "  binary: /nonexistent/podman",
+    "  network: swan-smoke",
+    "  relayName: swan-smoke-relay",
+    "connections: # as in the default config, which the example personas use",
+    "  github: { type: static, credentials: { GITHUB_TOKEN: { hosts: [api.github.com] } } }",
+    "",
+  ].join("\n"),
 );
 
 /** The server and its first IPC message. */
@@ -37,18 +47,23 @@ function start() {
   return { child, first, exited };
 }
 
-/** GET with full control of Host and Origin (fetch does not allow setting Host). */
-function get(port, urlPath, headers = {}) {
+/** A request with full control of Host and Origin (fetch does not allow setting Host). */
+function call(method, port, urlPath, headers = {}, json) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path: urlPath, headers: { host: `127.0.0.1:${port}`, ...headers } }, (res) => {
-      let body = "";
-      res.on("data", (c) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode, body }));
-    });
+    const body = json === undefined ? undefined : JSON.stringify(json);
+    const req = http.request(
+      { host: "127.0.0.1", port, path: urlPath, method, headers: { host: `127.0.0.1:${port}`, ...(body ? { "content-type": "application/json" } : {}), ...headers } },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode, body: data }));
+      },
+    );
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });
 }
+const get = (port, urlPath, headers) => call("GET", port, urlPath, headers);
 
 const a = start();
 const ready = await a.first;
@@ -73,6 +88,21 @@ assert.equal(JSON.parse(runtime.body).needs, "install");
 assert.equal((await get(port, "/api/runtime", { ...auth, host: "evil.example" })).status, 403, "foreign Host");
 assert.equal((await get(port, "/api/runtime", { ...auth, origin: "https://evil.example" })).status, 403, "foreign Origin");
 assert.equal((await get(port, "/api/runtime", { ...auth, origin: "swan://app" })).status, 200, "the app's origin");
+
+// A fresh home's example personas can start: no folder that only exists in a checkout.
+const personas = JSON.parse((await get(port, "/api/personas", auth)).body);
+assert.deepEqual(personas.map((p) => p.id).sort(), ["demo", "github-helper"]);
+for (const p of personas) assert.deepEqual(p.errors, [], `${p.id} has problems`);
+
+// Deleting a persona takes its conversation and memory with it.
+const session = JSON.parse((await call("POST", port, "/api/sessions", auth, { personaId: "demo" })).body);
+assert.equal((await call("POST", port, "/api/personas/demo/memory", auth, { content: "Use pnpm.", type: "preference" })).status, 200);
+assert.ok(fs.existsSync(path.join(home, "memory", "demo.json")));
+assert.equal((await call("DELETE", port, "/api/personas/demo", auth)).status, 200);
+assert.deepEqual(JSON.parse((await get(port, "/api/personas", auth)).body).map((p) => p.id), ["github-helper"]);
+assert.equal((await get(port, `/api/sessions/${session.id}`, auth)).status, 404);
+assert.ok(!fs.existsSync(path.join(home, "memory", "demo.json")), "memory removed");
+assert.ok(!fs.existsSync(path.join(home, "personas", "demo.yaml")), "persona file removed");
 
 // A second server for the same home says who holds it, and exits.
 const b = start();
