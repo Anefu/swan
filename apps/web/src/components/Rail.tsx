@@ -11,7 +11,7 @@ const ENTRIES: Array<{ mode: DockMode; label: string; icon: ReactNode }> = [
   { mode: "attachments", label: "Attachments", icon: <IconPaperclip size={18} /> },
 ];
 
-/** Slim icon rail on the right edge; it switches the dock. Clicking the active entry closes it. */
+/** Panel buttons at the right of the header; they switch the dock. Clicking the active entry closes it. */
 export function Rail() {
   const { state, actions } = useStore();
   const approvals = usePendingApprovals();
@@ -19,7 +19,19 @@ export function Rail() {
   const settingsDirty = Object.values(state.drafts).some((d) => JSON.stringify(d.base) !== JSON.stringify(d.draft) || d.newId);
   const needsPersona = (m: DockMode) => m !== "settings" && !state.selectedPersonaId;
   return (
-    <nav className="rail" aria-label="Panels">
+    <nav className="header-tools" aria-label="Panels">
+      {approvals.length > 0 && (
+        <button
+          type="button"
+          className="rail-btn attention"
+          aria-label={`${approvals.length} ${approvals.length === 1 ? "decision" : "decisions"} waiting. Review`}
+          title={`${approvals.length} ${approvals.length === 1 ? "decision" : "decisions"} waiting · Review`}
+          onClick={() => actions.jumpToApproval()}
+        >
+          <IconShield size={18} />
+          <span className="rail-count">{approvals.length}</span>
+        </button>
+      )}
       {ENTRIES.map((e) => {
         const on = dock === e.mode;
         const note = e.mode === "settings" && settingsDirty ? " (unsaved changes)" : "";
@@ -40,19 +52,6 @@ export function Rail() {
           </button>
         );
       })}
-      <span className="grow" />
-      {approvals.length > 0 && (
-        <button
-          type="button"
-          className="rail-btn attention"
-          aria-label={`${approvals.length} ${approvals.length === 1 ? "decision" : "decisions"} waiting. Review`}
-          title={`${approvals.length} ${approvals.length === 1 ? "decision" : "decisions"} waiting · Review`}
-          onClick={() => actions.jumpToApproval()}
-        >
-          <IconShield size={18} />
-          <span className="rail-count">{approvals.length}</span>
-        </button>
-      )}
     </nav>
   );
 }

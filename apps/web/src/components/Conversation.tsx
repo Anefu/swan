@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatItem, SessionSummary } from "@ph/shared";
-import { describeTool, type ToolItem } from "../receipts";
+import { agentLive, describeTool, type ToolItem } from "../receipts";
 import { conversationSession, useSelectedPersona, useStore } from "../store";
 import { sessionStatusLine, unreadyCredentials } from "../status";
 import { cls, useNow } from "../util";
@@ -8,6 +8,7 @@ import { Composer } from "./Composer";
 import { IconArrowRight, IconWarning } from "./icons";
 import {
   AgentLine,
+  AgentNames,
   AssistantText,
   CredentialBlockedLine,
   Dots,
@@ -32,6 +33,9 @@ const PROGRESSIVE: Record<string, string> = {
   Wrote: "Writing",
   Called: "Calling",
   "Loaded skill": "Loading skill",
+  "Replied to": "Replying to",
+  Stopped: "Stopping",
+  "Checked agents": "Checking agents",
 };
 
 const FINISHED = new Set(["done", "error", "denied", "interrupted"]);
@@ -57,6 +61,17 @@ export function Conversation() {
     for (const it of items) if (it.kind === "tool_call" && it.status === "pending_approval") return it.id;
     return null;
   }, [items]);
+
+  const agentNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of items) if (it.kind === "tool_call" && it.agent) m.set(it.agent.id, describeTool(it).target || it.agent.id);
+    return m;
+  }, [items]);
+  const background = useMemo(
+    () => items.filter((it): it is ToolItem => it.kind === "tool_call" && it.name === "agent" && !!it.agent?.background && agentLive(it)),
+    [items],
+  );
+  const [stoppingAll, setStoppingAll] = useState(false);
 
   // Restore the remembered position on persona switch or first load. Positions are saved on scroll.
   useLayoutEffect(() => {
@@ -140,6 +155,13 @@ export function Conversation() {
   const statusRaw = items.length === 0 && session?.status === "stopped" ? null : sessionStatusLine(session);
   const status = session?.status === "running" || session?.status === "starting" ? null : statusRaw;
   const title = session?.title?.trim() || persona.name;
+  const queued = session?.queued ?? 0;
+  const backgroundText =
+    background.length === 0
+      ? null
+      : background.length === 1
+        ? `1 agent working in the background: ${describeTool(background[0]).target}`
+        : `${background.length} agents working in the background`;
   const unready = unreadyCredentials(state, persona);
 
   let body: ReactNode;
@@ -243,8 +265,10 @@ export function Conversation() {
             </div>
           )}
           <div className={cls("items", transcript?.source === "stale" && "is-stale")}>
-            {body}
-            <WorkingLine session={session} items={items} />
+            <AgentNames.Provider value={agentNames}>
+              {body}
+              <WorkingLine session={session} items={items} />
+            </AgentNames.Provider>
           </div>
         </div>
       </div>
@@ -254,14 +278,35 @@ export function Conversation() {
             Jump to latest <IconArrowRight size={13} className="rot90" />
           </button>
         )}
-        {(status || (session && session.queued > 0)) && (
+        {(status || queued > 0 || backgroundText) && (
           <div className="session-status" role="status" aria-live="polite">
             {status && <span className={`tone-${status.tone}`}>{status.text}</span>}
-            {session && session.queued > 0 && (
+            {queued > 0 && (
               <span className="muted">
                 {status ? " · " : ""}
-                {session.queued === 1 ? "1 message will steer the next step" : `${session.queued} messages will steer the next step`}
+                {queued === 1 ? "1 message will steer the next step" : `${queued} messages will steer the next step`}
               </span>
+            )}
+            {backgroundText && sid && (
+              <>
+                <span className="tone-muted">
+                  {status || queued > 0 ? " · " : ""}
+                  {backgroundText}
+                </span>
+                <button
+                  type="button"
+                  className="link-btn"
+                  aria-label="Stop all background agents"
+                  disabled={stoppingAll}
+                  onClick={async () => {
+                    setStoppingAll(true);
+                    await actions.stopAgent(sid, "all");
+                    setStoppingAll(false);
+                  }}
+                >
+                  {stoppingAll ? "Stopping…" : "Stop all"}
+                </button>
+              </>
             )}
           </div>
         )}
@@ -289,8 +334,9 @@ function renderItems(all: ChatItem[], sid: string, persona: Parameters<typeof To
     if (it.kind === "tool_call") {
       const run: ToolItem[] = [];
       while (i < items.length && items[i].kind === "tool_call") run.push(items[i++] as ToolItem);
+      // A sub-agent that asked or runs in the background keeps its line, even once its call has returned.
       const settled = (t: ToolItem) =>
-        FINISHED.has(t.status) && !(childrenOf.get(t.id) ?? []).some((c) => !FINISHED.has(c.status));
+        FINISHED.has(t.status) && !(t.name === "agent" && agentLive(t)) && !(childrenOf.get(t.id) ?? []).some((c) => !FINISHED.has(c.status));
       if (run.length >= 2 && run.every(settled)) {
         out.push(<ToolGroup key={`g-${run[0].id}`} items={run} sessionId={sid} persona={persona} childrenOf={childrenOf} />);
       } else {
@@ -344,15 +390,25 @@ function renderItems(all: ChatItem[], sid: string, persona: Parameters<typeof To
 /** One muted line while the model works and nothing streams: "Working… 14s" or "Running npm test…". */
 function WorkingLine({ session, items }: { session: SessionSummary | null; items: ChatItem[] }) {
   const now = useNow(1000);
+  const names = useContext(AgentNames);
   if (!session || (session.status !== "running" && session.status !== "starting")) return null;
   const last = items[items.length - 1];
   if (last && (last.kind === "assistant_text" || last.kind === "thinking") && last.streaming) return null;
   let text = session.status === "starting" ? session.statusDetail || "Starting the sandbox" : "Working";
+  // Background agents and waiting questions are not what the parent is doing now.
+  const background = new Set<string>();
+  for (const it of items) if (it.kind === "tool_call" && it.agent?.background) background.add(it.id);
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    if (it.kind === "tool_call" && it.status === "running") {
-      const d = describeTool(it);
-      text = `${PROGRESSIVE[d.verb] ?? "Running"} ${d.target}`;
+    if (
+      it.kind === "tool_call" &&
+      it.status === "running" &&
+      it.name !== "ask_parent" &&
+      !background.has(it.id) &&
+      !(it.parentId && background.has(it.parentId))
+    ) {
+      const d = describeTool(it, names);
+      text = `${PROGRESSIVE[d.verb] ?? "Running"} ${d.target}`.trim();
       break;
     }
     if (it.kind === "user") break;

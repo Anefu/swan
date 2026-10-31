@@ -3,16 +3,16 @@ import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
 import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch } from "./icons";
+import { Rail } from "./Rail";
 import { Kbd, MOD } from "./ui";
 
+/** Title bar: the persona picker on the left, the panel buttons on the right. */
 export function Header() {
   const { state } = useStore();
   return (
     <header className="app-header">
-      <span className="wordmark" aria-label="Swan">
-        Swan
-      </span>
       {state.personas.length > 0 && <PersonaMenu />}
+      <Rail />
     </header>
   );
 }

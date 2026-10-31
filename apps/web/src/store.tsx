@@ -536,6 +536,8 @@ export interface Actions {
   removeAttachment(personaId: string, key: string): void;
   clearAttachments(personaId: string, keys: string[]): void;
   interrupt(sessionId: string): Promise<void>;
+  /** agentId "all" stops every sub-agent of the session; false when the request failed. */
+  stopAgent(sessionId: string, agentId: string): Promise<boolean>;
   approve(sessionId: string, toolUseId: string, body: ApprovalBody): Promise<boolean>;
   removeAllowance(sessionId: string, rule: string): Promise<void>;
   resetAllowances(sessionId: string): Promise<void>;
@@ -811,6 +813,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           await api.interrupt(sessionId);
         } catch (e) {
           reportError(e, "Stop failed");
+        }
+      },
+      stopAgent: async (sessionId, agentId) => {
+        try {
+          await api.stopAgent(sessionId, agentId);
+          return true;
+        } catch (e) {
+          reportError(e, agentId === "all" ? "Could not stop the agents" : "Could not stop the agent");
+          return false;
         }
       },
       approve: async (sessionId, toolUseId, body) => {

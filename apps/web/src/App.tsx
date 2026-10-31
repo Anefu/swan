@@ -4,7 +4,6 @@ import { Conversation } from "./components/Conversation";
 import { closeDockAndRestoreFocus, Dock, useMediaQuery } from "./components/Dock";
 import { FirstRun } from "./components/FirstRun";
 import { Header } from "./components/Header";
-import { Rail } from "./components/Rail";
 import { conversationSession, useStore } from "./store";
 import { isWorking } from "./status";
 
@@ -70,7 +69,6 @@ export function App() {
           )}
         </main>
         {dock && <Dock mode={dock} overlay={overlay} />}
-        <Rail />
       </div>
       <Toasts />
     </div>

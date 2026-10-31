@@ -1,6 +1,9 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import type { ApprovalDecision, ChatItem, PersonaSummary } from "@ph/shared";
+import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentRun, ApprovalDecision, ChatItem, PersonaSummary } from "@ph/shared";
 import {
+  AGENT_CONTROL_TOOLS,
+  agentLive,
+  agentState,
   allowScopeLabel,
   consequence,
   describeTool,
@@ -11,8 +14,8 @@ import {
   type ToolItem,
 } from "../receipts";
 import { attachmentFileUrl } from "../api";
-import { attachmentPreviews, useStore } from "../store";
-import { basename, cls, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
+import { attachmentPreviews, modelLabel, useStore } from "../store";
+import { basename, cls, EFFORT_LABEL, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
 import { DeviceCodePanel } from "./DeviceCode";
 import { IconChevronRight, IconFile } from "./icons";
 import { Markdown } from "./Markdown";
@@ -190,20 +193,32 @@ export function NoticeLine({ item }: { item: Extract<ChatItem, { kind: "notice" 
 }
 
 export function HarnessReceipt({ item }: { item: Extract<ChatItem, { kind: "receipt" }> }) {
-  const glyph = item.action === "dream" ? "✦" : item.action === "rollover" ? "↻" : item.action === "steer" ? "↳" : "/";
+  const agent = item.action === "agent";
+  const glyph = item.action === "dream" ? "✦" : item.action === "rollover" ? "↻" : item.action === "steer" ? "↳" : agent ? "●" : "/";
+  // Background-agent receipts look like the agent line they report on; a question needs attention.
+  const tone =
+    item.status === "error"
+      ? "tone-error"
+      : item.action === "dream"
+        ? "tone-accent"
+        : agent
+          ? /question/i.test(item.title)
+            ? "tone-attention"
+            : "tone-ok"
+          : "tone-muted";
   return (
     <div className="line-item" id={`item-${item.id}`}>
       <div className="line static">
         {item.status === "running" ? (
           <Spinner size={11} />
         ) : (
-          <span className={cls("glyph", item.status === "error" ? "tone-error" : item.action === "dream" ? "tone-accent" : "tone-muted")} aria-hidden="true">
+          <span className={cls("glyph", tone)} aria-hidden="true">
             {glyph}
           </span>
         )}
         <span className="line-verb">{item.title}</span>
         {item.detail && <span className="line-meta">{item.detail}</span>}
-        {item.status === "error" && <span className="line-status tone-error">Failed</span>}
+        {item.status === "error" && !agent && <span className="line-status tone-error">Failed</span>}
       </div>
     </div>
   );
@@ -327,6 +342,9 @@ export function CredentialBlockedLine({
 
 // ---------- Tool lines ----------
 
+/** Sub-agent id -> its `agent` call's description, for lines that name an agent by id. */
+export const AgentNames = createContext<ReadonlyMap<string, string>>(new Map());
+
 function ToolGlyph({ item }: { item: ToolItem }) {
   switch (item.status) {
     case "running":
@@ -358,7 +376,7 @@ export const ToolLine = memo(function ToolLine({
   promptOpen: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const d = describeTool(item);
+  const d = describeTool(item, useContext(AgentNames));
   const pending = item.status === "pending_approval";
   const status = TOOL_STATUS_TEXT[item.status];
   const isNet = item.name === "network_access";
@@ -368,14 +386,14 @@ export const ToolLine = memo(function ToolLine({
   const meta: string[] = [];
   if (isAsk && item.output && !pending) meta.push(item.output);
   if (d.result) meta.push(d.result);
-  if (item.durationMs !== undefined && !isAsk) meta.push(fmtDuration(item.durationMs));
+  if (item.durationMs !== undefined && !isAsk && !AGENT_CONTROL_TOOLS.has(item.name)) meta.push(fmtDuration(item.durationMs));
   const showPrompt = pending && (promptOpen || open);
   return (
     <div className={cls("line-item", pending && "is-pending")} id={`item-${item.id}`}>
       <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ToolGlyph item={item} />
         <span className="line-verb">{d.verb}</span>
-        <span className="line-target mono">{d.target}</span>
+        {d.target && <span className={cls("line-target", !d.prose && "mono")}>{d.target}</span>}
         {meta.length > 0 && <span className="line-meta">· {meta.join(" · ")}</span>}
         {status && item.status !== "running" && (
           <span className={cls("line-status", pending ? "tone-attention" : item.status === "interrupted" ? "tone-muted" : "tone-error")}>
@@ -552,6 +570,15 @@ function ToolInput({ item }: { item: ToolItem }) {
               </span>
               {cmd}
             </pre>
+          </Section>
+        );
+    }
+    if (tool === "agent_message") {
+      const m = str(input, ["message"]);
+      if (m !== null)
+        return (
+          <Section label="Message" copy={m}>
+            <pre className="code-plain">{m}</pre>
           </Section>
         );
     }
@@ -855,6 +882,28 @@ function DecisionButtons({
 
 // ---------- Sub-agents ----------
 
+/** The parent-facing reply to a background start or a question; not a report. */
+function isHandoff(output: string): boolean {
+  return /^\s*\{\s*"status"\s*:\s*"(running|question)"/.test(output);
+}
+
+function agentGlyph(item: ToolItem, state: AgentRun["state"] | null, live: boolean, attention: boolean): ToolItem["status"] {
+  if (attention || item.status === "pending_approval") return "pending_approval";
+  if (live) return "running";
+  if (state === "stopped") return "interrupted";
+  if (state === "error") return "error";
+  return item.status === "running" ? "done" : item.status;
+}
+
+function agentStatus(item: ToolItem, state: AgentRun["state"] | null, live: boolean): { text: string; tone: string } | null {
+  if (state === "asking") return { text: "Asked a question", tone: "tone-attention" };
+  if (live) return null;
+  if (state === "stopped") return { text: item.status === "interrupted" ? "Interrupted" : "Stopped", tone: "tone-muted" };
+  if (state === "error" || item.status === "error") return { text: "Failed", tone: "tone-error" };
+  const t = item.status === "running" ? null : TOOL_STATUS_TEXT[item.status];
+  return t ? { text: t, tone: item.status === "interrupted" ? "tone-muted" : "tone-error" } : null;
+}
+
 /** An `agent` call: one line; its own tool calls and its report show indented when expanded. */
 export function AgentLine({
   item,
@@ -869,51 +918,94 @@ export function AgentLine({
   subItems: ToolItem[];
   oldestPendingId: string | null;
 }) {
+  const { state, actions } = useStore();
   const [open, setOpen] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const now = useNow(1000);
   const d = describeTool(item);
+  const run = item.agent;
+  const st = agentState(item);
+  const live = agentLive(item);
+  const asking = st === "asking";
   const pendingChild = subItems.some((c) => c.status === "pending_approval");
   const expanded = open || pendingChild;
-  const running = item.status === "running" || item.status === "pending_approval";
-  const ms = item.durationMs ?? (running ? Math.max(0, now - Date.parse(item.ts)) : undefined);
-  const meta: string[] = [`${subItems.length} tool ${subItems.length === 1 ? "use" : "uses"}`];
-  if (ms !== undefined && Number.isFinite(ms)) meta.push(fmtDuration(ms));
-  const status = pendingChild ? "Decision needed" : TOOL_STATUS_TEXT[item.status];
+  const started = Date.parse(run?.startedAt ?? item.ts);
+  const ms = run?.endedAt
+    ? Date.parse(run.endedAt) - started
+    : (item.durationMs ?? (live || item.status === "pending_approval" ? Math.max(0, now - started) : undefined));
+  const uses = subItems.filter((c) => c.name !== "ask_parent").length;
+  const meta: string[] = [];
+  if (run?.background) meta.push("background");
+  if (run && run.name !== "auto") meta.push(run.name);
+  if (run) meta.push(modelLabel(state, run.model));
+  if (run?.context === "fork") meta.push("forked");
+  meta.push(`${uses} tool ${uses === 1 ? "use" : "uses"}`);
+  // A paused agent's clock says nothing useful; the status says it is waiting.
+  if (!asking && ms !== undefined && Number.isFinite(ms) && ms >= 0) meta.push(fmtDuration(ms));
+  const status =
+    pendingChild || item.status === "pending_approval" ? { text: "Decision needed", tone: "tone-attention" } : agentStatus(item, st, live);
   const lastChild = subItems[subItems.length - 1];
+  const lastAsk = [...subItems].reverse().find((c) => c.name === "ask_parent");
+  const peek = asking
+    ? `Asked: ${run?.question ?? (lastAsk ? describeTool(lastAsk).target : "")}`
+    : lastChild
+      ? `${describeTool(lastChild).verb} ${describeTool(lastChild).target}`
+      : null;
+  const report = !live && item.output !== undefined && !isHandoff(item.output) ? item.output : undefined;
+  const canStop = !!run?.background && live;
+
+  const line = (
+    <button type="button" className={cls("line", canStop && "grow")} aria-expanded={expanded} onClick={() => setOpen(!open)}>
+      <ToolGlyph item={{ ...item, status: agentGlyph(item, st, live, pendingChild || asking) }} />
+      <span className="line-verb">Agent</span>
+      <span className="line-target">{d.target}</span>
+      <span className="line-meta">· {meta.join(" · ")}</span>
+      {status && <span className={cls("line-status", status.tone)}>{status.text}</span>}
+      <IconChevronRight className="chev" size={14} />
+    </button>
+  );
   return (
     <div className={cls("line-item agent", pendingChild && "is-pending")} id={`item-${item.id}`}>
-      <button type="button" className="line" aria-expanded={expanded} onClick={() => setOpen(!open)}>
-        <ToolGlyph item={pendingChild ? { ...item, status: "pending_approval" } : item} />
-        <span className="line-verb">Agent</span>
-        <span className="line-target">{d.target}</span>
-        <span className="line-meta">· {meta.join(" · ")}</span>
-        {status && item.status !== "running" && (
-          <span className={cls("line-status", pendingChild || item.status === "pending_approval" ? "tone-attention" : item.status === "interrupted" ? "tone-muted" : "tone-error")}>
-            {status}
-          </span>
-        )}
-        {status && pendingChild && item.status === "running" && <span className="line-status tone-attention">{status}</span>}
-        <IconChevronRight className="chev" size={14} />
-      </button>
-      {!expanded && running && lastChild && (
-        <div className="agent-peek line-meta">
-          ⎿ {describeTool(lastChild).verb} {describeTool(lastChild).target}
+      {canStop && run ? (
+        <div className="row gap">
+          {line}
+          <button
+            type="button"
+            className="link-btn line-action"
+            aria-label={`Stop the agent ${d.target}`}
+            disabled={stopping}
+            onClick={async () => {
+              setStopping(true);
+              await actions.stopAgent(sessionId, run.id);
+              setStopping(false);
+            }}
+          >
+            {stopping ? "Stopping…" : "Stop"}
+          </button>
         </div>
+      ) : (
+        line
       )}
+      {!expanded && live && peek && <div className="agent-peek line-meta">⎿ {peek}</div>}
       {expanded && (
         <div className="group-body agent-body">
-          {subItems.length === 0 && <p className="line-meta">No tool calls yet.</p>}
-          {subItems.map((c) => (
-            <ToolLine key={c.id} item={c} sessionId={sessionId} persona={persona} promptOpen={c.id === oldestPendingId} />
-          ))}
-          {item.output !== undefined && open && (
+          {run && <AgentFacts item={item} run={run} persona={persona} />}
+          {subItems.length === 0 && live && <p className="line-meta">No tool calls yet.</p>}
+          {subItems.map((c) =>
+            c.name === "ask_parent" ? (
+              <AskParentLines key={c.id} item={c} />
+            ) : (
+              <ToolLine key={c.id} item={c} sessionId={sessionId} persona={persona} promptOpen={c.id === oldestPendingId} />
+            ),
+          )}
+          {report !== undefined && open && (
             <div className="agent-report">
               <div className="section-label">
                 <span>Report</span>
-                <CopyButton text={item.output} label="Copy report" />
+                <CopyButton text={report} label="Copy report" />
               </div>
               <div className="msg-model">
-                <Markdown text={item.output || "(empty)"} />
+                <Markdown text={report || "(empty)"} />
               </div>
             </div>
           )}
@@ -923,5 +1015,67 @@ export function AgentLine({
         <ApprovalPrompt item={item} sessionId={sessionId} persona={persona} showInput={!open} />
       )}
     </div>
+  );
+}
+
+function AgentFacts({ item, run, persona }: { item: ToolItem; run: AgentRun; persona: PersonaSummary | null }) {
+  const { state } = useStore();
+  // AgentRun does not say whether the parent chose the model. It did for "auto", for a sub-agent
+  // configured as auto (known once Settings has loaded the persona), and when it passed a model.
+  const configured = persona ? state.drafts[persona.id]?.base.subagents?.agents.find((a) => a.name === run.name) : undefined;
+  // Older transcripts have no `auto`: fall back to what the call and the persona say.
+  const byParent =
+    run.auto ??
+    (run.name === "auto" || configured?.model === "auto" || (isRecord(item.input) && (typeof item.input.model === "string" || typeof item.input.effort === "string")));
+  const model = [modelLabel(state, run.model), run.model.effort && `${EFFORT_LABEL[run.model.effort].toLowerCase()} effort`].filter(Boolean).join(" · ");
+  return (
+    <dl className="facts small agent-facts">
+      <dt>Sub-agent</dt>
+      <dd>{run.name === "auto" ? "Auto" : byParent ? `${run.name} (Auto)` : run.name}</dd>
+      <dt>Model</dt>
+      <dd>
+        {model}
+        {byParent && ", chosen by the parent"}
+      </dd>
+      <dt>Context</dt>
+      <dd>{run.context === "fork" ? "Forked from this conversation" : "Brief only"}</dd>
+      <dt>Turns</dt>
+      <dd>
+        {run.turns} of {run.maxTurns}
+      </dd>
+      <dt>Brief</dt>
+      <dd className="agent-brief">{run.brief}</dd>
+    </dl>
+  );
+}
+
+/** A sub-agent's `ask_parent` call: the question, then the answer once the parent replies. */
+function AskParentLines({ item }: { item: ToolItem }) {
+  const question = str(item.input, ["question"]) ?? item.inputPreview;
+  const answered = item.status === "done" && !item.isError && item.output !== undefined;
+  return (
+    <>
+      <div className="line-item" id={`item-${item.id}`}>
+        <div className="line static">
+          <span className="glyph tone-attention" aria-hidden="true">
+            ?
+          </span>
+          <span className="line-verb">Asked the parent</span>
+          <span className="line-target plain">{question}</span>
+          {!answered && item.status !== "running" && <span className="line-status tone-muted">Not answered</span>}
+        </div>
+      </div>
+      {answered && (
+        <div className="line-item">
+          <div className="line static">
+            <span className="glyph tone-muted" aria-hidden="true">
+              ↳
+            </span>
+            <span className="line-verb">Answer</span>
+            <span className="line-target plain">{item.output}</span>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

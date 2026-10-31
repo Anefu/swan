@@ -1,4 +1,4 @@
-import type { ChatItem, PersonaSummary } from "@ph/shared";
+import type { AgentRun, ChatItem, PersonaSummary } from "@ph/shared";
 import { basename, exitCode, isRecord, toolDisplayName } from "./util";
 
 export type ToolItem = Extract<ChatItem, { kind: "tool_call" }>;
@@ -34,10 +34,15 @@ export interface ReceiptText {
   /** Short result summary after a separator, e.g. "3 matches" or "exit 1". */
   result: string | null;
   icon: "file" | "search" | "terminal" | "pencil" | "plug" | "sparkles" | "tool" | "globe";
+  /** The target is words (an agent's description, a question), not code. */
+  prose?: boolean;
 }
 
-/** Spec verb mapping: Searched / Read / Ran / Wrote / Edited / Called. */
-export function describeTool(item: ToolItem): ReceiptText {
+/**
+ * Spec verb mapping: Searched / Read / Ran / Wrote / Edited / Called.
+ * `agents` maps sub-agent ids to their descriptions, for the calls that name an agent by id.
+ */
+export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string>): ReceiptText {
   const { server, tool } = toolDisplayName(item.name);
   const done = item.status === "done" || item.status === "error";
   const out = item.output ?? "";
@@ -52,7 +57,27 @@ export function describeTool(item: ToolItem): ReceiptText {
         target: str(item.input, ["description"]) ?? item.inputPreview ?? "",
         result: null,
         icon: "sparkles",
+        prose: true,
       };
+    case "agent_message": {
+      const id = str(item.input, ["id"]) ?? "";
+      const message = str(item.input, ["message"]);
+      return {
+        verb: "Replied to",
+        target: agents?.get(id) ?? id,
+        result: message ? `“${firstLine(message, 80)}”` : null,
+        icon: "sparkles",
+        prose: true,
+      };
+    }
+    case "agent_stop": {
+      const id = str(item.input, ["id"]) ?? "";
+      return { verb: "Stopped", target: agents?.get(id) ?? id, result: null, icon: "sparkles", prose: true };
+    }
+    case "agent_status":
+      return { verb: "Checked agents", target: "", result: null, icon: "sparkles" };
+    case "ask_parent":
+      return { verb: "Asked the parent", target: str(item.input, ["question"]) ?? item.inputPreview, result: null, icon: "sparkles", prose: true };
     case "network_access":
       return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
     case "credential_use": {
@@ -129,6 +154,32 @@ function shortPath(p: string): string {
   return p.replace(/^\/workspace\//, "");
 }
 
+/** Tools that steer sub-agents; their lines carry no duration. */
+export const AGENT_CONTROL_TOOLS = new Set(["agent_message", "agent_stop", "agent_status", "ask_parent"]);
+
+const CALL_ENDED = new Set<ToolItem["status"]>(["error", "interrupted", "denied"]);
+
+/**
+ * The sub-agent's state as the UI should show it. A call that failed or was interrupted wins over a
+ * stale "running" or "asking" (e.g. after a restart). Null for an `agent` call without a run yet.
+ */
+export function agentState(item: ToolItem): AgentRun["state"] | null {
+  const a = item.agent;
+  if (!a) return null;
+  if ((a.state === "running" || a.state === "asking") && CALL_ENDED.has(item.status)) return "stopped";
+  return a.state;
+}
+
+/**
+ * True while an `agent` call's sub-agent works or waits for an answer. A background agent keeps
+ * its call running after the parent moves on; a foreground one that asked may have returned already.
+ */
+export function agentLive(item: ToolItem): boolean {
+  const s = agentState(item);
+  if (s === null) return item.status === "running" || item.status === "pending_approval";
+  return s === "running" || s === "asking";
+}
+
 export const TOOL_STATUS_TEXT: Record<ToolItem["status"], string | null> = {
   pending_approval: "Decision needed",
   running: "Running",
@@ -191,6 +242,9 @@ const NOUNS: Record<string, [string, string, string]> = {
   Network: ["requested access to", "host", "hosts"],
   Credential: ["asked to use", "credential", "credentials"],
   Agent: ["ran", "agent", "agents"],
+  "Replied to": ["replied to", "agent", "agents"],
+  Stopped: ["stopped", "agent", "agents"],
+  "Checked agents": ["checked", "agent status", "agent statuses"],
 };
 
 /** "Read 3 files, ran 2 commands" for a run of consecutive tool calls. */

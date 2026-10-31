@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import type { ConnectionStatus, CredentialRule, FolderMode, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi } from "@ph/shared";
+import type { ConnectionStatus, CredentialRule, FolderMode, ModelOption, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi, SubagentsConfig } from "@ph/shared";
 import { api } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
 import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
@@ -72,7 +72,17 @@ function blankConfig(): PersonaConfigView {
     skills: [],
     mcpServers: {},
     memory: { autoBrief: true, briefTokens: 2000 },
+    subagents: subagentDefaults(),
   };
+}
+
+function subagentDefaults(): SubagentsConfig {
+  return { agents: [], maxBackground: 4, maxTurns: 200 };
+}
+
+/** A server from before sub-agents sends no `subagents`; edit the defaults instead. */
+function withDefaults(v: PersonaConfigView): PersonaConfigView {
+  return v.subagents ? v : { ...v, subagents: subagentDefaults() };
 }
 
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -86,6 +96,7 @@ function cleaned(v: PersonaConfigView): PersonaConfigView {
   x.networkAllow = x.networkAllow.map((h) => h.trim()).filter(Boolean);
   for (const k of ["allow", "ask", "deny"] as const) x.permissions[k] = x.permissions[k].map((r) => r.trim()).filter(Boolean);
   x.folders = x.folders.map((f) => ({ ...f, path: f.path.trim(), ...(f.mount ? { mount: f.mount.trim() } : {}) }));
+  x.subagents.agents = x.subagents.agents.map((a) => ({ name: a.name.trim(), model: a.model.trim() }));
   for (const pc of Object.values(x.connections))
     pc.rules = pc.rules.map((r) => ({
       ...r,
@@ -102,6 +113,8 @@ function patterns(list: string[] | undefined): string[] {
 }
 
 const RULE_CREDENTIAL_RE = /^[A-Za-z0-9_*?-]{1,64}$/;
+const SUBAGENT_NAME_RE = /^[a-z0-9-]+$/;
+const MODEL_REF_RE = /^[^/\s]+\/\S+$/;
 
 function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: boolean, mcpError: string | null): Errors {
   const e: Errors = {};
@@ -125,6 +138,22 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
       if (!c) e[`rule-${conn}-${i}`] = "Choose a credential or enter a pattern.";
       else if (!RULE_CREDENTIAL_RE.test(c)) e[`rule-${conn}-${i}`] = "Use a credential name or a pattern with * and ?.";
     });
+  const agentNames = new Set<string>();
+  d.subagents.agents.forEach((a, i) => {
+    const n = a.name.trim();
+    const m = a.model.trim();
+    if (!n) e[`sa-${i}`] = "Enter a name or remove the row.";
+    else if (!SUBAGENT_NAME_RE.test(n) || n.length > 32) e[`sa-${i}`] = "Use lowercase letters, digits and dashes, at most 32.";
+    else if (n.startsWith("-")) e[`sa-${i}`] = "Start the name with a letter or digit.";
+    else if (n === "auto") e[`sa-${i}`] = "“auto” is reserved. Choose another name.";
+    else if (agentNames.has(n)) e[`sa-${i}`] = "Another sub-agent has this name.";
+    else if (m !== "auto" && !MODEL_REF_RE.test(m)) e[`sa-${i}`] = "Use provider/model, or auto.";
+    agentNames.add(n);
+  });
+  const bg = d.subagents.maxBackground;
+  if (!Number.isInteger(bg) || bg < 0 || bg > 32) e.maxBackground = "Use a whole number from 0 to 32.";
+  const turns = d.subagents.maxTurns;
+  if (!Number.isInteger(turns) || turns < 1 || turns > 1000) e.maxTurns = "Use a whole number from 1 to 1000.";
   if (!Number.isInteger(d.memory.briefTokens) || d.memory.briefTokens < 0) e.briefTokens = "Use a whole number of tokens.";
   if (mcpError) e.mcp = mcpError;
   return e;
@@ -204,7 +233,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     setLoading(true);
     setLoadError(null);
     try {
-      const base = await api.config(persona.id);
+      const base = withDefaults(await api.config(persona.id));
       actions.setDraft(draftKey, { base, draft: clone(base) });
     } catch (e) {
       setLoadError(isMissingEndpoint(e) ? "This server does not offer persona settings yet." : errorMessage(e));
@@ -308,7 +337,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         const result = await actions.saveConfig(persona.id, nextBase);
         let base = nextBase;
         try {
-          base = await api.config(persona.id);
+          base = withDefaults(await api.config(persona.id));
         } catch {
           /* keep what we sent */
         }
@@ -379,7 +408,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         const result = await actions.saveConfig(persona.id, d);
         let base = clone(d);
         try {
-          base = await api.config(persona.id);
+          base = withDefaults(await api.config(persona.id));
         } catch {
           /* keep what we sent */
         }
@@ -751,6 +780,67 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         </Section>
 
         <Section
+          id="subagents"
+          title="Sub-agents"
+          summary={`${d.subagents.agents.length ? plural(d.subagents.agents.length, "sub-agent") : "None"} · ${
+            Number.isFinite(d.subagents.maxBackground) ? d.subagents.maxBackground : "?"
+          } at once`}
+          invalid={Object.keys(errors).some((k) => k.startsWith("sa-")) || !!errors.maxBackground || !!errors.maxTurns}
+        >
+          <div className="field">
+            <span className="field-label">Sub-agents</span>
+            {d.subagents.agents.map((a, i) => (
+              <SubagentRow
+                key={i}
+                index={i}
+                name={a.name}
+                model={a.model}
+                models={state.models}
+                error={errors[`sa-${i}`]}
+                onName={(v) => update((x) => void (x.subagents.agents[i].name = v))}
+                onModel={(v) => update((x) => void (x.subagents.agents[i].model = v))}
+                onRemove={() => update((x) => void x.subagents.agents.splice(i, 1))}
+              />
+            ))}
+            <button type="button" className="link-btn" onClick={() => update((x) => void x.subagents.agents.push({ name: "", model: "auto" }))}>
+              <IconPlus /> Add sub-agent
+            </button>
+            <p className="hint">Auto lets the agent choose the model and effort for each task.</p>
+          </div>
+          <Field label="Background agents at once" error={errors.maxBackground}>
+            {(id) => (
+              <input
+                id={id}
+                className="input short"
+                type="number"
+                min={0}
+                max={32}
+                value={Number.isFinite(d.subagents.maxBackground) ? d.subagents.maxBackground : ""}
+                aria-invalid={!!errors.maxBackground}
+                onChange={(e) => update((x) => void (x.subagents.maxBackground = e.target.value === "" ? Number.NaN : Number(e.target.value)))}
+              />
+            )}
+          </Field>
+          <Field label="Most turns per agent" error={errors.maxTurns}>
+            {(id) => (
+              <input
+                id={id}
+                className="input short"
+                type="number"
+                min={1}
+                max={1000}
+                value={Number.isFinite(d.subagents.maxTurns) ? d.subagents.maxTurns : ""}
+                aria-invalid={!!errors.maxTurns}
+                onChange={(e) => update((x) => void (x.subagents.maxTurns = e.target.value === "" ? Number.NaN : Number(e.target.value)))}
+              />
+            )}
+          </Field>
+          <p className="hint">
+            The agent picks a sub-agent, its context and turns for each task, within these limits. Sub-agents can't start sub-agents.
+          </p>
+        </Section>
+
+        <Section
           id="tools"
           title="MCP servers and skills"
           summary={`${plural(Object.keys(d.mcpServers).length, "server")}, ${plural(d.skills.length, "skill")}`}
@@ -850,6 +940,80 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         {!dirty && !entry.result && <span className="muted small">All changes saved.</span>}
       </div>
     </>
+  );
+}
+
+// ---------- Sub-agents ----------
+
+function SubagentRow({
+  index,
+  name,
+  model,
+  models,
+  error,
+  onName,
+  onModel,
+  onRemove,
+}: {
+  index: number;
+  name: string;
+  model: string;
+  models: ModelOption[] | null;
+  error?: string;
+  onName: (v: string) => void;
+  onModel: (v: string) => void;
+  onRemove: () => void;
+}) {
+  const nameId = useId();
+  const modelId = useId();
+  const label = name.trim() || `sub-agent ${index + 1}`;
+  const listed = models?.some((m) => `${m.provider}/${m.id}` === model) ?? false;
+  return (
+    <div className="folder-row">
+      <div className="row gap even">
+        <label htmlFor={nameId} className="sr-only">
+          Name of sub-agent {index + 1}
+        </label>
+        <input
+          id={nameId}
+          className="input mono"
+          value={name}
+          placeholder="researcher"
+          maxLength={32}
+          spellCheck={false}
+          aria-invalid={!!error}
+          onChange={(e) => onName(e.target.value.toLowerCase().replace(/[\s_]+/g, "-"))}
+        />
+        <label htmlFor={modelId} className="sr-only">
+          Model for {label}
+        </label>
+        {models && models.length > 0 ? (
+          <select id={modelId} className="input" value={model} onChange={(e) => onModel(e.target.value)}>
+            <option value="auto">Auto</option>
+            {!listed && model !== "auto" && <option value={model}>{model}</option>}
+            {models.map((m) => (
+              <option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+                {m.label} · {m.provider}
+                {m.ready ? "" : " · needs key"}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            id={modelId}
+            className="input mono"
+            value={model}
+            placeholder="provider/model or auto"
+            spellCheck={false}
+            onChange={(e) => onModel(e.target.value)}
+          />
+        )}
+        <button type="button" className="icon-btn" aria-label={`Remove sub-agent ${name.trim() || index + 1}`} onClick={onRemove}>
+          <IconTrash />
+        </button>
+      </div>
+      {error && <span className="field-error">{error}</span>}
+    </div>
   );
 }
 

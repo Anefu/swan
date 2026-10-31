@@ -178,6 +178,8 @@ export const api = {
   approve: (id: string, toolUseId: string, body: ApprovalBody) =>
     request<Ok>("POST", `/api/sessions/${enc(id)}/approvals/${enc(toolUseId)}`, body),
   stopSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/stop`),
+  /** agentId "all" stops every sub-agent of the session. */
+  stopAgent: (id: string, agentId: string) => request<Ok>("POST", `/api/sessions/${enc(id)}/agents/${enc(agentId)}/stop`),
   deleteSession: (id: string) => request<Ok>("DELETE", `/api/sessions/${enc(id)}`),
 
   egress: (opts: { sessionId?: string; limit?: number } = {}) => {
