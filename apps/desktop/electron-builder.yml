@@ -21,7 +21,7 @@ electronFuses:
   enableNodeCliInspectArguments: false # nor can --inspect attach a debugger
   onlyLoadAppFromAsar: true
   enableEmbeddedAsarIntegrityValidation: true # enforced once the app is signed
-  enableCookieEncryption: true
+  enableCookieEncryption: false # Swan uses no cookies; encrypting them puts a key in the login keychain
   grantFileProtocolExtraPrivileges: false
   loadBrowserProcessSpecificV8Snapshot: false
 mac:
