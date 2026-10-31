@@ -4,22 +4,16 @@ import type { ConnectionAction } from "../api";
 import { useStore } from "../store";
 import { CONNECTION_STATE } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
-import { DecisionsShortcut } from "./Composer";
+import { PaneHead } from "./Cards";
 import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
-import { IconPlus, IconX } from "./icons";
+import { IconPlus } from "./icons";
 import { Spinner } from "./ui";
 
 /** Swan's own settings, shared by every persona: model providers, connections and the sandbox. */
 export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
   return (
     <div className="pane">
-      <div className="pane-head">
-        <h2>Swan settings</h2>
-        <DecisionsShortcut className="compact" />
-        <button type="button" className="icon-btn" aria-label="Close Swan settings" onClick={onClose}>
-          <IconX size={18} />
-        </button>
-      </div>
+      <PaneHead title="Swan settings" onClose={onClose} closeLabel="Close Swan settings" />
       <div className="pane-body">
         <Providers />
         <Connections />

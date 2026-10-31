@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { EgressDecision, EgressEvent } from "@ph/shared";
 import { useSelectedPersona, useStore } from "../store";
 import { clockTime, cls, fmtBytes, fmtDuration, fullTime } from "../util";
-import { DecisionsShortcut } from "./Composer";
-import { IconArrowRight, IconChevronRight, IconSearch, IconX } from "./icons";
+import { PaneHead } from "./Cards";
+import { IconArrowRight, IconChevronRight, IconSearch } from "./icons";
 import { CopyButton, Empty } from "./ui";
 
 const DECISION: Record<EgressDecision, { label: string; explain: string }> = {
@@ -25,7 +25,7 @@ function hostLabel(e: EgressEvent): string {
 }
 
 /** Network activity for the selected persona, as a right-dock pane. */
-export function NetworkPane({ onClose }: { onClose: () => void }) {
+export function NetworkPane({ onBack }: { onBack: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const f = state.network;
@@ -67,26 +67,17 @@ export function NetworkPane({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="pane">
-      <div className="pane-head">
-        <h2>Network activity</h2>
-        <DecisionsShortcut className="compact" />
-        <button type="button" className="icon-btn" aria-label="Close network activity" onClick={onClose}>
-          <IconX size={18} />
-        </button>
-      </div>
+      <PaneHead title="Network" sub={persona?.name} onBack={onBack} backLabel="Back to overview" />
       <div className="pane-tabs net-filters">
         <label className="search-field">
           <IconSearch size={16} />
           <span className="sr-only">Filter by host or path</span>
           <input placeholder="Filter by host or path…" value={f.query} onChange={(e) => actions.setNetwork({ query: e.target.value })} />
         </label>
-        <div className="row gap">
-          <label className="check-row grow">
-            <input type="checkbox" checked={f.onlyBlocked} onChange={(e) => actions.setNetwork({ onlyBlocked: e.target.checked })} />
-            <span>Only blocked</span>
-          </label>
-          <span className="small muted">{persona?.name ?? "All personas"}</span>
-        </div>
+        <label className="check-row">
+          <input type="checkbox" checked={f.onlyBlocked} onChange={(e) => actions.setNetwork({ onlyBlocked: e.target.checked })} />
+          <span>Only blocked</span>
+        </label>
       </div>
       <div className="pane-body flush" ref={listRef}>
         {rows.length === 0 ? (

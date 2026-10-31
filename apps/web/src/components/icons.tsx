@@ -26,6 +26,7 @@ function make(children: ReactNode, filled = false) {
 
 export const IconPlus = make(<path d="M12 5v14M5 12h14" />);
 export const IconChevronRight = make(<path d="m9 18 6-6-6-6" />);
+export const IconChevronLeft = make(<path d="m15 18-6-6 6-6" />);
 export const IconChevronDown = make(<path d="m6 9 6 6 6-6" />);
 export const IconX = make(<path d="M18 6 6 18M6 6l12 12" />);
 export const IconCheck = make(<path d="M20 6 9 17l-5-5" />);
@@ -153,4 +154,17 @@ export const IconEye = make(
 );
 export const IconPaperclip = make(
   <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7L10 17.4a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" />,
+);
+export const IconOverview = make(
+  <>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M7 9h2M7 13h2M11 9h6M11 13h6" />
+  </>,
+);
+export const IconImage = make(
+  <>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
+  </>,
 );

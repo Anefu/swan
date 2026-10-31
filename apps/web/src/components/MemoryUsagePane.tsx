@@ -3,15 +3,15 @@ import type { Checkpoint, MemoryChange, MemoryRecord, MemoryType, PersonaSummary
 import { api } from "../api";
 import { DEFAULT_MEMORY_PANE, useSelectedPersona, useStore, type MemoryPaneState } from "../store";
 import { clockTime, cls, errorMessage, fmtNumber, fmtTokens, fmtUsd, fullTime, isMissingEndpoint, relTime, useNow } from "../util";
-import { DecisionsShortcut } from "./Composer";
-import { IconChevronRight, IconExternal, IconLock, IconPin, IconPlus, IconRefresh, IconSearch, IconX } from "./icons";
+import { PaneHead } from "./Cards";
+import { IconChevronRight, IconExternal, IconLock, IconPin, IconPlus, IconRefresh, IconSearch } from "./icons";
 import { Empty, Segmented, Spinner } from "./ui";
 
 /** Scroll offsets per persona and view, kept for the session. */
 const scrolls = new Map<string, number>();
 
-/** Memory or Usage for the selected persona; each is its own rail entry and dock pane. */
-export function MemoryUsagePane({ mode, onClose }: { mode: "memory" | "usage"; onClose: () => void }) {
+/** Memory or Usage for the selected persona; both open from the overview and lead back to it. */
+export function MemoryUsagePane({ mode, onBack }: { mode: "memory" | "usage"; onBack: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -25,18 +25,7 @@ export function MemoryUsagePane({ mode, onClose }: { mode: "memory" | "usage"; o
     el.scrollTop = scrolls.get(scrollKey) ?? 0;
   }, [scrollKey]);
 
-  const head = (
-    <div className="pane-head">
-      <h2>
-        {title}
-        {persona && <span className="pane-sub"> · {persona.name}</span>}
-      </h2>
-      <DecisionsShortcut className="compact" />
-      <button type="button" className="icon-btn" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}>
-        <IconX size={18} />
-      </button>
-    </div>
-  );
+  const head = <PaneHead title={title} sub={persona?.name} onBack={onBack} backLabel="Back to overview" />;
 
   if (!persona) {
     return (
@@ -90,7 +79,7 @@ export function MemoryUsagePane({ mode, onClose }: { mode: "memory" | "usage"; o
 }
 
 /** Load something for the pane; refetch on deps; keep the previous value when a refresh fails. */
-function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
+export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
@@ -647,29 +636,13 @@ function UsageView({ persona, ps, set }: { persona: PersonaSummary; ps: MemoryPa
   return (
     <div className="usage">
       <section className="usage-section">
-        <div className="row gap">
-          <h3 className="grow">Provider allowance</h3>
-          <span className="small muted">{provider}</span>
-        </div>
-        {allowance.loading && !a ? (
-          <div className="pane-state">
-            <Spinner size={12} /> Checking…
-          </div>
-        ) : a ? (
-          <>
-            <p>{a.available ? a.detail : a.detail || "Unavailable for this connection"}</p>
-            <div className="row gap wrap small muted">
-              <span title={fullTime(a.observedAt)}>{agoText(a.observedAt, now, "Checked")}</span>
-              {allowance.error && <span className="tone-attention">Stale: {allowance.error}</span>}
-              {a.usagePage && (
-                <a href={a.usagePage} target="_blank" rel="noopener noreferrer">
-                  Open provider usage <IconExternal size={12} />
-                </a>
-              )}
-            </div>
-          </>
+        <h3>Context</h3>
+        {u?.context ? (
+          <ContextMeter c={u.context} />
+        ) : u ? (
+          <p className="muted">No active context yet.</p>
         ) : (
-          <p>Unavailable for this connection</p>
+          <p className="muted">Unavailable</p>
         )}
       </section>
 
@@ -728,13 +701,29 @@ function UsageView({ persona, ps, set }: { persona: PersonaSummary; ps: MemoryPa
       </section>
 
       <section className="usage-section">
-        <h3>Context</h3>
-        {u?.context ? (
-          <ContextMeter c={u.context} />
-        ) : u ? (
-          <p className="muted">No active context yet.</p>
+        <div className="row gap">
+          <h3 className="grow">Provider allowance</h3>
+          <span className="small muted">{provider}</span>
+        </div>
+        {allowance.loading && !a ? (
+          <div className="pane-state">
+            <Spinner size={12} /> Checking…
+          </div>
+        ) : a ? (
+          <>
+            <p>{a.available ? a.detail : a.detail || "Unavailable for this connection"}</p>
+            <div className="row gap wrap small muted">
+              <span title={fullTime(a.observedAt)}>{agoText(a.observedAt, now, "Checked")}</span>
+              {allowance.error && <span className="tone-attention">Stale: {allowance.error}</span>}
+              {a.usagePage && (
+                <a href={a.usagePage} target="_blank" rel="noopener noreferrer">
+                  Open provider usage <IconExternal size={12} />
+                </a>
+              )}
+            </div>
+          </>
         ) : (
-          <p className="muted">Unavailable</p>
+          <p>Unavailable for this connection</p>
         )}
       </section>
 

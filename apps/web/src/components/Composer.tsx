@@ -371,7 +371,7 @@ function CommandOption({
 
 const SEP = "\u0001";
 
-function ModelSelectors({ persona }: { persona: PersonaSummary }) {
+export function ModelSelectors({ persona }: { persona: PersonaSummary }) {
   const { state, actions } = useStore();
   const [busy, setBusy] = useState(false);
   const current = state.models?.find((m) => m.provider === persona.model.provider && m.id === persona.model.id) ?? null;

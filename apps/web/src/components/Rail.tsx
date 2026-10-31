@@ -1,23 +1,16 @@
-import type { ReactNode } from "react";
-import { usePendingApprovals, useStore, type DockMode } from "../store";
+import { inRail, usePendingApprovals, useStore } from "../store";
 import { cls } from "../util";
-import { IconChart, IconDoc, IconPaperclip, IconSettings, IconShield, IconTrend } from "./icons";
+import { IconOverview, IconSettings, IconShield } from "./icons";
 
-const ENTRIES: Array<{ mode: DockMode; label: string; icon: ReactNode }> = [
-  { mode: "settings", label: "Settings", icon: <IconSettings size={18} /> },
-  { mode: "memory", label: "Memory", icon: <IconDoc size={18} /> },
-  { mode: "usage", label: "Usage", icon: <IconChart size={18} /> },
-  { mode: "network", label: "Network activity", icon: <IconTrend size={18} /> },
-  { mode: "attachments", label: "Attachments", icon: <IconPaperclip size={18} /> },
-];
-
-/** Panel buttons at the right of the header; they switch the dock. Clicking the active entry closes it. */
+/** Panel buttons at the right of the header: the overview rail and the persona's settings. Clicking the open one closes it. */
 export function Rail() {
   const { state, actions } = useStore();
   const approvals = usePendingApprovals();
   const dock = state.ui.dock;
   const settingsDirty = Object.values(state.drafts).some((d) => JSON.stringify(d.base) !== JSON.stringify(d.draft) || d.newId);
-  const needsPersona = (m: DockMode) => m !== "settings" && !state.selectedPersonaId;
+  const overviewOn = inRail(dock);
+  const settingsOn = dock === "settings";
+  const settingsLabel = `Settings${settingsDirty ? " (unsaved changes)" : ""}`;
   return (
     <nav className="header-tools" aria-label="Panels">
       {approvals.length > 0 && (
@@ -32,26 +25,34 @@ export function Rail() {
           <span className="rail-count">{approvals.length}</span>
         </button>
       )}
-      {ENTRIES.map((e) => {
-        const on = dock === e.mode;
-        const note = e.mode === "settings" && settingsDirty ? " (unsaved changes)" : "";
-        return (
-          <button
-            key={e.mode}
-            type="button"
-            id={`trigger-${e.mode}`}
-            className={cls("rail-btn", on && "is-on")}
-            aria-pressed={on}
-            aria-label={`${e.label}${note}`}
-            title={`${e.label}${note}`}
-            disabled={needsPersona(e.mode)}
-            onClick={() => actions.toggleDock(e.mode)}
-          >
-            {e.icon}
-            {note && <span className="rail-dot" aria-hidden="true" />}
-          </button>
-        );
-      })}
+      <button
+        type="button"
+        id="trigger-overview"
+        className={cls("rail-btn", overviewOn && "is-on")}
+        aria-pressed={overviewOn}
+        aria-label="Overview"
+        title="Overview"
+        disabled={!state.selectedPersonaId}
+        onClick={() => actions.openDock(overviewOn ? null : "overview")}
+      >
+        <IconOverview size={18} />
+      </button>
+      <button
+        type="button"
+        id="trigger-settings"
+        className={cls("rail-btn", settingsOn && "is-on")}
+        aria-pressed={settingsOn}
+        aria-label={settingsLabel}
+        title={settingsLabel}
+        onClick={() => {
+          // Reopening shows the list of sections; a new-persona draft in progress stays open.
+          if (!settingsOn) actions.setSettingsSection(null);
+          actions.openDock(settingsOn ? null : "settings");
+        }}
+      >
+        <IconSettings size={18} />
+        {settingsDirty && <span className="rail-dot" aria-hidden="true" />}
+      </button>
     </nav>
   );
 }

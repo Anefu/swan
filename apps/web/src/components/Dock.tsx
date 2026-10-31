@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { DOCK_DEFAULT, useStore, type DockMode } from "../store";
+import { DOCK_DEFAULT, dockWidthKey, inRail, useStore, type DockMode } from "../store";
 import { cls } from "../util";
 import { MemoryUsagePane } from "./MemoryUsagePane";
 import { NetworkPane } from "./NetworkPane";
+import { OverviewPane } from "./OverviewPane";
 import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
 import { SwanSettingsPane } from "./SwanSettings";
 
 export const DOCK_MIN = 320;
 const DOCK_LABEL: Record<DockMode, string> = {
+  overview: "Overview",
   settings: "Settings",
   swan: "Swan settings",
   memory: "Memory",
@@ -34,14 +36,15 @@ const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)
 
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
-  // Swan settings opens from the persona menu, so focus goes back to its trigger.
-  const trigger = mode === "swan" ? "persona-trigger" : `trigger-${mode}`;
+  // Swan settings opens from the persona menu, so focus goes back to its trigger; the rail's screens share one button.
+  const trigger = mode === "swan" ? "persona-trigger" : inRail(mode) ? "trigger-overview" : `trigger-${mode}`;
   window.setTimeout(() => document.getElementById(trigger)?.focus(), 0);
 }
 
 export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
   const { state, actions } = useStore();
-  const width = clamp(state.ui.widths[mode]);
+  const key = dockWidthKey(mode);
+  const width = clamp(state.ui.widths[key]);
   const [drag, setDrag] = useState<number | null>(null);
   const start = useRef<{ x: number; w: number } | null>(null);
   const shown = drag ?? width;
@@ -57,21 +60,26 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
     setDrag(clamp(start.current.w + (start.current.x - e.clientX)));
   };
   const onPointerUp = () => {
-    if (start.current && drag !== null) actions.setDockWidth(mode, drag);
+    if (start.current && drag !== null) actions.setDockWidth(key, drag);
     start.current = null;
     setDrag(null);
   };
   const onKey = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 48 : 16;
-    if (e.key === "ArrowLeft") actions.setDockWidth(mode, clamp(width + step));
-    else if (e.key === "ArrowRight") actions.setDockWidth(mode, clamp(width - step));
-    else if (e.key === "Home") actions.setDockWidth(mode, DOCK_MIN);
-    else if (e.key === "End") actions.setDockWidth(mode, DOCK_MAX);
+    if (e.key === "ArrowLeft") actions.setDockWidth(key, clamp(width + step));
+    else if (e.key === "ArrowRight") actions.setDockWidth(key, clamp(width - step));
+    else if (e.key === "Home") actions.setDockWidth(key, DOCK_MIN);
+    else if (e.key === "End") actions.setDockWidth(key, DOCK_MAX);
     else return;
     e.preventDefault();
   };
 
   const close = () => closeDockAndRestoreFocus(mode, () => actions.openDock(null));
+  /** From a screen of the rail back to the overview, onto the card that opened it. */
+  const back = () => {
+    actions.openDock("overview");
+    window.setTimeout(() => document.getElementById(`ov-${mode}`)?.focus(), 0);
+  };
 
   return (
     <>
@@ -97,19 +105,21 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
             onKeyDown={onKey}
-            onDoubleClick={() => actions.setDockWidth(mode, DOCK_DEFAULT)}
+            onDoubleClick={() => actions.setDockWidth(key, DOCK_DEFAULT)}
           />
         )}
-        {mode === "settings" ? (
-          <SettingsPane onClose={close} />
+        {mode === "overview" ? (
+          <OverviewPane />
+        ) : mode === "settings" ? (
+          <SettingsPane />
         ) : mode === "swan" ? (
           <SwanSettingsPane onClose={close} />
         ) : mode === "memory" || mode === "usage" ? (
-          <MemoryUsagePane key={mode} mode={mode} onClose={close} />
+          <MemoryUsagePane key={mode} mode={mode} onBack={back} />
         ) : mode === "network" ? (
-          <NetworkPane onClose={close} />
+          <NetworkPane onBack={back} />
         ) : (
-          <AttachmentsPane onClose={close} />
+          <AttachmentsPane onBack={back} />
         )}
       </aside>
     </>

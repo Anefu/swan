@@ -28,8 +28,15 @@ import { EventSocket, wsUrl, type WsState } from "./ws";
 
 export type ServerState = "loading" | "ok" | "unreachable" | "unauthorized" | "no-token";
 export type ToastKind = "info" | "success" | "warn" | "error";
-/** "settings" is the selected persona's settings; "swan" is Swan's own (providers, connections, sandbox). */
-export type DockMode = "settings" | "swan" | "memory" | "usage" | "network" | "attachments";
+/**
+ * "overview" is the rail of cards; memory, usage, network and attachments open from it and lead back to it.
+ * "settings" is the selected persona's settings; "swan" is Swan's own (providers, connections, sandbox).
+ */
+export type DockMode = "overview" | "settings" | "swan" | "memory" | "usage" | "network" | "attachments";
+export const RAIL_MODES: readonly DockMode[] = ["overview", "memory", "usage", "network", "attachments"];
+export const inRail = (mode: DockMode | null): boolean => !!mode && RAIL_MODES.includes(mode);
+/** The rail and the screens it opens share one width, so moving between them never jumps. */
+export const dockWidthKey = (mode: DockMode): DockMode => (inRail(mode) ? "overview" : mode);
 export const NEW_PERSONA = "__new__";
 
 export interface Toast {
@@ -137,6 +144,8 @@ export interface State {
   selectedPersonaId: string | null;
   /** Settings shows the new-persona draft instead of the selected persona. */
   settingsNew: boolean;
+  /** The settings section opened from the list of cards; null shows the list. */
+  settingsSection: string | null;
   settingsFocus: SettingsFocus | null;
   drafts: Record<string, SettingsDraft>;
   memoryPane: Record<string, MemoryPaneState>;
@@ -160,7 +169,7 @@ const MAX_EGRESS = 2000;
 export const DOCK_DEFAULT = 440;
 const DEFAULT_UI: UiPrefs = {
   dock: null,
-  widths: { settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT },
+  widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT },
 };
 
 /** Saved prefs hold every width, chosen or not; 400 was the old default, so it moves to the new one. */
@@ -194,6 +203,7 @@ function initState(): State {
     egress: [],
     selectedPersonaId: loadPref<{ id: string | null }>(SELECTION_KEY, { id: null }).id,
     settingsNew: false,
+    settingsSection: null,
     settingsFocus: null,
     drafts: {},
     memoryPane: {},
@@ -242,6 +252,7 @@ type Action =
   | { type: "dock"; dock: DockMode | null }
   | { type: "dock.width"; mode: DockMode; width: number }
   | { type: "settings.new"; isNew: boolean }
+  | { type: "settings.section"; section: string | null }
   | { type: "settings.focus"; focus: SettingsFocus | null }
   | { type: "draft.set"; key: string; draft: SettingsDraft | null }
   | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
@@ -428,6 +439,8 @@ function reducer(state: State, a: Action): State {
       return { ...state, ui: { ...state.ui, widths: { ...state.ui.widths, [a.mode]: a.width } } };
     case "settings.new":
       return { ...state, settingsNew: a.isNew };
+    case "settings.section":
+      return { ...state, settingsSection: a.section };
     case "settings.focus":
       return { ...state, settingsFocus: a.focus };
     case "draft.set": {
@@ -518,8 +531,9 @@ export interface Actions {
   toggleDock(mode: DockMode): void;
   openDock(mode: DockMode | null): void;
   setDockWidth(mode: DockMode, width: number): void;
-  /** The selected persona's settings, or the new-persona draft. */
-  openSettings(opts?: { isNew?: boolean }): void;
+  /** The selected persona's settings, or the new-persona draft; `section` opens one section instead of the list. */
+  openSettings(opts?: { isNew?: boolean; section?: string }): void;
+  setSettingsSection(section: string | null): void;
   /** Swan's own settings: providers, connections and the sandbox. */
   openSwanSettings(): void;
   /** Open this persona's Connections settings with `rule` added to the draft. */
@@ -721,8 +735,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDockWidth: (mode, width) => dispatch({ type: "dock.width", mode, width }),
       openSettings: (opts) => {
         dispatch({ type: "settings.new", isNew: opts?.isNew ?? false });
+        dispatch({ type: "settings.section", section: opts?.section ?? null });
         dispatch({ type: "dock", dock: "settings" });
       },
+      setSettingsSection: (section) => dispatch({ type: "settings.section", section }),
       openSwanSettings: () => dispatch({ type: "dock", dock: "swan" }),
       addRuleInSettings: (personaId, connection, rule) => {
         const s = stateRef.current;
@@ -733,6 +749,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         focusSeq += 1;
         dispatch({ type: "settings.focus", focus: { personaId, section: "connections", rule: { connection, rule }, seq: focusSeq } });
         dispatch({ type: "settings.new", isNew: false });
+        dispatch({ type: "settings.section", section: "connections" });
         dispatch({ type: "dock", dock: "settings" });
       },
       clearSettingsFocus: () => dispatch({ type: "settings.focus", focus: null }),

@@ -2,29 +2,51 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ConnectionStatus, CredentialRule, FolderMode, ModelOption, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi, SubagentsConfig } from "@ph/shared";
 import { api } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
-import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
+import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, personaModelLine, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
-import { DecisionsShortcut } from "./Composer";
-import { IconChevronRight, IconPlus, IconTrash, IconX } from "./icons";
+import { Card, CardHead, focusPaneHead, PaneHead } from "./Cards";
+import { ModelSelectors } from "./Composer";
+import { IconPlus, IconTrash } from "./icons";
 import { Empty, Spinner } from "./ui";
 
-/** Settings of the selected persona (or the new-persona draft). Swan's own settings have their own pane. */
-export function SettingsPane({ onClose }: { onClose: () => void }) {
+/** Section titles, for the head of a section opened from the list. */
+const SECTION_TITLE: Record<string, string> = {
+  name: "Name and instructions",
+  model: "Model",
+  folders: "Folders",
+  hosts: "Allowed hosts",
+  connections: "Connections",
+  permissions: "Permissions",
+  subagents: "Sub-agents",
+  tools: "MCP servers and skills",
+  memory: "Memory brief",
+};
+
+/** Sections that fold open inside the list; the others open on their own screen. */
+const INLINE_SECTIONS = new Set(["folders"]);
+
+/**
+ * Settings of the selected persona (or the new-persona draft), as a list of cards. A card opens its section on its own
+ * screen with a way back; edits from every section collect in one draft and save together. Swan's own settings have their own pane.
+ */
+export function SettingsPane() {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const subject = state.settingsNew ? "New persona" : persona?.name;
+  const opened = state.settingsSection && SECTION_TITLE[state.settingsSection] ? state.settingsSection : null;
+  const back = () => {
+    actions.setSettingsSection(null);
+    window.setTimeout(() => document.getElementById(`set-${opened}`)?.focus(), 0);
+  };
   return (
     <div className="pane">
-      <div className="pane-head">
-        <h2>
-          Settings{subject && <span className="pane-sub"> · {subject}</span>}
-        </h2>
-        <DecisionsShortcut className="compact" />
-        <button type="button" className="icon-btn" aria-label="Close settings" onClick={onClose}>
-          <IconX size={18} />
-        </button>
-      </div>
+      <PaneHead
+        title={opened ? SECTION_TITLE[opened] : "Settings"}
+        sub={subject}
+        onBack={opened ? back : undefined}
+        backLabel="Back to settings"
+      />
       {state.settingsNew ? (
         <PersonaSettings key={NEW_PERSONA} draftKey={NEW_PERSONA} persona={null} />
       ) : persona ? (
@@ -148,8 +170,8 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
   return e;
 }
 
-/** Remembered open sections, shared across personas. */
-const openSections = new Set<string>(["name"]);
+/** Remembered open inline sections, shared across personas. */
+const openSections = new Set<string>(["folders"]);
 
 function Section({
   id,
@@ -167,37 +189,65 @@ function Section({
   /** Changing this opens the section. */
   reveal?: number;
 }) {
+  const { state, actions } = useStore();
+  const inline = INLINE_SECTIONS.has(id);
   const [open, setOpen] = useState(openSections.has(id) || !!invalid);
   const bodyId = useId();
   useEffect(() => {
     if (!reveal) return;
+    if (!inline) {
+      actions.setSettingsSection(id);
+      return;
+    }
     openSections.add(id);
     setOpen(true);
   }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const opened = state.settingsSection;
+  if (opened && opened !== id) return null;
+  if (opened === id) {
+    return (
+      <div className="set-body" id={bodyId}>
+        {children}
+      </div>
+    );
+  }
+  const status = invalid ? <span className="tone-error">Needs attention</span> : summary;
+  if (!inline) {
+    return (
+      <Card line>
+        <CardHead
+          id={`set-${id}`}
+          title={title}
+          summary={status}
+          onOpen={() => {
+            actions.setSettingsSection(id);
+            focusPaneHead();
+          }}
+        />
+      </Card>
+    );
+  }
   return (
-    <section className={cls("set-section", open && "is-open")}>
-      <button
-        type="button"
-        className="set-head"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => {
+    <Card>
+      <CardHead
+        id={`set-${id}`}
+        title={title}
+        summary={status}
+        open={open}
+        controls={bodyId}
+        onToggle={() => {
           if (open) openSections.delete(id);
           else openSections.add(id);
           setOpen(!open);
         }}
-      >
-        <IconChevronRight className="chev" size={16} />
-        <span className="set-title">{title}</span>
-        {invalid && <span className="status-text tone-error">Needs attention</span>}
-        {!open && summary && !invalid && <span className="set-summary">{summary}</span>}
-      </button>
+      />
       {open && (
         <div className="set-body" id={bodyId}>
           {children}
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -205,9 +255,20 @@ function plural(n: number, w: string) {
   return `${n} ${w}${n === 1 ? "" : "s"}`;
 }
 
+/** A card summary naming up to two things, or counting them. */
+function listSummary(names: string[], w: string) {
+  return names.length <= 2 ? names.join(", ") : plural(names.length, w);
+}
+
+const PERMISSION_LABEL: Record<PermissionMode, string> = { allow: "Allow", ask: "Ask", deny: "Deny" };
+
 function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: PersonaSummary | null }) {
   const { state, actions } = useStore();
   const isNew = draftKey === NEW_PERSONA;
+  // A new persona has no Model section (its model is chosen under Name and instructions).
+  useEffect(() => {
+    if (isNew && state.settingsSection === "model") actions.setSettingsSection(null);
+  }, [isNew, state.settingsSection]); // eslint-disable-line react-hooks/exhaustive-deps
   const entry: SettingsDraft | undefined = state.drafts[draftKey];
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -420,7 +481,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
 
   return (
     <>
-      <div className="pane-body">
+      {/* Keyed by the open section, so each screen starts at the top. */}
+      <div className={cls("pane-body", !state.settingsSection && "rail-cards")} key={state.settingsSection ?? "list"}>
         <Section id="name" title="Name and instructions" summary={d.name} invalid={!!(errors.name || errors.id)}>
           {isNew && (
             <Field label="File name" error={errors.id} hint={`Saved as personas/${newId || "<name>"}.yaml`}>
@@ -501,10 +563,19 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           )}
         </Section>
 
+        {!isNew && persona && (
+          <Section id="model" title="Model" summary={personaModelLine(state, persona)}>
+            <div className="row gap wrap">
+              <ModelSelectors persona={persona} />
+            </div>
+            <p className="hint">Saved to the persona right away. The same choice sits under the composer.</p>
+          </Section>
+        )}
+
         <Section
           id="folders"
           title="Folders"
-          summary={d.folders.length ? plural(d.folders.length, "folder") : "None"}
+          summary={d.folders.length ? String(d.folders.length) : "None"}
           invalid={d.folders.some((_, i) => errors[`folder${i}`])}
         >
           <Folders key={foldersSeq} folders={d.folders} errors={errors} update={update} />
@@ -515,9 +586,9 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           title="Allowed hosts"
           summary={
             d.networkAllow.length + netAllowances.length
-              ? [d.networkAllow.length && plural(d.networkAllow.length, "host"), netAllowances.length && `${netAllowances.length} until stopped`]
+              ? [d.networkAllow.length && listSummary(d.networkAllow, "host"), netAllowances.length && `${netAllowances.length} until stopped`]
                   .filter(Boolean)
-                  .join(", ")
+                  .join(" · ")
               : "None"
           }
           invalid={d.networkAllow.some((_, i) => errors[`host${i}`])}
@@ -597,11 +668,11 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           summary={
             Object.keys(d.connections).length + credAllowances.length
               ? [
-                  Object.keys(d.connections).length && plural(Object.keys(d.connections).length, "connection"),
+                  Object.keys(d.connections).length && listSummary(Object.keys(d.connections), "connection"),
                   credAllowances.length && `${credAllowances.length} until stopped`,
                 ]
                   .filter(Boolean)
-                  .join(", ")
+                  .join(" · ")
               : "None"
           }
           invalid={Object.keys(errors).some((k) => k.startsWith("rule-"))}
@@ -648,7 +719,14 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           )}
         </Section>
 
-        <Section id="permissions" title="Permissions" summary={`Default: ${d.permissions.default}`}>
+        <Section
+          id="permissions"
+          title="Permissions"
+          summary={`${PERMISSION_LABEL[d.permissions.default]} · ${plural(
+            d.permissions.allow.length + d.permissions.ask.length + d.permissions.deny.length,
+            "rule",
+          )}`}
+        >
           <p className="hint">
             Checked in order: deny, allow, ask, then the default. Rules look like <span className="mono">read_file</span>,{" "}
             <span className="mono">mcp__github__*</span> or <span className="mono">bash(git status*)</span>. Applies to the next call.
@@ -719,7 +797,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         <Section
           id="subagents"
           title="Sub-agents"
-          summary={`${d.subagents.agents.length ? plural(d.subagents.agents.length, "sub-agent") : "None"} · ${
+          summary={`${d.subagents.agents.length ? listSummary(d.subagents.agents.map((a) => a.name), "sub-agent") : "None"} · ${
             Number.isFinite(d.subagents.maxBackground) ? d.subagents.maxBackground : "?"
           } at once`}
           invalid={Object.keys(errors).some((k) => k.startsWith("sa-")) || !!errors.maxBackground || !!errors.maxTurns}
@@ -831,7 +909,12 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           </Field>
         </Section>
 
-        <Section id="memory" title="Memory" summary={d.memory.autoBrief ? "Brief on" : "Brief off"} invalid={!!errors.briefTokens}>
+        <Section
+          id="memory"
+          title="Memory brief"
+          summary={d.memory.autoBrief && Number.isFinite(d.memory.briefTokens) ? `On · ${d.memory.briefTokens.toLocaleString()} tokens` : d.memory.autoBrief ? "On" : "Off"}
+          invalid={!!errors.briefTokens}
+        >
           <label className="check-row">
             <input type="checkbox" checked={d.memory.autoBrief} onChange={(e) => update((x) => void (x.memory.autoBrief = e.target.checked))} />
             <span>Load a memory brief at the start of each context</span>
@@ -1257,7 +1340,7 @@ function ConnectionRules({
 }) {
   const st = status ? CONNECTION_STATE[status.state] : null;
   return (
-    <div className="folder-row">
+    <div className="folder-row conn-card">
       <div className="row gap">
         <span className="grow">
           <span className="mono strong">{name}</span>

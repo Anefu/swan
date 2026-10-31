@@ -3,14 +3,14 @@ import type { PersonaAttachment } from "@ph/shared";
 import { api, attachmentFileUrl } from "../api";
 import { useSelectedPersona, useStore } from "../store";
 import { cls, errorMessage, fmtBytes, fullTime, isMissingEndpoint, relTime } from "../util";
-import { DecisionsShortcut } from "./Composer";
-import { IconExternal, IconFile, IconSearch, IconX } from "./icons";
+import { PaneHead } from "./Cards";
+import { IconExternal, IconFile, IconSearch } from "./icons";
 import { Empty, Segmented, Spinner } from "./ui";
 
 type Kind = "all" | "images" | "files";
 
 /** Everything sent to the selected persona, newest first. */
-export function AttachmentsPane({ onClose }: { onClose: () => void }) {
+export function AttachmentsPane({ onBack }: { onBack: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const [list, setList] = useState<PersonaAttachment[] | null>(null);
@@ -57,15 +57,7 @@ export function AttachmentsPane({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="pane">
-      <div className="pane-head">
-        <h2>
-          Attachments{persona && <span className="pane-sub"> · {persona.name}</span>}
-        </h2>
-        <DecisionsShortcut className="compact" />
-        <button type="button" className="icon-btn" aria-label="Close attachments" onClick={onClose}>
-          <IconX size={18} />
-        </button>
-      </div>
+      <PaneHead title="Attachments" sub={persona?.name} onBack={onBack} backLabel="Back to overview" />
       <div className="pane-tabs net-filters">
         <label className="search-field">
           <IconSearch size={16} />

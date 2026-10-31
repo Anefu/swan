@@ -1529,13 +1529,14 @@ button.line:focus-visible .chev,
 /* ---------- Dock ---------- */
 
 /* Set apart by its tone; the resize grip shows only while it is hovered, focused or dragged. */
+/* The dock shares the conversation's background; its contents sit in hairline cards. */
 .dock {
   position: relative;
   flex: none;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--surface);
+  background: var(--canvas);
 }
 .dock.dragging {
   user-select: none;
@@ -1592,21 +1593,22 @@ button.line:focus-visible .chev,
 .pane-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 16px 16px 10px 20px;
+  gap: 6px;
+  min-height: 36px;
+  padding: 10px 16px 10px 8px;
 }
 .pane-head h2 {
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pane-tabs {
-  padding: 0 20px 10px;
+  padding: 0 16px 12px 8px;
 }
 .pane-tabs.sub {
   padding-top: 0;
@@ -1621,7 +1623,7 @@ button.line:focus-visible .chev,
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 20px 20px;
+  padding: 4px 16px 20px 8px;
 }
 .pane-state {
   display: flex;
@@ -1632,7 +1634,7 @@ button.line:focus-visible .chev,
 }
 .pane-foot {
   flex: none;
-  padding: 12px 20px;
+  padding: 12px 16px 12px 8px;
   font-size: 14px;
 }
 .pane-foot.quiet {
@@ -1650,45 +1652,11 @@ button.line:focus-visible .chev,
   margin: 0 0 2px;
 }
 
-/* Settings sections: space between, no rules */
-.set-section + .set-section {
-  margin-top: 4px;
-}
-.set-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 8px 0;
-  background: none;
-  border: none;
-  text-align: left;
-  cursor: pointer;
-}
-.set-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-.set-summary {
-  flex: 1 1 auto;
-  min-width: 0;
-  text-align: right;
-  color: var(--ink-2);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.set-head .status-text {
-  margin-left: auto;
-  font-size: 13px;
-}
+/* Settings: a section's fields, inside its card or on its own screen */
 .set-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 0 18px 26px;
 }
 .set-body h4,
 .allowances h4,
@@ -1796,10 +1764,10 @@ button.line:focus-visible .chev,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 0 16px;
+  padding: 14px 16px;
 }
 .swan-section + .swan-section {
-  margin-top: 4px;
+  margin-top: 12px;
 }
 .swan-section h3 {
   margin: 0;
@@ -1977,10 +1945,10 @@ button.line:focus-visible .chev,
   font-size: 17px;
 }
 .cp-section {
-  padding: 10px 0;
+  padding: 14px 16px;
 }
 .cp-section + .cp-section {
-  margin-top: 4px;
+  margin-top: 12px;
 }
 .cp-section p {
   margin: 4px 0 0;
@@ -2053,10 +2021,10 @@ button.line:focus-visible .chev,
 }
 
 .usage-section {
-  padding: 8px 0 14px;
+  padding: 14px 16px;
 }
 .usage-section + .usage-section {
-  margin-top: 4px;
+  margin-top: 12px;
 }
 .usage-section p {
   margin: 4px 0;
@@ -2131,7 +2099,7 @@ button.line:focus-visible .chev,
   gap: 8px;
 }
 .pane-body.flush {
-  padding: 0;
+  padding-top: 0;
 }
 .net-list {
   list-style: none;
@@ -2435,9 +2403,10 @@ button.line:focus-visible .chev,
   text-align: center;
 }
 .pane-sub {
+  margin-left: 8px;
   color: var(--ink-2);
   font-weight: 400;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 /* ---------- Attachments pane ---------- */
@@ -2506,4 +2475,161 @@ button.line:focus-visible .chev,
 }
 a.btn {
   text-decoration: none;
+}
+
+/* ---------- Rail cards ---------- */
+
+/* Groups in the dock sit in hairline cards: a 1px line, no fill. */
+.rcard,
+.swan-section,
+.usage-section,
+.cp-section,
+.mem-list,
+.timeline,
+.net-list,
+.att-list,
+.att-grid {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+/* Lists are flush cards: their rows bring their own padding and hover fill. */
+.mem-list,
+.timeline,
+.net-list,
+.att-list {
+  padding: 6px;
+}
+.att-grid {
+  padding: 12px;
+}
+.dock.overlay .pane-head,
+.dock.overlay .pane-tabs,
+.dock.overlay .pane-body,
+.dock.overlay .pane-foot {
+  padding-left: 16px;
+}
+.rail-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rcard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+/* A one-line card is all button. */
+.rcard-line {
+  padding: 0;
+}
+.rcard-line > .rcard-head {
+  padding: 14px 16px;
+  border-radius: 13px;
+}
+.rcard-line > .rcard-head:hover {
+  background: var(--surface);
+}
+.rcard-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rcard-head svg {
+  flex: none;
+  color: var(--ink-2);
+}
+.rcard-title {
+  flex: none;
+  font-weight: 600;
+}
+.rcard-sum {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.rcard-sum > span:not(.meter-sm) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rcard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rcard-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.rcard-row > svg {
+  flex: none;
+  color: var(--ink-2);
+}
+.rcard-row .grow {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rcard-row .end {
+  flex: none;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.rcard-link {
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rcard-link:hover {
+  text-decoration: underline;
+}
+.rcard-more {
+  align-self: flex-start;
+  color: var(--ink-2);
+}
+.meter-sm {
+  flex: none;
+  display: inline-block;
+  width: 34px;
+  height: 9px;
+  border-radius: 5px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.meter-sm > span {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+}
+/* Each connection's rules in Settings sit in their own card. */
+.conn-card {
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
 }
