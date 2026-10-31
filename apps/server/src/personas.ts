@@ -53,7 +53,13 @@ export const PersonaSchema = z.strictObject({
   // Which credentials the agent may use, and for what. A credential no rule names never reaches the sandbox.
   connections: PersonaConnectionsSchema.default({}),
   env: z.record(z.string(), z.string()).default({}),
-  network: z.strictObject({ allow: z.array(z.string()).default([]) }).prefault({}),
+  network: z
+    .strictObject({
+      allow: z.array(z.string()).default([]),
+      // On the company network: also allowed, and may resolve to private addresses (10/8, 172.16/12, 192.168/16, fc00::/7).
+      internal: z.array(z.string()).default([]),
+    })
+    .prefault({}),
   subagents: z
     .strictObject({
       // Named sub-agents the model can delegate to: a fixed "provider/id" model, or "auto" (the model picks per task).
@@ -255,11 +261,12 @@ export class PersonaStore extends TypedEmitter<Events> {
       if (isHttpMcp(srv)) for (const [k, v] of Object.entries(srv.headers)) checkRefs(`mcpServers.${name}.headers.${k}`, v);
       else for (const [k, v] of Object.entries(srv.env)) checkRefs(`mcpServers.${name}.env.${k}`, v);
     }
-    for (const h of cfg.network.allow) {
-      const m = /^([^:]+)(?::(\d{1,5}))?$/.exec(h);
-      if (!m || h.includes("/") || h === "*" || (m[2] && (Number(m[2]) < 1 || Number(m[2]) > 65535)))
-        errors.push(`network.allow entry "${h}" must be a hostname, *.domain or host:port`);
-    }
+    for (const list of ["allow", "internal"] as const)
+      for (const h of cfg.network[list]) {
+        const m = /^([^:]+)(?::(\d{1,5}))?$/.exec(h);
+        if (!m || h.includes("/") || h === "*" || (m[2] && (Number(m[2]) < 1 || Number(m[2]) > 65535)))
+          errors.push(`network.${list} entry "${h}" must be a hostname, *.domain or host:port`);
+      }
     return { id, file, yaml, config: cfg, folders, errors };
   }
 
@@ -321,6 +328,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       instructions: c.instructions,
       folders: c.folders.map((f) => ({ path: f.path, ...(f.mount ? { mount: f.mount } : {}), mode: f.mode })),
       networkAllow: c.network.allow,
+      networkInternal: c.network.internal,
       connections: c.connections,
       permissions: c.permissions,
       skills: c.skills,
@@ -341,6 +349,8 @@ export class PersonaStore extends TypedEmitter<Events> {
     doc.set("instructions", v.instructions);
     doc.set("folders", doc.createNode(v.folders));
     doc.setIn(["network", "allow"], doc.createNode(v.networkAllow));
+    const internal = v.networkInternal ?? [];
+    if (internal.length || doc.hasIn(["network", "internal"])) doc.setIn(["network", "internal"], doc.createNode(internal));
     doc.delete("credentials");
     if (Object.keys(v.connections).length || doc.has("connections")) doc.set("connections", doc.createNode(v.connections));
     doc.set("permissions", doc.createNode(v.permissions));
@@ -354,7 +364,7 @@ export class PersonaStore extends TypedEmitter<Events> {
     const appliedNow: string[] = [];
     const nextStart: string[] = [];
     if (!before || !eq(before.permissions, v.permissions)) appliedNow.push("permissions");
-    if (!before || !eq(before.network.allow, v.networkAllow)) appliedNow.push("network allowlist");
+    if (!before || !eq(before.network.allow, v.networkAllow) || !eq(before.network.internal, internal)) appliedNow.push("network allowlist");
     if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (newly named credentials from the next container start)");
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
@@ -447,6 +457,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       credentials,
       missingCredentials: credentials.filter((c) => !this.connections.usable(c)),
       networkAllow: cfg?.network.allow ?? [],
+      networkInternal: cfg?.network.internal ?? [],
       errors: p.errors,
     };
   }

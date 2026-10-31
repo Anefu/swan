@@ -60,10 +60,16 @@ What runs where:
    `{{credential:conn/NAME}}` (`{{secret:NAME}}` is an old alias).
 3. Container traffic must use the proxy (there is no other route). The proxy identifies the session
    from `Proxy-Authorization`, then for each request:
-   - destination not in `network.allow` ∪ hosts of the session's usable credentials → **blocked**
-     (403, audited; a host bound to an expired or empty credential says so);
-   - destination resolves to loopback/private/link-local → **blocked** (prevents reaching the
-     harness API or the LAN via the proxy);
+   - destination not in `network.allow` ∪ `network.internal` ∪ hosts of the session's usable
+     credentials → **blocked** (403, audited; a host bound to an expired or empty credential says so);
+   - the name is resolved once on the host and every address checked: loopback, link-local and
+     metadata, CGNAT, multicast, reserved space, Swan's and Podman's networks and the host's own
+     addresses → **blocked** (prevents reaching the harness API or the Mac via the proxy); private
+     ranges (10/8, 172.16/12, 192.168/16, fc00::/7) → **blocked** unless the persona lists the host
+     in `network.internal`, which only Settings or the YAML set (an ask card never offers such a
+     host); a name that does not resolve on the host → **blocked**. The connection goes to the
+     checked address or, with `proxy` in config.yaml (except `noProxy` hosts), through that proxy
+     by name (`CONNECT host:port`, so company policy by hostname applies);
    - destination is a host bound to one of the session's credentials → TLS is terminated with the
      harness CA (trusted inside the image only). The proxy works out which credentials the request
      would carry (a placeholder in headers, query or Basic auth, a missing `inject` header, or an
@@ -190,8 +196,9 @@ proxy through a process-wide dispatcher and trust the extra roots; the Copilot r
 connection wrappers get the same settings as `HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS`. The
 sandbox image is built from `mirrors.baseImage` with the proxy as predefined build arguments (not
 kept in the image; a loopback proxy becomes `host.containers.internal`), a generated setup script
-points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. The egress proxy does not chain
-to the upstream proxy yet, and keeps refusing private addresses.
+points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. The egress proxy chains
+agents' traffic to the upstream proxy after its own checks (step 3 of the credential flow): blind
+tunnels and plain HTTP as well as the TLS connections it makes for credential hosts.
 
 ## Harness API hardening
 
@@ -202,8 +209,8 @@ to the upstream proxy yet, and keeps refusing private addresses.
   process on its own Node, serves the UI from its bundle at `swan://app` with a Content Security
   Policy, passes `/api/` to the server, and keeps the window on Swan's own pages. No browser
   extension can reach the page, and the token never appears in browser history.
-- The sandbox cannot reach it: no route from `ph-internal`, and the proxy refuses loopback/private
-  destinations.
+- The sandbox cannot reach it: no route from `ph-internal`, and the proxy refuses loopback, the
+  host's own addresses and Swan's networks, whatever a persona lists.
 
 ## Known limits / roadmap
 
@@ -211,5 +218,8 @@ to the upstream proxy yet, and keeps refusing private addresses.
 - Tools that ignore `HTTP(S)_PROXY` simply fail (secure default); some need extra config
   (e.g. `git config http.proxy` is picked up from env, Java needs `-Dhttps.proxyHost`).
 - Certificate-pinning clients fail on MITM'd hosts; leave those hosts without credentials (tunnel).
+- Through a company proxy, the proxy resolves the name again, so it may connect to a different
+  address than the one Swan checked. A listed internal host can reach whatever private address its
+  DNS points to; prefer exact names to `*.domain` in `network.internal`.
 - Not yet: OAuth flows for remote MCP servers, subagents, checkpoints/undo (git snapshots), per-
   session cost budgets, scheduled runs, multi-user auth, Docker/Seatbelt backends.

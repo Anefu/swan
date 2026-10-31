@@ -128,7 +128,9 @@ reach Copilot models, PDFs don't.
 ## Behind a company proxy
 
 If your network reaches the internet only through a proxy or internal mirrors (an Artifactory, for
-example), see [docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors).
+example), see [docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors). Agents' traffic
+goes through the proxy too. Agents reach internal hosts (private addresses) only when you list them
+in the persona's Settings under Allowed hosts → On your company network.
 
 ## Your data
 
@@ -170,7 +172,6 @@ To remove Swan completely:
 
 - macOS on Apple silicon only for now. Intel Macs, Linux and Windows may come later.
 - Not yet signed or notarized by Apple, and no automatic updates.
-- Behind a company proxy, agents' own internet traffic doesn't go through the proxy yet.
 
 ## Building from source and contributing
 

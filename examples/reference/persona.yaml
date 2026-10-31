@@ -42,10 +42,13 @@ connections:
 
 env: { NODE_ENV: development }   # extra variables in the sandbox; never secrets (use credentials)
 
-# Hosts the agent may reach, besides its credentials' hosts. On a company network, agents' traffic
-# does not go through the company proxy yet (docs/DESKTOP.md).
+# Hosts the agent may reach, besides its credentials' hosts. With `proxy` in config.yaml, agents'
+# traffic goes through it, except noProxy hosts.
 network:
   allow: [registry.npmjs.org, pypi.org, files.pythonhosted.org]
+  # On the company network: also allowed, and may resolve to private addresses (10.x, 172.16-31.x,
+  # 192.168.x). Only you add these, here or in Settings; an "Allow" card never does.
+  internal: [jira.example.com]
 
 subagents:
   agents:

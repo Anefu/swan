@@ -36,8 +36,8 @@ let hostEnv: Record<string, string> = {};
 
 /**
  * Applies `proxy` and `caFiles` to this process (model calls, http MCP servers and anything else
- * that uses fetch) and records them for programs Swan starts on the host. The egress proxy's
- * connections for agents are separate and not affected.
+ * that uses fetch) and records them for programs Swan starts on the host. The egress proxy takes
+ * `proxy` separately for agents' traffic (proxy/egress.ts).
  */
 export async function applyNetwork(settings: Pick<Settings, "proxy">, extraCas: string[], extraCaFile: string): Promise<void> {
   const env: Record<string, string> = {};

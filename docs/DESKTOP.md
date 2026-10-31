@@ -28,10 +28,10 @@ mirrors:
   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
 ```
 
-- `proxy`: model calls, http MCP servers, the Copilot runtime, connection wrappers and the image
-  build (Debian packages, PyPI) go through it; `noProxy` hosts (and always localhost) are reached
-  directly. A proxy on this Mac's loopback (`127.0.0.1`) also works for the build. A proxy that needs
-  a username and password is not supported.
+- `proxy`: model calls, http MCP servers, the Copilot runtime, connection wrappers, the image build
+  (Debian packages, PyPI) and agents' traffic go through it; `noProxy` hosts (and always localhost)
+  are reached directly. A proxy on this Mac's loopback (`127.0.0.1`) also works for the build. A
+  proxy that needs a username and password is not supported.
 - `caFiles`: extra root certificates (PEM), for a proxy that inspects HTTPS or mirrors with an
   internal certificate. Swan trusts them, and so does everything inside the sandbox.
 - `mirrors`: the sandbox image is built from `baseImage`. If the registry needs a login, run
@@ -42,8 +42,17 @@ mirrors:
 
 A complete `config.yaml`, `secrets.yaml` and persona for this setup: [examples/reference/](../examples/reference/).
 
-Not yet: agents' own internet traffic does not go through `proxy`, and Swan's egress proxy refuses
-internal addresses, so an agent cannot reach a mirror that resolves to one.
+Agents' traffic: Swan's egress proxy applies a persona's hosts and credential rules as usual,
+resolves the name on this Mac and checks the address, then asks the company proxy to connect by
+name. A name that only the company proxy can resolve is refused, since Swan checks every address
+before connecting.
+
+Internal hosts: agents reach a private address (`10.x`, `172.16–31.x`, `192.168.x`, `fc00::/7`)
+only for hosts the persona lists in Settings → Allowed hosts → On your company network
+(`network.internal` in its YAML), such as an internal Jira or a mirror. An "Allow" card never adds
+one. This Mac, link-local and cloud metadata addresses, `100.64.0.0/10` (Tailscale and similar) and
+Swan's and Podman's own networks stay unreachable even for listed hosts. Credentials work on
+internal hosts as on any other host.
 
 ## Build and run from a checkout
 

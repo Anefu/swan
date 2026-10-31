@@ -19,7 +19,7 @@ skillDirs: [~/.claude/skills]   # extra skill folders; each child folder with a 
 
 # The company network (docs/DESKTOP.md#behind-a-proxy-or-internal-mirrors).
 proxy:
-  url: http://proxy.example.com:8080   # model calls, the Copilot runtime, wrappers and the image build
+  url: http://proxy.example.com:8080   # model calls, the Copilot runtime, wrappers, the image build and agents' traffic
   noProxy: [.example.com]              # reached directly; localhost always is
 caFiles: [~/certs/company-root.pem]    # only if the proxy inspects HTTPS or a mirror uses your company CA
 mirrors:

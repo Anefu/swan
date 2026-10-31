@@ -4,8 +4,9 @@ import { promises as fs } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
-import { Transform, type TransformCallback } from "node:stream";
+import { type Duplex, Transform, type TransformCallback } from "node:stream";
 import tls from "node:tls";
 import { describeAuth, sign, verify } from "@ph/aws-sigv4";
 import type { EgressEvent } from "@ph/shared";
@@ -22,6 +23,7 @@ export interface ProxySession {
   personaId: string;
   token: string;
   allowHosts: string[];
+  internalHosts: string[]; // also allowed, and may resolve to company (private) ranges
   credentials: string[]; // refs (connection/name) the persona's rules name
   placeholders: Map<string, { ref: string; field?: string }>; // placeholder -> credential (aws: and field)
   rules: Map<string, Rule[]>; // connection -> the persona's rules for it
@@ -46,30 +48,157 @@ const RESTORED_EVENTS = 2000;
 // Payload markers the proxy can carry over to a new signature: the body itself is not signed.
 const PASSTHROUGH_PAYLOAD = new Set(["UNSIGNED-PAYLOAD", "STREAMING-UNSIGNED-PAYLOAD-TRAILER"]);
 
-// Destinations the sandbox must never reach through the proxy: the harness itself (loopback),
-// the LAN, link-local/metadata, CGNAT (Tailscale), multicast and reserved space.
-const PRIVATE = new net.BlockList();
+// Never reachable, whatever the persona lists: this computer (loopback), link-local and cloud
+// metadata, CGNAT (Tailscale), multicast, reserved and benchmarking space, NAT64, and Podman's own
+// networks (its default network and the Podman machine's).
+const NEVER = new net.BlockList();
 for (const [a, p] of [
-  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
-  ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4],
-] as const) PRIVATE.addSubnet(a, p, "ipv4");
-for (const [a, p] of [["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8], ["64:ff9b::", 96]] as const)
-  PRIVATE.addSubnet(a, p, "ipv6");
+  ["0.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["192.0.0.0", 24], ["198.18.0.0", 15],
+  ["224.0.0.0", 4], ["240.0.0.0", 4], ["10.88.0.0", 16], ["192.168.127.0", 24],
+] as const) NEVER.addSubnet(a, p, "ipv4");
+for (const [a, p] of [["::", 128], ["::1", 128], ["fe80::", 10], ["ff00::", 8], ["64:ff9b::", 96], ["64:ff9b:1::", 48]] as const)
+  NEVER.addSubnet(a, p, "ipv6");
 
-export function isPrivateAddress(ip: string): boolean {
+// Private ranges company networks use: reachable only for hosts a persona lists as internal.
+const COMPANY = new net.BlockList();
+for (const [a, p] of [["10.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16]] as const) COMPANY.addSubnet(a, p, "ipv4");
+COMPANY.addSubnet("fc00::", 7, "ipv6");
+
+function inList(list: net.BlockList, ip: string): boolean {
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (mapped) return PRIVATE.check(mapped[1], "ipv4");
-  return PRIVATE.check(ip, net.isIPv6(ip) ? "ipv6" : "ipv4");
+  if (mapped) return list.check(mapped[1], "ipv4");
+  return list.check(ip, net.isIPv6(ip) ? "ipv6" : "ipv4");
 }
 
-/** Resolve once and pin the address, so a DNS answer cannot change between check and connect. */
-async function resolvePublic(host: string, port: number): Promise<{ address: string; port: number }> {
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local"))
-    throw new Error("local hostnames are not reachable from the sandbox");
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true });
-  if (addrs.length === 0) throw new Error("no address");
-  for (const a of addrs) if (isPrivateAddress(a.address)) throw new Error(`${host} resolves to private address ${a.address}`);
-  return { address: addrs[0].address, port };
+export const isPrivateAddress = (ip: string): boolean => inList(NEVER, ip) || inList(COMPANY, ip);
+
+/** This computer's own addresses, read at check time (they change with the network). */
+function ownAddresses(): net.BlockList {
+  const list = new net.BlockList();
+  for (const i of Object.values(os.networkInterfaces()).flat())
+    if (i) list.addAddress(i.address.replace(/%.*$/, ""), i.family === "IPv6" ? "ipv6" : "ipv4");
+  return list;
+}
+
+/** Subnets in CIDR notation as a list; Swan's own sandbox network, for example. */
+export function subnetList(cidrs: string[]): net.BlockList {
+  const list = new net.BlockList();
+  for (const c of cidrs) {
+    const [a, p] = c.split("/");
+    if (a && p && net.isIP(a)) list.addSubnet(a, Number(p), net.isIPv6(a) ? "ipv6" : "ipv4");
+  }
+  return list;
+}
+
+const isLocalName = (h: string) => h === "localhost" || h.endsWith(".localhost") || h.endsWith(".containers.internal") || h.endsWith(".docker.internal");
+
+export type Lookup = (host: string) => Promise<string[]>;
+const systemLookup: Lookup = async (host) => (await dns.lookup(host, { all: true, verbatim: true })).map((a) => a.address);
+
+export interface Destination {
+  address: string;
+  port: number;
+  internal?: boolean; // on a company range
+}
+
+/**
+ * Resolve once on this computer, check every address and pin the first, so a DNS answer cannot
+ * change between check and connect. Company ranges only when the persona lists the host as
+ * internal; loopback, link-local, CGNAT, reserved space, Swan's and Podman's networks and this
+ * computer's own addresses never.
+ */
+export async function resolveChecked(host: string, port: number, opts: { internal: boolean; own?: net.BlockList; lookup?: Lookup }): Promise<Destination> {
+  if (isLocalName(host) || (!opts.internal && (host.endsWith(".internal") || host.endsWith(".local"))))
+    throw new Error(`${host} is a local name, not reachable from the sandbox`);
+  let addrs: string[] = [host];
+  if (!net.isIP(host)) addrs = await (opts.lookup ?? systemLookup)(host).catch(() => []);
+  if (addrs.length === 0) throw new Error(`${host} does not resolve on this computer`);
+  const mine = ownAddresses();
+  for (const a of addrs) {
+    if (inList(NEVER, a) || inList(mine, a) || (opts.own && inList(opts.own, a))) throw new Error(`${host} resolves to private address ${a}`);
+    if (inList(COMPANY, a) && !opts.internal)
+      throw new Error(`${host} resolves to ${a} on a private network; to reach it, list it under "On your company network" in the persona's Settings`);
+  }
+  return { address: addrs[0]!, port, ...(addrs.some((a) => inList(COMPANY, a)) ? { internal: true } : {}) };
+}
+
+/** NO_PROXY as undici reads it: an exact name, or ".domain" / "*.domain" for names ending so; "*" for all. */
+export function bypassesProxy(host: string, port: number, noProxy: string[]): boolean {
+  return noProxy.some((entry) => {
+    const m = /^(.+):(\d+)$/.exec(entry);
+    const name = (m ? m[1]! : entry).toLowerCase();
+    if (m && Number(m[2]) !== port) return false;
+    if (name === "*") return true;
+    return /^[.*]/.test(name) ? host.endsWith(name.replace(/^\*/, "")) : host === name;
+  });
+}
+
+class ProxyRefused extends Error {}
+
+/** A reason as a header value: one line. */
+const reasonHeader = (e: unknown) => `X-PH-Reason: ${errMsg(e).replace(/[\r\n]+/g, " ")}`;
+
+const authority = (host: string, port: number) => (net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`);
+
+/** A connection to host:port through the company proxy (CONNECT, by name). Rejects when the proxy refuses or fails. */
+function tunnelThrough(proxy: URL, host: string, port: number): Promise<net.Socket> {
+  const target = authority(host, port);
+  return new Promise((resolve, reject) => {
+    const secure = proxy.protocol === "https:";
+    const req = (secure ? https : http).request({
+      host: proxy.hostname.replace(/^\[|\]$/g, ""),
+      port: Number(proxy.port) || (secure ? 443 : 80),
+      method: "CONNECT",
+      path: target,
+      headers: { host: target },
+      agent: false,
+    });
+    const timer = setTimeout(() => req.destroy(new Error("no answer in 30 s")), 30_000);
+    req.on("connect", (res, socket, head) => {
+      clearTimeout(timer);
+      const status = res.statusCode ?? 0;
+      if (status < 200 || status > 299) {
+        socket.destroy();
+        return reject(new ProxyRefused(`the company proxy refused ${target} (${status}${res.statusMessage ? ` ${res.statusMessage}` : ""})`));
+      }
+      if (head.length) socket.unshift(head);
+      resolve(socket);
+    });
+    req.on("error", (e) => {
+      clearTimeout(timer);
+      reject(new Error(`company proxy ${proxy.host}: ${errMsg(e)}`));
+    });
+    req.end();
+  });
+}
+
+/** TLS to credential hosts through CONNECT tunnels of the company proxy, kept alive like a direct agent. */
+class TunnelAgent extends https.Agent {
+  constructor(
+    private proxy: URL,
+    opts: https.AgentOptions,
+  ) {
+    super(opts);
+  }
+  override createConnection(options: https.RequestOptions, cb?: (err: Error | null, stream: Duplex) => void): Duplex | null | undefined {
+    tunnelThrough(this.proxy, String(options.host), Number(options.port)).then(
+      (socket) => cb?.(null, tls.connect({ ...(options as tls.ConnectionOptions), socket })),
+      (e: Error) => cb?.(e, undefined as unknown as Duplex),
+    );
+    return undefined;
+  }
+}
+
+/** A direct TCP connection, once it is open. */
+function dial(address: string, port: number): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    const s = net.connect({ host: address, port });
+    s.once("connect", () => {
+      s.off("error", reject);
+      resolve(s);
+    });
+    s.once("error", reject);
+  });
 }
 
 function splitHostPort(s: string, defPort: number): { host: string; port: number } {
@@ -119,7 +248,7 @@ interface MitmContext {
   session: ProxySession;
   host: string;
   port: number;
-  upstream: { address: string; port: number };
+  upstream: Destination;
 }
 
 /** What one request may carry, after the persona's rules. */
@@ -134,8 +263,14 @@ interface CredentialPlan {
 type Events = { event: [EgressEvent] };
 
 export interface EgressOptions {
-  /** Where to connect for a host (tests point public names at a local stub). Default: resolve and refuse private addresses. */
-  resolve?: (host: string, port: number) => Promise<{ address: string; port: number }>;
+  /** Tests only: where to connect for a host, skipping DNS and the address checks (to reach a local stub). */
+  resolve?: (host: string, port: number) => Promise<Destination>;
+  /** Tests only: DNS answers. The address checks still apply. */
+  lookup?: Lookup;
+  /** config.yaml `proxy`: agents' traffic goes through it too, except hosts in noProxy. */
+  upstreamProxy?: { url: string; noProxy: string[] };
+  /** Swan's own networks in CIDR notation (runtime.subnet), never reachable. */
+  ownSubnets?: string[];
 }
 
 export class EgressProxy extends TypedEmitter<Events> {
@@ -145,7 +280,10 @@ export class EgressProxy extends TypedEmitter<Events> {
   private mitm = http.createServer();
   private mitmCtx = new WeakMap<net.Socket, MitmContext>();
   private upstreamAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
-  private resolve: NonNullable<EgressOptions["resolve"]>;
+  private resolveHook: EgressOptions["resolve"];
+  private lookup: Lookup | undefined;
+  private own: net.BlockList;
+  private proxy: { url: URL; noProxy: string[]; agent: TunnelAgent } | null = null;
 
   /** An unlisted public host on 80/443: resolves true when the person allowed it. */
   asker: ((s: ProxySession, host: string, port: number) => Promise<boolean>) | null = null;
@@ -160,7 +298,13 @@ export class EgressProxy extends TypedEmitter<Events> {
     opts: EgressOptions = {},
   ) {
     super();
-    this.resolve = opts.resolve ?? resolvePublic;
+    this.resolveHook = opts.resolve;
+    this.lookup = opts.lookup;
+    this.own = subnetList(opts.ownSubnets ?? []);
+    if (opts.upstreamProxy) {
+      const url = new URL(opts.upstreamProxy.url);
+      this.proxy = { url, noProxy: opts.upstreamProxy.noProxy, agent: new TunnelAgent(url, { keepAlive: true, maxSockets: 64 }) };
+    }
     this.server.on("connect", (req, socket: net.Socket, head) => void this.onConnect(req, socket, head));
     this.server.on("request", (req, res) => void this.onPlainHttp(req, res));
     this.server.on("clientError", (_e, socket) => socket.destroy());
@@ -175,7 +319,7 @@ export class EgressProxy extends TypedEmitter<Events> {
       this.server.once("error", reject);
       this.server.listen(port, "127.0.0.1", () => {
         const actual = (this.server.address() as net.AddressInfo).port;
-        log.info("proxy", `egress proxy on 127.0.0.1:${actual}`);
+        log.info("proxy", `egress proxy on 127.0.0.1:${actual}${this.proxy ? `, agents' traffic through ${this.proxy.url.host}` : ""}`);
         resolve(actual);
       });
     });
@@ -184,6 +328,7 @@ export class EgressProxy extends TypedEmitter<Events> {
   close() {
     this.server.close();
     this.upstreamAgent.destroy();
+    this.proxy?.agent.destroy();
   }
 
   register(s: ProxySession) {
@@ -227,12 +372,29 @@ export class EgressProxy extends TypedEmitter<Events> {
     });
   }
 
+  /** Where a host is, checked against what this session may reach. */
+  private destination(s: ProxySession, host: string, port: number): Promise<Destination> {
+    if (this.resolveHook) return this.resolveHook(host, port);
+    const internal = s.internalHosts.some((p) => hostMatches(host, p.split(":")[0]!));
+    return resolveChecked(host, port, { internal, own: this.own, lookup: this.lookup });
+  }
+
+  /** The company proxy to go through for host:port, or null to connect directly. */
+  private via(host: string, port: number): URL | null {
+    return this.proxy && !bypassesProxy(host, port, this.proxy.noProxy) ? this.proxy.url : null;
+  }
+
+  /** How a request went out, for its audit event. */
+  private route(host: string, port: number, dest: Destination): Pick<EgressEvent, "via" | "internal"> {
+    return { ...(this.via(host, port) ? { via: "proxy" as const } : {}), ...(dest.internal ? { internal: true } : {}) };
+  }
+
   /** decide(), but an unlisted public host waits for the person instead of failing outright. */
   private async decideOrAsk(s: ProxySession, host: string, port: number): Promise<{ ok: true; creds: ResolvedCredential[] } | { ok: false; reason: string }> {
     const d = this.decide(s, host, port);
     if (d.ok || d.reason !== "host not in persona allowlist" || !this.asker) return d;
     try {
-      await this.resolve(host, port); // never offer private or local destinations
+      await this.destination(s, host, port); // never offer private or local destinations
     } catch (e) {
       return { ok: false, reason: errMsg(e) };
     }
@@ -243,11 +405,12 @@ export class EgressProxy extends TypedEmitter<Events> {
   private decide(s: ProxySession, host: string, port: number): { ok: true; creds: ResolvedCredential[] } | { ok: false; reason: string } {
     if (!ALLOWED_PORTS.has(port)) {
       // Other ports only by an explicit host:port entry; always tunnelled, never credentialed.
-      if (s.allowHosts.some((p) => p.includes(":") && hostMatches(host, p.split(":")[0]) && Number(p.split(":")[1]) === port)) return { ok: true, creds: [] };
+      const listed = [...s.allowHosts, ...s.internalHosts];
+      if (listed.some((p) => p.includes(":") && hostMatches(host, p.split(":")[0]!) && Number(p.split(":")[1]) === port)) return { ok: true, creds: [] };
       return { ok: false, reason: `port ${port} not allowed` };
     }
     const creds = this.credsFor(s, host);
-    if (creds.length === 0 && !hostMatchesAny(host, s.allowHosts)) {
+    if (creds.length === 0 && !hostMatchesAny(host, s.allowHosts) && !hostMatchesAny(host, s.internalHosts)) {
       // Say why a credential host is unreachable instead of offering it as a new host.
       const bound = s.credentials.find((ref) => this.connections.resolve(ref)?.hosts.some((p) => hostMatches(host, p)));
       if (bound) return { ok: false, reason: `credential ${bound} ${this.connections.isExpired(bound) ? "expired" : "has no value"}` };
@@ -280,14 +443,15 @@ export class EgressProxy extends TypedEmitter<Events> {
       this.record({ ...base, decision: "blocked", credentials: [], reason: d.reason });
       return;
     }
-    let upstream: { address: string; port: number };
+    let upstream: Destination;
     try {
-      upstream = await this.resolve(host, port);
+      upstream = await this.destination(session, host, port);
     } catch (e) {
-      client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      client.end(`HTTP/1.1 403 Forbidden\r\n${reasonHeader(e)}\r\n\r\n`);
       this.record({ ...base, decision: "blocked", credentials: [], reason: errMsg(e) });
       return;
     }
+    const route = this.route(host, port, upstream);
 
     if (d.creds.length > 0) {
       // Terminate TLS so credentials can be substituted; requests are audited individually.
@@ -305,24 +469,32 @@ export class EgressProxy extends TypedEmitter<Events> {
     }
 
     // No credentials for this host: blind tunnel, no interception.
-    const up = net.connect({ host: upstream.address, port: upstream.port });
+    const via = this.via(host, port);
+    let up: net.Socket;
+    try {
+      up = via ? await tunnelThrough(via, host, port) : await dial(upstream.address, upstream.port);
+    } catch (e) {
+      const refused = e instanceof ProxyRefused;
+      client.end(`HTTP/1.1 ${refused ? "403 Forbidden" : "502 Bad Gateway"}\r\n${reasonHeader(e)}\r\n\r\n`);
+      this.record({ ...base, ...route, decision: refused ? "blocked" : "tunneled", credentials: [], durationMs: Date.now() - started, reason: errMsg(e) });
+      return;
+    }
+    if (client.destroyed) return void up.destroy(); // the sandbox gave up while the connection opened
     let bytesUp = 0;
     let bytesDown = 0;
-    up.on("connect", () => {
-      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length) up.write(head);
-      client.on("data", (c: Buffer) => (bytesUp += c.length));
-      up.on("data", (c: Buffer) => (bytesDown += c.length));
-      client.pipe(up);
-      up.pipe(client);
-    });
+    client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length) up.write(head);
+    client.on("data", (c: Buffer) => (bytesUp += c.length));
+    up.on("data", (c: Buffer) => (bytesDown += c.length));
+    client.pipe(up);
+    up.pipe(client);
     let done = false;
     const finish = (err?: Error) => {
       if (done) return;
       done = true;
       client.destroy();
       up.destroy();
-      this.record({ ...base, decision: "tunneled", credentials: [], durationMs: Date.now() - started, bytesUp, bytesDown, reason: err ? errMsg(err) : undefined });
+      this.record({ ...base, ...route, decision: "tunneled", credentials: [], durationMs: Date.now() - started, bytesUp, bytesDown, reason: err ? errMsg(err) : undefined });
     };
     up.on("error", finish);
     up.on("close", () => finish());
@@ -466,14 +638,16 @@ export class EgressProxy extends TypedEmitter<Events> {
   private upstreamOptions(ctx: MitmContext, req: http.IncomingMessage, headers: http.OutgoingHttpHeaders, pathAndQuery: string): https.RequestOptions {
     // A credential may name the CA that signs its hosts (a cluster's own CA, for example).
     const ca = this.credsFor(ctx.session, ctx.host).find((c) => c.ca)?.ca;
+    // Through the company proxy by name (CONNECT), after the same checks as a direct connection.
+    const via = this.via(ctx.host, ctx.port);
     return {
-      host: ctx.upstream.address,
-      port: ctx.upstream.port,
+      host: via ? ctx.host : ctx.upstream.address,
+      port: via ? ctx.port : ctx.upstream.port,
       servername: net.isIP(ctx.host) ? undefined : ctx.host,
       method: req.method,
       path: pathAndQuery,
       headers,
-      agent: this.upstreamAgent,
+      agent: via ? this.proxy!.agent : this.upstreamAgent,
       ...(ca ? { ca } : {}),
       checkServerIdentity: (_h, cert) => tls.checkServerIdentity(ctx.host, cert),
       timeout: 300_000,
@@ -504,7 +678,7 @@ export class EgressProxy extends TypedEmitter<Events> {
     const used = new Set<string>();
     const rawPath = req.url ?? "/";
     const hostHeader = (req.headers.host ?? ctx.host).toLowerCase().replace(/:443$/, "");
-    const base = { sessionId: ctx.session.sessionId, personaId: ctx.session.personaId, method: req.method ?? "GET", host: ctx.host, port: ctx.port, path: rawPath.split("?")[0] };
+    const base = { sessionId: ctx.session.sessionId, personaId: ctx.session.personaId, method: req.method ?? "GET", host: ctx.host, port: ctx.port, path: rawPath.split("?")[0], ...this.route(ctx.host, ctx.port, ctx.upstream) };
     if (hostHeader !== ctx.host && hostHeader !== `${ctx.host}:${ctx.port}`) {
       res.writeHead(421, { "content-type": "text/plain" }).end("Host header does not match CONNECT target\n");
       this.record({ ...base, decision: "blocked", credentials: [], reason: `Host header ${hostHeader} != ${ctx.host}` });
@@ -576,7 +750,8 @@ export class EgressProxy extends TypedEmitter<Events> {
     upstream.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" }).end(`upstream error: ${errMsg(e)}\n`);
       else res.destroy();
-      this.record({ ...base, status: 502, decision: used.size ? "injected" : "inspected", credentials: [...used], denied: plan.denied, reason: errMsg(e), durationMs: Date.now() - started });
+      const decision = e instanceof ProxyRefused ? "blocked" : used.size ? "injected" : "inspected";
+      this.record({ ...base, status: 502, decision, credentials: [...used], denied: plan.denied, reason: errMsg(e), durationMs: Date.now() - started });
     });
     if (body) {
       headers["content-length"] = String(body.length);
@@ -627,8 +802,11 @@ export class EgressProxy extends TypedEmitter<Events> {
     headers.connection = "Upgrade";
     headers.upgrade = req.headers.upgrade;
     const record = (status?: number) =>
-      this.record({ sessionId: ctx.session.sessionId, personaId: ctx.session.personaId, method: "UPGRADE", host: ctx.host, port: ctx.port, path: (req.url ?? "/").split("?")[0], status, decision: used.size ? "injected" : "inspected", credentials: [...used], denied: plan.denied });
-    const upstream = https.request({ ...this.upstreamOptions(ctx, req, headers, this.substitute(req.url ?? "/", ctx.session, plan, used)), agent: false });
+      this.record({ sessionId: ctx.session.sessionId, personaId: ctx.session.personaId, method: "UPGRADE", host: ctx.host, port: ctx.port, path: (req.url ?? "/").split("?")[0], ...this.route(ctx.host, ctx.port, ctx.upstream), status, decision: used.size ? "injected" : "inspected", credentials: [...used], denied: plan.denied });
+    // An upgraded connection leaves the pool, so it gets an agent of its own.
+    const via = this.via(ctx.host, ctx.port);
+    const agent = via ? new TunnelAgent(via, { keepAlive: false }) : false;
+    const upstream = https.request({ ...this.upstreamOptions(ctx, req, headers, this.substitute(req.url ?? "/", ctx.session, plan, used)), agent });
     upstream.on("upgrade", (up, upSocket, upHead) => {
       const lines = [`HTTP/1.1 ${up.statusCode} ${up.statusMessage}`];
       for (let i = 0; i < up.rawHeaders.length; i += 2) lines.push(`${up.rawHeaders[i]}: ${up.rawHeaders[i + 1]}`);
@@ -676,26 +854,32 @@ export class EgressProxy extends TypedEmitter<Events> {
       this.record({ ...base, decision: "blocked", credentials: [], reason });
       return;
     }
-    let upstreamAddr: { address: string; port: number };
+    let upstreamAddr: Destination;
     try {
-      upstreamAddr = await this.resolve(host, port);
+      upstreamAddr = await this.destination(session, host, port);
     } catch (e) {
       res.writeHead(403, { "content-type": "text/plain" }).end(`blocked: ${errMsg(e)}\n`);
       this.record({ ...base, decision: "blocked", credentials: [], reason: errMsg(e) });
       return;
     }
+    const route = this.route(host, port, upstreamAddr);
     const headers: http.OutgoingHttpHeaders = {};
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !HOP_BY_HOP.has(k)) headers[k] = v;
-    const upstream = http.request({ host: upstreamAddr.address, port: upstreamAddr.port, method: req.method, path: url.pathname + url.search, headers: { ...headers, host: url.host } }, (up) => {
+    // Through the company proxy: the request in absolute form, to the proxy.
+    const via = this.via(host, port);
+    const target = via
+      ? { host: via.hostname.replace(/^\[|\]$/g, ""), port: Number(via.port) || (via.protocol === "https:" ? 443 : 80), path: `http://${url.host}${url.pathname}${url.search}` }
+      : { host: upstreamAddr.address, port: upstreamAddr.port, path: url.pathname + url.search };
+    const upstream = (via?.protocol === "https:" ? https : http).request({ ...target, method: req.method, headers: { ...headers, host: url.host } }, (up) => {
       const h: http.OutgoingHttpHeaders = {};
       for (const [k, v] of Object.entries(up.headers)) if (v !== undefined && !HOP_BY_HOP.has(k)) h[k] = v;
       res.writeHead(up.statusCode ?? 502, h);
       up.pipe(res);
-      up.on("end", () => this.record({ ...base, status: up.statusCode, decision: "inspected", credentials: [], durationMs: Date.now() - started }));
+      up.on("end", () => this.record({ ...base, ...route, status: up.statusCode, decision: "inspected", credentials: [], durationMs: Date.now() - started }));
     });
     upstream.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502).end();
-      this.record({ ...base, status: 502, decision: "inspected", credentials: [], reason: errMsg(e) });
+      this.record({ ...base, ...route, status: 502, decision: "inspected", credentials: [], reason: errMsg(e) });
     });
     req.pipe(upstream);
   }

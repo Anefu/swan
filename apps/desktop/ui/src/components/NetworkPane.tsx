@@ -167,6 +167,15 @@ function EventDetail({ e }: { e: EgressEvent }) {
             </dd>
           </>
         )}
+        {(e.via || e.internal) && (
+          <>
+            <dt>Route</dt>
+            <dd>
+              {e.via ? "Through the company proxy" : "Direct"}
+              {e.internal ? " · company network" : ""}
+            </dd>
+          </>
+        )}
         {e.sessionId && (
           <>
             <dt>Source</dt>

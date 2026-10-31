@@ -15,7 +15,7 @@ import { presign, sign } from "@ph/aws-sigv4";
 import { startStub, type StubServer } from "@ph/aws-stub/server";
 import { makeTls } from "@ph/aws-stub/tls";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Rule } from "../connections/config.js";
 import { ConnectionManager } from "../connections/manager.js";
 import { newPlaceholder } from "../connections/placeholders.js";
@@ -23,6 +23,7 @@ import { ruleKey, type Verdict } from "../connections/rules.js";
 import { SecretStore } from "../secrets.js";
 import { paths, type Settings } from "../settings.js";
 import { CertAuthority } from "./ca.js";
+import { startCompanyProxy, type CompanyProxy } from "./company-proxy.fixture.js";
 import { EgressProxy, type ProxySession } from "./egress.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -88,7 +89,7 @@ beforeAll(async () => {
   const placeholders = new Map<string, { ref: string; field?: string }>();
   for (const field of ["accessKeyId", "secretAccessKey", "sessionToken"]) placeholders.set(newPlaceholder("stub/aws", field), { ref: "stub/aws", field });
   placeholders.set(newPlaceholder("stub/eks"), { ref: "stub/eks" });
-  session = { sessionId: "s1", personaId: "p1", token: "t0ken", allowHosts: [], credentials: ["stub/aws", "stub/eks"], placeholders, rules: new Map([["stub", rules()]]), sessionAllowed: new Set() };
+  session = { sessionId: "s1", personaId: "p1", token: "t0ken", allowHosts: [], internalHosts: [], credentials: ["stub/aws", "stub/eks"], placeholders, rules: new Map([["stub", rules()]]), sessionAllowed: new Set() };
   proxy.register(session);
 });
 
@@ -101,10 +102,10 @@ const ph = (ref: string, field?: string) => [...session.placeholders].find(([, v
 const placeholderCreds = () => ({ accessKeyId: ph("stub/aws", "accessKeyId"), secretAccessKey: ph("stub/aws", "secretAccessKey"), sessionToken: ph("stub/aws", "sessionToken") });
 
 /** An https.Agent that reaches every host through the proxy, trusting only Swan's CA: what the sandbox sees. */
-function sandboxAgent(): https.Agent {
+function sandboxAgent(port = proxyPort): https.Agent {
   const agent = new https.Agent({ ca: ca.certPem, keepAlive: false });
   (agent as unknown as { createConnection: unknown }).createConnection = (opts: tls.ConnectionOptions & { host: string; port: number }, cb: (e: Error | null, s?: net.Socket) => void) => {
-    const req = http.request({ host: "127.0.0.1", port: proxyPort, method: "CONNECT", path: `${opts.host}:${opts.port}`, headers: { "proxy-authorization": `Basic ${Buffer.from("s1:t0ken").toString("base64")}` } });
+    const req = http.request({ host: "127.0.0.1", port, method: "CONNECT", path: `${opts.host}:${opts.port}`, headers: { "proxy-authorization": `Basic ${Buffer.from("s1:t0ken").toString("base64")}` } });
     req.on("connect", (res, socket) => {
       if (res.statusCode !== 200) return cb(new Error(`CONNECT ${res.statusCode}: ${res.headers["x-ph-reason"] ?? ""}`));
       cb(null, tls.connect({ socket, servername: opts.servername || opts.host, ca: ca.certPem }));
@@ -117,9 +118,9 @@ function sandboxAgent(): https.Agent {
 
 const sdk = { endpoint: AWS_URL, region: "us-east-1", credentials: async () => placeholderCreds(), requestHandler: () => new NodeHttpHandler({ httpsAgent: sandboxAgent() }) };
 
-function request(url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+function request(url: string, init: { method?: string; headers?: Record<string, string>; body?: string; port?: number } = {}) {
   return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((resolve, reject) => {
-    const req = https.request(url, { method: init.method ?? "GET", headers: init.headers, agent: sandboxAgent() }, (res) => {
+    const req = https.request(url, { method: init.method ?? "GET", headers: init.headers, agent: sandboxAgent(init.port) }, (res) => {
       let body = "";
       res.on("data", (c) => (body += c));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
@@ -207,6 +208,67 @@ describe("proxy with a command connection", () => {
       await expect(request(`${CLUSTER_URL}/api/v1/pods`, { headers: { authorization: `Bearer ${ph("stub/eks")}` } })).rejects.toThrow(/CONNECT 403: credential stub\/eks expired/);
     } finally {
       eks.expiresAt = saved;
+    }
+  });
+});
+
+describe("proxy chained through a company proxy", () => {
+  let company: CompanyProxy;
+  let chained: EgressProxy;
+  let chainedPort: number;
+  beforeAll(async () => {
+    const stubPort = Number(new URL(stub.url).port);
+    company = await startCompanyProxy({ "api.aws.test:443": stubPort, "swan-dev.k8s.aws.test:443": stubPort });
+    chained = new EgressProxy(m, ca, {
+      resolve: async () => ({ address: "127.0.0.1", port: stubPort }), // never used for the connection: it goes to the proxy by name
+      upstreamProxy: { url: company.url, noProxy: [] },
+    });
+    chainedPort = await chained.listen(0);
+    chained.register(session);
+  });
+  afterAll(() => {
+    chained?.close();
+    company?.close();
+  });
+
+  const lastEvent = (host: string) =>
+    vi.waitFor(() => {
+      const e = chained.events("s1").filter((x) => x.host === host).at(-1);
+      if (!e) throw new Error(`no event for ${host}`);
+      return e;
+    });
+
+  it("re-signs AWS requests and sends them over a tunnel of the company proxy", async () => {
+    const me = await new STSClient({ ...sdk, requestHandler: new NodeHttpHandler({ httpsAgent: sandboxAgent(chainedPort) }) }).send(new GetCallerIdentityCommand({}));
+    expect(me.Arn).toMatch(/assumed-role\/ReadOnly\/swan-sso$/);
+    expect(company.seen).toContain("CONNECT api.aws.test:443");
+    expect(await lastEvent("api.aws.test")).toMatchObject({ decision: "injected", credentials: ["stub/aws"], via: "proxy" });
+  });
+
+  it("substitutes the EKS token through the company proxy, and still applies the rules", async () => {
+    const auth = { authorization: `Bearer ${ph("stub/eks")}` };
+    const pods = await request(`${CLUSTER_URL}/api/v1/namespaces/payments/pods`, { headers: auth, port: chainedPort });
+    expect(pods.status).toBe(200);
+    expect(company.seen).toContain("CONNECT swan-dev.k8s.aws.test:443");
+    expect(await lastEvent("swan-dev.k8s.aws.test")).toMatchObject({ decision: "injected", credentials: ["stub/eks"], via: "proxy" });
+    const secrets = await request(`${CLUSTER_URL}/api/v1/namespaces/payments/secrets`, { headers: auth, port: chainedPort });
+    expect(secrets.status).toBe(401);
+    expect(secrets.headers["x-swan-denied"]).toBe('stub/eks: rule "* secrets"');
+  });
+
+  it("answers 502 and records blocked when the company proxy refuses a credential host", async () => {
+    const strict = await startCompanyProxy({}); // refuses everything
+    const refusing = new EgressProxy(m, ca, { resolve: async () => ({ address: "127.0.0.1", port: 9 }), upstreamProxy: { url: strict.url, noProxy: [] } });
+    try {
+      const port = await refusing.listen(0);
+      refusing.register(session);
+      const r = await request(`${AWS_URL}/`, { port });
+      expect(r.status).toBe(502);
+      expect(r.body).toContain("the company proxy refused api.aws.test:443 (403 Forbidden)");
+      expect(refusing.events("s1").filter((e) => e.host === "api.aws.test").at(-1)).toMatchObject({ decision: "blocked", via: "proxy", status: 502 });
+    } finally {
+      refusing.close();
+      strict.close();
     }
   });
 });

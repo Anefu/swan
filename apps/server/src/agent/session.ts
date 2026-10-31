@@ -489,6 +489,7 @@ export class Session {
       token: this.proxyToken,
       // Hosts allowed "until stopped" ride along with the persona's own allowlist.
       allowHosts: [...(cfg?.network.allow ?? []), ...this.summary.allowances.filter((a) => a.startsWith("net:")).map((a) => a.slice(4))],
+      internalHosts: cfg?.network.internal ?? [], // only from Settings, never from an "Allow" card
       ...this.creds.proxyFields(),
     };
   }

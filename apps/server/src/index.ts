@@ -72,7 +72,10 @@ async function main() {
   personas.watch();
 
   const ca = await CertAuthority.load();
-  const proxy = new EgressProxy(connections, ca);
+  const proxy = new EgressProxy(connections, ca, {
+    upstreamProxy: settings.proxy ? { url: settings.proxy.url, noProxy: settings.proxy.noProxy } : undefined,
+    ownSubnets: [settings.runtime.subnet],
+  });
   settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));
 
   const runtime = new PodmanRuntime(settings, ca, extraCas);

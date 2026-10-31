@@ -75,7 +75,7 @@ export const SettingsSchema = z.object({
   // For networks that reach the internet only through a proxy and internal mirrors.
   proxy: z
     .object({
-      // Model calls, http MCP servers, the Copilot runtime, connection wrappers and the image build use it.
+      // Model calls, http MCP servers, the Copilot runtime, connection wrappers, the image build and agents' traffic use it.
       url: HttpUrl.refine((u) => !/^https?:\/\/[^/]*@/.test(u), "a proxy that needs a username and password is not supported (config.yaml is not for secrets)"),
       noProxy: z.array(z.string().regex(/^[^\s,]+$/, "expected a host or .domain")).default([]), // reached directly; localhost always is
     })

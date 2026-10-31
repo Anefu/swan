@@ -69,6 +69,54 @@ export function SettingsPane() {
 
 // ---------- Persona settings ----------
 
+function HostRows({
+  list,
+  errorKey,
+  label,
+  placeholder,
+  hosts,
+  errors,
+  update,
+}: {
+  list: "networkAllow" | "networkInternal";
+  errorKey: string;
+  label: string;
+  placeholder: string;
+  hosts: string[];
+  errors: Errors;
+  update: (fn: (x: PersonaConfigView) => void) => void;
+}) {
+  return (
+    <>
+      {hosts.map((h, i) => (
+        <div key={i}>
+          <div className="row gap">
+            <label className="grow">
+              <span className="sr-only">
+                {label} {i + 1}
+              </span>
+              <input
+                className="input mono"
+                value={h}
+                placeholder={placeholder}
+                aria-invalid={!!errors[`${errorKey}${i}`]}
+                onChange={(e) => update((x) => void (x[list][i] = e.target.value))}
+              />
+            </label>
+            <button type="button" className="icon-btn" aria-label={`Remove ${label.toLowerCase()} ${h || i + 1}`} onClick={() => update((x) => void x[list].splice(i, 1))}>
+              <IconTrash />
+            </button>
+          </div>
+          {errors[`${errorKey}${i}`] && <span className="field-error">{errors[`${errorKey}${i}`]}</span>}
+        </div>
+      ))}
+      <button type="button" className="link-btn" onClick={() => update((x) => void x[list].push(""))}>
+        <IconPlus /> Add {label.toLowerCase()}
+      </button>
+    </>
+  );
+}
+
 function blankConfig(): PersonaConfigView {
   return {
     name: "",
@@ -76,6 +124,7 @@ function blankConfig(): PersonaConfigView {
     instructions: "",
     folders: [],
     networkAllow: [],
+    networkInternal: [],
     connections: {},
     permissions: { default: "ask", allow: ["read_file", "list_dir", "glob", "grep", "load_skill"], ask: ["bash", "write_file", "edit_file"], deny: [] },
     skills: [],
@@ -91,7 +140,7 @@ function subagentDefaults(): SubagentsConfig {
 
 /** A server from before sub-agents sends no `subagents`; edit the defaults instead. */
 function withDefaults(v: PersonaConfigView): PersonaConfigView {
-  return v.subagents ? v : { ...v, subagents: subagentDefaults() };
+  return { ...v, subagents: v.subagents ?? subagentDefaults(), networkInternal: v.networkInternal ?? [] };
 }
 
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -103,6 +152,7 @@ function cleaned(v: PersonaConfigView): PersonaConfigView {
   const x = clone(v);
   x.name = x.name.trim();
   x.networkAllow = x.networkAllow.map((h) => h.trim()).filter(Boolean);
+  x.networkInternal = x.networkInternal.map((h) => h.trim()).filter(Boolean);
   for (const k of ["allow", "ask", "deny"] as const) x.permissions[k] = x.permissions[k].map((r) => r.trim()).filter(Boolean);
   x.folders = x.folders.map((f) => ({ ...f, path: f.path.trim(), ...(f.mount ? { mount: f.mount.trim() } : {}) }));
   x.subagents.agents = x.subagents.agents.map((a) => ({ name: a.name.trim(), model: a.model.trim() }));
@@ -137,10 +187,11 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
     if (!f.path.trim()) e[`folder${i}`] = "Enter a folder path on this Mac.";
     else if (f.mount && !/^\/workspace\/[^/]+$/.test(f.mount)) e[`folder${i}`] = "Mount must look like /workspace/<name>.";
   });
-  d.networkAllow.forEach((h, i) => {
-    if (!h.trim()) e[`host${i}`] = "Enter a host or remove the row.";
-    else if (!HOST_RE.test(h.trim())) e[`host${i}`] = "Use a hostname, *.domain or host:port.";
-  });
+  for (const [list, key] of [["networkAllow", "host"], ["networkInternal", "internal"]] as const)
+    d[list].forEach((h, i) => {
+      if (!h.trim()) e[`${key}${i}`] = "Enter a host or remove the row.";
+      else if (!HOST_RE.test(h.trim())) e[`${key}${i}`] = "Use a hostname, *.domain or host:port.";
+    });
   for (const [conn, pc] of Object.entries(d.connections))
     pc.rules.forEach((r, i) => {
       const c = r.credential.trim();
@@ -462,7 +513,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           skills: d.skills,
           mcpServers: d.mcpServers,
           connections: d.connections,
-          network: { allow: d.networkAllow.map((h) => h.trim()) },
+          network: { allow: d.networkAllow.map((h) => h.trim()), ...(d.networkInternal.length ? { internal: d.networkInternal.map((h) => h.trim()) } : {}) },
           permissions: d.permissions,
         });
         const created = await actions.createPersona(newId, yaml);
@@ -598,46 +649,40 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           id="hosts"
           title="Allowed hosts"
           summary={
-            d.networkAllow.length + netAllowances.length
-              ? [d.networkAllow.length && listSummary(d.networkAllow, "host"), netAllowances.length && `${netAllowances.length} until stopped`]
+            d.networkAllow.length + d.networkInternal.length + netAllowances.length
+              ? [
+                  d.networkAllow.length && listSummary(d.networkAllow, "host"),
+                  d.networkInternal.length && `${d.networkInternal.length} internal`,
+                  netAllowances.length && `${netAllowances.length} until stopped`,
+                ]
                   .filter(Boolean)
                   .join(" · ")
               : "None"
           }
-          invalid={d.networkAllow.some((_, i) => errors[`host${i}`])}
+          invalid={d.networkAllow.some((_, i) => errors[`host${i}`]) || d.networkInternal.some((_, i) => errors[`internal${i}`])}
         >
           <p className="hint">
             Hostnames or <span className="mono">*.domain</span>. <span className="mono">host:port</span> is always tunnelled and never
             gets credentials. Applies to the next request.
           </p>
-          {d.networkAllow.map((h, i) => (
-            <div key={i}>
-              <div className="row gap">
-                <label className="grow">
-                  <span className="sr-only">Host {i + 1}</span>
-                  <input
-                    className="input mono"
-                    value={h}
-                    placeholder="api.github.com"
-                    aria-invalid={!!errors[`host${i}`]}
-                    onChange={(e) => update((x) => void (x.networkAllow[i] = e.target.value))}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label={`Remove host ${h || i + 1}`}
-                  onClick={() => update((x) => void x.networkAllow.splice(i, 1))}
-                >
-                  <IconTrash />
-                </button>
-              </div>
-              {errors[`host${i}`] && <span className="field-error">{errors[`host${i}`]}</span>}
-            </div>
-          ))}
-          <button type="button" className="link-btn" onClick={() => update((x) => void x.networkAllow.push(""))}>
-            <IconPlus /> Add host
-          </button>
+          <HostRows list="networkAllow" errorKey="host" label="Host" placeholder="api.github.com" hosts={d.networkAllow} errors={errors} update={update} />
+          <div className="approved-hosts">
+            <h4>On your company network</h4>
+            <p className="hint">
+              Hosts that resolve to private addresses (<span className="mono">10.x</span>, <span className="mono">172.16–31.x</span>,{" "}
+              <span className="mono">192.168.x</span>), such as an internal Jira. They are allowed too. This Mac, link-local and{" "}
+              <span className="mono">100.64.x</span> addresses stay unreachable.
+            </p>
+            <HostRows
+              list="networkInternal"
+              errorKey="internal"
+              label="Internal host"
+              placeholder="jira.corp.example.com"
+              hosts={d.networkInternal}
+              errors={errors}
+              update={update}
+            />
+          </div>
           {netAllowances.length > 0 && session && (
             <div className="approved-hosts">
               <h4>Approved in the conversation</h4>

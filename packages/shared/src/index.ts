@@ -32,6 +32,7 @@ export interface PersonaSummary {
   credentials: string[]; // "<connection>/<name>" refs its rules name
   missingCredentials: string[]; // refs with no usable value right now (missing, expired, needs sign-in)
   networkAllow: string[]; // host patterns reachable from the sandbox
+  networkInternal: string[]; // also reachable, and may resolve to private (company) addresses
   errors: string[]; // validation problems; a persona with errors cannot start sessions
 }
 
@@ -273,6 +274,8 @@ export interface EgressEvent {
   credentials: string[]; // refs used, never values
   denied?: { credential: string; operation: string; rule: string | null }[]; // sent without the credential
   reason?: string; // why blocked
+  via?: "proxy"; // through the company proxy (config.yaml `proxy`)
+  internal?: boolean; // to an address on a company network (a persona's internal host)
   durationMs?: number;
   bytesUp?: number;
   bytesDown?: number;
@@ -475,6 +478,7 @@ export interface PersonaConfigView {
   instructions: string;
   folders: { path: string; mount?: string; mode: FolderMode }[];
   networkAllow: string[]; // hostnames, *.domain, or host:port (always tunnelled)
+  networkInternal: string[]; // the same forms, on the company network (private addresses allowed)
   connections: Record<string, PersonaConnection>;
   permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
   skills: string[];
