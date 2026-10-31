@@ -7,36 +7,25 @@ import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
 import { DecisionsShortcut } from "./Composer";
 import { IconChevronRight, IconPlus, IconTrash, IconX } from "./icons";
-import { SwanSettings } from "./SwanSettings";
-import { Empty, Segmented, Spinner } from "./ui";
+import { Empty, Spinner } from "./ui";
 
+/** Settings of the selected persona (or the new-persona draft). Swan's own settings have their own pane. */
 export function SettingsPane({ onClose }: { onClose: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
-  const scopeLabel = state.settingsNew ? "New persona" : (persona?.name ?? "Persona");
+  const subject = state.settingsNew ? "New persona" : persona?.name;
   return (
     <div className="pane">
       <div className="pane-head">
-        <h2>Settings</h2>
+        <h2>
+          Settings{subject && <span className="pane-sub"> · {subject}</span>}
+        </h2>
         <DecisionsShortcut className="compact" />
         <button type="button" className="icon-btn" aria-label="Close settings" onClick={onClose}>
           <IconX size={18} />
         </button>
       </div>
-      <div className="pane-tabs">
-        <Segmented
-          label="Settings scope"
-          value={state.settingsScope}
-          onChange={(v) => actions.setSettingsScope(v)}
-          options={[
-            { value: "persona", label: scopeLabel },
-            { value: "swan", label: "Swan" },
-          ]}
-        />
-      </div>
-      {state.settingsScope === "swan" ? (
-        <SwanSettings />
-      ) : state.settingsNew ? (
+      {state.settingsNew ? (
         <PersonaSettings key={NEW_PERSONA} draftKey={NEW_PERSONA} persona={null} />
       ) : persona ? (
         <PersonaSettings key={persona.id} draftKey={persona.id} persona={persona} />
@@ -45,7 +34,7 @@ export function SettingsPane({ onClose }: { onClose: () => void }) {
           <Empty
             title="No persona yet"
             action={
-              <button type="button" className="btn primary" onClick={() => actions.openSettings("persona", { isNew: true })}>
+              <button type="button" className="btn primary" onClick={() => actions.openSettings({ isNew: true })}>
                 Create a persona
               </button>
             }
@@ -58,7 +47,7 @@ export function SettingsPane({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ---------- Persona scope ----------
+// ---------- Persona settings ----------
 
 function blankConfig(): PersonaConfigView {
   return {
@@ -227,6 +216,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   const [mcpText, setMcpText] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [newModel, setNewModel] = useState<{ provider: string; id: string }>({ provider: "", id: "" });
+  /** Bumped when the draft is replaced (discard, save), so open folder editors close. */
+  const [foldersSeq, setFoldersSeq] = useState(0);
 
   const load = async () => {
     if (!persona) return;
@@ -363,9 +354,10 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   const discard = () => {
     setMcpText(null);
     setMcpError(null);
+    setFoldersSeq((n) => n + 1);
     if (isNew) {
       actions.setDraft(draftKey, null);
-      actions.setSettingsScope("persona");
+      actions.openSettings();
       return;
     }
     actions.setDraft(draftKey, { base: entry.base, draft: clone(entry.base) });
@@ -398,7 +390,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           /* older server: defaults apply */
         }
         actions.setDraft(draftKey, null);
-        actions.setSettingsScope("persona");
+        actions.openSettings();
         actions.toast(
           created.errors.length ? "warn" : "success",
           created.errors.length ? `${created.name} was created but has problems: ${created.errors[0]}` : `${created.name} is ready.`,
@@ -413,6 +405,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           /* keep what we sent */
         }
         setMcpText(null);
+        setFoldersSeq((n) => n + 1);
         actions.setDraft(draftKey, { base, draft: clone(base), result, error: null });
       }
     } catch (e) {
@@ -514,67 +507,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           summary={d.folders.length ? plural(d.folders.length, "folder") : "None"}
           invalid={d.folders.some((_, i) => errors[`folder${i}`])}
         >
-          <p className="hint">Only these folders are visible in the sandbox. Changes apply at the next container start.</p>
-          {d.folders.map((f, i) => (
-            <div key={i} className="folder-row">
-              <div className="row gap">
-                <label className="grow">
-                  <span className="sr-only">Folder {i + 1} path on this Mac</span>
-                  <input
-                    className="input mono"
-                    value={f.path}
-                    placeholder="~/code/project"
-                    aria-invalid={!!errors[`folder${i}`]}
-                    onChange={(e) => update((x) => void (x.folders[i].path = e.target.value))}
-                  />
-                </label>
-                <label>
-                  <span className="sr-only">Access for folder {i + 1}</span>
-                  <select
-                    className="input"
-                    value={f.mode}
-                    onChange={(e) => update((x) => void (x.folders[i].mode = e.target.value as FolderMode))}
-                  >
-                    <option value="ro">Read-only</option>
-                    <option value="rw">Read-write</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label={`Remove folder ${f.path || i + 1}`}
-                  onClick={() => update((x) => void x.folders.splice(i, 1))}
-                >
-                  <IconTrash />
-                </button>
-              </div>
-              <label className="row gap small">
-                <span className="muted">Mounted at</span>
-                <input
-                  className="input mono sm grow"
-                  value={f.mount ?? ""}
-                  placeholder={`/workspace/${(f.path.split("/").filter(Boolean).pop() ?? "name").toLowerCase()}`}
-                  onChange={(e) => update((x) => void (x.folders[i].mount = e.target.value || undefined))}
-                />
-              </label>
-              {errors[`folder${i}`] && <span className="field-error">{errors[`folder${i}`]}</span>}
-            </div>
-          ))}
-          <button type="button" className="link-btn" onClick={() => update((x) => void x.folders.push({ path: "", mode: "ro" }))}>
-            <IconPlus /> Add folder
-          </button>
-          {persona && persona.folders.length > 0 && (
-            <details className="mapping">
-              <summary>Mac to sandbox mapping (saved)</summary>
-              <ul>
-                {persona.folders.map((f) => (
-                  <li key={f.mountPath} className="mono small">
-                    {f.hostPath} → {f.mountPath} · {f.mode === "rw" ? "read-write" : "read-only"}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <Folders key={foldersSeq} folders={d.folders} errors={errors} update={update} />
         </Section>
 
         <Section
@@ -676,7 +609,11 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         >
           <p className="hint">
             Rules say what each credential may be used for. Checked deny, then ask, then allow; a request nothing allows goes out
-            without the credential. Values are managed under Swan.
+            without the credential. Values are managed in{" "}
+            <button type="button" className="link-btn inline" onClick={actions.openSwanSettings}>
+              Swan settings
+            </button>
+            .
           </p>
           {Object.entries(d.connections).map(([conn, pc]) => (
             <ConnectionRules
@@ -943,6 +880,240 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   );
 }
 
+// ---------- Folders ----------
+
+type FolderView = PersonaConfigView["folders"][number];
+
+const FOLDER_GROUPS: Array<{ mode: FolderMode; label: string }> = [
+  { mode: "rw", label: "Can change" },
+  { mode: "ro", label: "Can read" },
+];
+
+function folderBase(path: string): string {
+  return path.trim().replace(/\/+$/, "").split("/").pop() || "name";
+}
+
+/** Where the sandbox sees the folder: its mount, or /workspace/<folder name> as the server defaults it. */
+function mountPathOf(f: FolderView): string {
+  return f.mount?.trim() || `/workspace/${folderBase(f.path)}`;
+}
+
+/**
+ * Folders grouped by access. Each row opens an inline editor; a folder with an error keeps its editor
+ * open so the error stays next to its field. The edited folder stays in its group until the editor
+ * closes, so changing its access does not move it (and focus) mid-edit.
+ */
+function Folders({
+  folders,
+  errors,
+  update,
+}: {
+  folders: FolderView[];
+  errors: Errors;
+  update: (fn: (draft: PersonaConfigView) => void) => void;
+}) {
+  const [editing, setEditing] = useState<{ index: number; mode: FolderMode; isNew: boolean } | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const baseId = useId();
+  const rowId = (i: number) => `${baseId}-row-${i}`;
+  const fieldId = (i: number, field: "path" | "mount") => `${baseId}-${field}-${i}`;
+  const addId = `${baseId}-add`;
+  const ed = editing && editing.index < folders.length ? editing : null;
+  const newIndex = ed?.isNew ? ed.index : -1;
+
+  useEffect(() => {
+    if (!focusId) return;
+    document.getElementById(focusId)?.focus();
+    setFocusId(null);
+  }, [focusId]);
+
+  const errorOf = (i: number) => errors[`folder${i}`];
+  const isEmpty = (f: FolderView) => !f.path.trim() && !f.mount?.trim();
+
+  const open = (i: number) => {
+    setEditing({ index: i, mode: folders[i].mode, isNew: false });
+    setFocusId(fieldId(i, "path"));
+  };
+
+  const remove = (i: number) => {
+    update((x) => void x.folders.splice(i, 1));
+    setEditing((e) => (!e || e.index === i ? null : e.index > i ? { ...e, index: e.index - 1 } : e));
+    setFocusId(addId);
+  };
+
+  const close = (i: number) => {
+    const f = folders[i];
+    if (ed?.index === i && ed.isNew && isEmpty(f)) return remove(i);
+    if (errorOf(i)) return setFocusId(fieldId(i, f.path.trim() ? "mount" : "path"));
+    if (ed?.index === i) setEditing(null);
+    setFocusId(rowId(i));
+  };
+
+  const add = () => {
+    if (ed?.isNew && isEmpty(folders[ed.index])) return setFocusId(fieldId(ed.index, "path"));
+    const index = folders.length;
+    update((x) => void x.folders.push({ path: "", mode: "ro" }));
+    setEditing({ index, mode: "ro", isNew: true });
+    setFocusId(fieldId(index, "path"));
+  };
+
+  const editor = (f: FolderView, i: number) => (
+    <FolderEditor
+      folder={f}
+      label={i === newIndex ? "New folder" : `Folder ${mountPathOf(f)}`}
+      error={errorOf(i)}
+      pathId={fieldId(i, "path")}
+      mountId={fieldId(i, "mount")}
+      onChange={(fn) => update((x) => fn(x.folders[i]))}
+      onFocus={() => {
+        if (ed?.index !== i) setEditing({ index: i, mode: f.mode, isNew: false });
+      }}
+      onDone={() => close(i)}
+      onRemove={() => remove(i)}
+    />
+  );
+
+  return (
+    <>
+      {folders.length === 0 && <p className="hint">The sandbox sees only the folders added here.</p>}
+      {FOLDER_GROUPS.map((g) => {
+        const rows = folders
+          .map((f, i) => ({ f, i }))
+          .filter(({ f, i }) => i !== newIndex && (ed?.index === i ? ed.mode : f.mode) === g.mode);
+        if (rows.length === 0) return null;
+        const labelId = `${baseId}-${g.mode}`;
+        return (
+          <div key={g.mode} className="folder-group">
+            <span id={labelId} className="small muted">
+              {g.label}
+            </span>
+            <ul className="folder-list" aria-labelledby={labelId}>
+              {rows.map(({ f, i }) =>
+                ed?.index === i || errorOf(i) ? (
+                  <li key={i}>{editor(f, i)}</li>
+                ) : (
+                  <FolderRow key={i} id={rowId(i)} folder={f} onOpen={() => open(i)} onRemove={() => remove(i)} />
+                ),
+              )}
+            </ul>
+          </div>
+        );
+      })}
+      {newIndex >= 0 && editor(folders[newIndex], newIndex)}
+      <button id={addId} type="button" className="link-btn" onClick={add}>
+        <IconPlus /> Add folder
+      </button>
+    </>
+  );
+}
+
+function FolderRow({ id, folder, onOpen, onRemove }: { id: string; folder: FolderView; onOpen: () => void; onRemove: () => void }) {
+  const mount = mountPathOf(folder);
+  return (
+    <li className="folder-item">
+      <button
+        id={id}
+        type="button"
+        className="folder-open"
+        title={`${folder.path} → ${mount}`}
+        aria-label={`Edit folder ${mount}, ${folder.path}`}
+        onClick={onOpen}
+      >
+        <span className="folder-name mono">{mount.replace(/^\/workspace\//, "")}</span>
+        <span className="folder-path small muted mono">{folder.path}</span>
+      </button>
+      <button type="button" className="icon-btn folder-remove" aria-label={`Remove folder ${mount}`} onClick={onRemove}>
+        <IconTrash />
+      </button>
+    </li>
+  );
+}
+
+function FolderEditor({
+  folder,
+  label,
+  error,
+  pathId,
+  mountId,
+  onChange,
+  onFocus,
+  onDone,
+  onRemove,
+}: {
+  folder: FolderView;
+  label: string;
+  error?: string;
+  pathId: string;
+  mountId: string;
+  onChange: (fn: (f: FolderView) => void) => void;
+  onFocus: () => void;
+  onDone: () => void;
+  onRemove: () => void;
+}) {
+  // validate() reports one error per folder: the path when it is empty, otherwise the mount.
+  const pathError = error && !folder.path.trim() ? error : undefined;
+  const mountError = error && !pathError ? error : undefined;
+  return (
+    <div
+      className="inline-form folder-edit"
+      role="group"
+      aria-label={label}
+      onFocus={onFocus}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        onDone();
+      }}
+    >
+      <Field label="Path on this Mac" id={pathId} error={pathError}>
+        {(id) => (
+          <input
+            id={id}
+            className="input mono"
+            value={folder.path}
+            placeholder="~/code/project"
+            spellCheck={false}
+            aria-invalid={!!pathError}
+            onChange={(e) => onChange((f) => void (f.path = e.target.value))}
+          />
+        )}
+      </Field>
+      <Field label="Mounted at" id={mountId} error={mountError}>
+        {(id) => (
+          <input
+            id={id}
+            className="input mono"
+            value={folder.mount ?? ""}
+            placeholder={`/workspace/${folderBase(folder.path)}`}
+            spellCheck={false}
+            aria-invalid={!!mountError}
+            onChange={(e) => onChange((f) => void (f.mount = e.target.value || undefined))}
+          />
+        )}
+      </Field>
+      <Field label="Access">
+        {(id) => (
+          <select id={id} className="input" value={folder.mode} onChange={(e) => onChange((f) => void (f.mode = e.target.value as FolderMode))}>
+            <option value="ro">Read-only</option>
+            <option value="rw">Read-write</option>
+          </select>
+        )}
+      </Field>
+      <p className="hint">Changes apply at the next container start.</p>
+      <div className="row gap">
+        <button type="button" className="btn sm danger" onClick={onRemove}>
+          Remove
+        </button>
+        <span className="grow" />
+        <button type="button" className="btn sm" onClick={onDone}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Sub-agents ----------
 
 function SubagentRow({
@@ -1034,9 +1205,18 @@ function newRule(c: ConnectionStatus | undefined, credential?: string): Credenti
 }
 
 function AddConnection({ used, onAdd }: { used: string[]; onAdd: (c: ConnectionStatus) => void }) {
-  const { state } = useStore();
+  const { state, actions } = useStore();
   const free = state.connections.filter((c) => !used.includes(c.name));
-  if (state.connections.length === 0) return <p className="muted small">No connections yet. Add credentials under Swan.</p>;
+  if (state.connections.length === 0)
+    return (
+      <p className="muted small">
+        No connections yet. Add credentials in{" "}
+        <button type="button" className="link-btn inline" onClick={actions.openSwanSettings}>
+          Swan settings
+        </button>
+        .
+      </p>
+    );
   if (free.length === 0) return null;
   return (
     <label>
@@ -1274,14 +1454,18 @@ function Field({
   label,
   hint,
   error,
+  id: fixedId,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  /** For a field that is focused from elsewhere. */
+  id?: string;
   children: (id: string) => ReactNode;
 }) {
-  const id = useId();
+  const autoId = useId();
+  const id = fixedId ?? autoId;
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>

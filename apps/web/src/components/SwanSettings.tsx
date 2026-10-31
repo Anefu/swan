@@ -4,16 +4,27 @@ import type { ConnectionAction } from "../api";
 import { useStore } from "../store";
 import { CONNECTION_STATE } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
+import { DecisionsShortcut } from "./Composer";
 import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
-import { IconPlus } from "./icons";
+import { IconPlus, IconX } from "./icons";
 import { Spinner } from "./ui";
 
-export function SwanSettings() {
+/** Swan's own settings, shared by every persona: model providers, connections and the sandbox. */
+export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
   return (
-    <div className="pane-body">
-      <Providers />
-      <Connections />
-      <Sandbox />
+    <div className="pane">
+      <div className="pane-head">
+        <h2>Swan settings</h2>
+        <DecisionsShortcut className="compact" />
+        <button type="button" className="icon-btn" aria-label="Close Swan settings" onClick={onClose}>
+          <IconX size={18} />
+        </button>
+      </div>
+      <div className="pane-body">
+        <Providers />
+        <Connections />
+        <Sandbox />
+      </div>
     </div>
   );
 }

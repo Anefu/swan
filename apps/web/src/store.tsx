@@ -28,7 +28,8 @@ import { EventSocket, wsUrl, type WsState } from "./ws";
 
 export type ServerState = "loading" | "ok" | "unreachable" | "unauthorized" | "no-token";
 export type ToastKind = "info" | "success" | "warn" | "error";
-export type DockMode = "settings" | "memory" | "usage" | "network" | "attachments";
+/** "settings" is the selected persona's settings; "swan" is Swan's own (providers, connections, sandbox). */
+export type DockMode = "settings" | "swan" | "memory" | "usage" | "network" | "attachments";
 export const NEW_PERSONA = "__new__";
 
 export interface Toast {
@@ -134,8 +135,7 @@ export interface State {
   transcripts: Record<string, Transcript>;
   egress: EgressEvent[];
   selectedPersonaId: string | null;
-  settingsScope: "persona" | "swan";
-  /** Settings persona scope shows the new-persona draft instead of the selected persona. */
+  /** Settings shows the new-persona draft instead of the selected persona. */
   settingsNew: boolean;
   settingsFocus: SettingsFocus | null;
   drafts: Record<string, SettingsDraft>;
@@ -157,11 +157,22 @@ const SELECTION_KEY = "swan.persona.v1";
 const COMPOSER_KEY = "swan.composer.v1";
 const MAX_EGRESS = 2000;
 
-const DEFAULT_UI: UiPrefs = { dock: null, widths: { settings: 400, memory: 400, usage: 400, network: 400, attachments: 400 } };
+export const DOCK_DEFAULT = 440;
+const DEFAULT_UI: UiPrefs = {
+  dock: null,
+  widths: { settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT },
+};
+
+/** Saved prefs hold every width, chosen or not; 400 was the old default, so it moves to the new one. */
+function loadUi(): UiPrefs {
+  const ui = loadPref(PREFS_KEY, DEFAULT_UI);
+  const widths = { ...DEFAULT_UI.widths, ...ui.widths };
+  for (const k of Object.keys(widths) as DockMode[]) if (widths[k] === 400) widths[k] = DOCK_DEFAULT;
+  return { ...DEFAULT_UI, ...ui, widths };
+}
 
 function initState(): State {
   const token = readToken();
-  const ui = loadPref(PREFS_KEY, DEFAULT_UI);
   return {
     token,
     server: token ? "loading" : "no-token",
@@ -182,7 +193,6 @@ function initState(): State {
     transcripts: {},
     egress: [],
     selectedPersonaId: loadPref<{ id: string | null }>(SELECTION_KEY, { id: null }).id,
-    settingsScope: "persona",
     settingsNew: false,
     settingsFocus: null,
     drafts: {},
@@ -196,7 +206,7 @@ function initState(): State {
     usageRev: {},
     memoryRev: {},
     toasts: [],
-    ui: { ...DEFAULT_UI, ...ui, widths: { ...DEFAULT_UI.widths, ...ui.widths } },
+    ui: loadUi(),
   };
 }
 
@@ -231,7 +241,7 @@ type Action =
   | { type: "select.persona"; id: string | null }
   | { type: "dock"; dock: DockMode | null }
   | { type: "dock.width"; mode: DockMode; width: number }
-  | { type: "settings.scope"; scope: "persona" | "swan"; isNew?: boolean }
+  | { type: "settings.new"; isNew: boolean }
   | { type: "settings.focus"; focus: SettingsFocus | null }
   | { type: "draft.set"; key: string; draft: SettingsDraft | null }
   | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
@@ -416,12 +426,8 @@ function reducer(state: State, a: Action): State {
       return { ...state, ui: { ...state.ui, dock: a.dock } };
     case "dock.width":
       return { ...state, ui: { ...state.ui, widths: { ...state.ui.widths, [a.mode]: a.width } } };
-    case "settings.scope":
-      return {
-        ...state,
-        settingsScope: a.scope,
-        settingsNew: a.isNew ?? (a.scope === "persona" ? false : state.settingsNew),
-      };
+    case "settings.new":
+      return { ...state, settingsNew: a.isNew };
     case "settings.focus":
       return { ...state, settingsFocus: a.focus };
     case "draft.set": {
@@ -512,8 +518,10 @@ export interface Actions {
   toggleDock(mode: DockMode): void;
   openDock(mode: DockMode | null): void;
   setDockWidth(mode: DockMode, width: number): void;
-  openSettings(scope: "persona" | "swan", opts?: { isNew?: boolean }): void;
-  setSettingsScope(scope: "persona" | "swan"): void;
+  /** The selected persona's settings, or the new-persona draft. */
+  openSettings(opts?: { isNew?: boolean }): void;
+  /** Swan's own settings: providers, connections and the sandbox. */
+  openSwanSettings(): void;
   /** Open this persona's Connections settings with `rule` added to the draft. */
   addRuleInSettings(personaId: string, connection: string, rule: CredentialRule): void;
   clearSettingsFocus(): void;
@@ -711,11 +719,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       openDock: (dock) => dispatch({ type: "dock", dock }),
       setDockWidth: (mode, width) => dispatch({ type: "dock.width", mode, width }),
-      openSettings: (scope, opts) => {
-        dispatch({ type: "settings.scope", scope, isNew: opts?.isNew ?? false });
+      openSettings: (opts) => {
+        dispatch({ type: "settings.new", isNew: opts?.isNew ?? false });
         dispatch({ type: "dock", dock: "settings" });
       },
-      setSettingsScope: (scope) => dispatch({ type: "settings.scope", scope }),
+      openSwanSettings: () => dispatch({ type: "dock", dock: "swan" }),
       addRuleInSettings: (personaId, connection, rule) => {
         const s = stateRef.current;
         if (personaId !== s.selectedPersonaId) {
@@ -724,7 +732,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         focusSeq += 1;
         dispatch({ type: "settings.focus", focus: { personaId, section: "connections", rule: { connection, rule }, seq: focusSeq } });
-        dispatch({ type: "settings.scope", scope: "persona", isNew: false });
+        dispatch({ type: "settings.new", isNew: false });
         dispatch({ type: "dock", dock: "settings" });
       },
       clearSettingsFocus: () => dispatch({ type: "settings.focus", focus: null }),

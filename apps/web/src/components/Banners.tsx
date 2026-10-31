@@ -49,7 +49,7 @@ export function RuntimeLine() {
     <div className={cls("line-banner", r.busy ? "info" : "warn")} role="status">
       {r.busy ? <Spinner size={14} /> : <IconWarning size={16} />}
       <span>{text}</span>
-      <button type="button" className="btn sm" onClick={() => actions.openSettings("swan")}>
+      <button type="button" className="btn sm" onClick={actions.openSwanSettings}>
         Open Swan settings
       </button>
     </div>

@@ -24,7 +24,7 @@ export function FirstRun() {
                 <IconCheck /> Done
               </span>
             ) : null}
-            <button type="button" className={keyReady ? "btn" : "btn primary"} onClick={() => actions.openSettings("swan")}>
+            <button type="button" className={keyReady ? "btn" : "btn primary"} onClick={actions.openSwanSettings}>
               {keyReady ? "Review keys" : "Add a model key"}
             </button>
           </li>
@@ -36,7 +36,7 @@ export function FirstRun() {
             <button
               type="button"
               className={keyReady ? "btn primary" : "btn"}
-              onClick={() => actions.openSettings("persona", { isNew: true })}
+              onClick={() => actions.openSettings({ isNew: true })}
             >
               Create a persona
             </button>

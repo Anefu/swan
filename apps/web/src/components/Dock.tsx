@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore, type DockMode } from "../store";
+import { DOCK_DEFAULT, useStore, type DockMode } from "../store";
 import { cls } from "../util";
 import { MemoryUsagePane } from "./MemoryUsagePane";
 import { NetworkPane } from "./NetworkPane";
 import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
+import { SwanSettingsPane } from "./SwanSettings";
 
 export const DOCK_MIN = 320;
 const DOCK_LABEL: Record<DockMode, string> = {
   settings: "Settings",
+  swan: "Swan settings",
   memory: "Memory",
   usage: "Usage",
   network: "Network activity",
@@ -32,7 +34,9 @@ const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)
 
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
-  window.setTimeout(() => document.getElementById(`trigger-${mode}`)?.focus(), 0);
+  // Swan settings opens from the persona menu, so focus goes back to its trigger.
+  const trigger = mode === "swan" ? "persona-trigger" : `trigger-${mode}`;
+  window.setTimeout(() => document.getElementById(trigger)?.focus(), 0);
 }
 
 export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
@@ -93,11 +97,13 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
             onKeyDown={onKey}
-            onDoubleClick={() => actions.setDockWidth(mode, 400)}
+            onDoubleClick={() => actions.setDockWidth(mode, DOCK_DEFAULT)}
           />
         )}
         {mode === "settings" ? (
           <SettingsPane onClose={close} />
+        ) : mode === "swan" ? (
+          <SwanSettingsPane onClose={close} />
         ) : mode === "memory" || mode === "usage" ? (
           <MemoryUsagePane key={mode} mode={mode} onClose={close} />
         ) : mode === "network" ? (

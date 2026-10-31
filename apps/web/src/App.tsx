@@ -17,6 +17,9 @@ function useGlobalShortcuts(overlay: boolean) {
         if (s.personas.length === 0) return;
         e.preventDefault();
         actions.openPersonaMenu();
+      } else if (mod && !e.altKey && !e.shiftKey && e.key === ",") {
+        e.preventDefault();
+        actions.openSwanSettings();
       } else if (mod && e.key === ".") {
         const session = conversationSession(s, s.selectedPersonaId);
         if (session && isWorking(session)) {

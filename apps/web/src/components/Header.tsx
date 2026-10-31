@@ -2,9 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
-import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch } from "./icons";
+import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch, IconSliders } from "./icons";
 import { Rail } from "./Rail";
-import { Kbd, MOD } from "./ui";
+import { isMac, Kbd, MOD } from "./ui";
 
 /** Title bar: the persona picker on the left, the panel buttons on the right. */
 export function Header() {
@@ -36,8 +36,10 @@ function PersonaMenu() {
     if (!q) return state.personas;
     return state.personas.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q));
   }, [state.personas, query]);
-  // The last entry is always "New persona".
-  const count = filtered.length + 1;
+  // After the personas: "New persona", then "Swan settings".
+  const newIndex = filtered.length;
+  const swanIndex = filtered.length + 1;
+  const count = filtered.length + 2;
 
   const close = (refocus = true) => {
     setOpen(false);
@@ -79,9 +81,16 @@ function PersonaMenu() {
   }, [active, open, listId]);
 
   const choose = (i: number) => {
-    if (i === filtered.length) {
+    if (i === newIndex) {
       close(false);
-      actions.openSettings("persona", { isNew: true });
+      actions.openSettings({ isNew: true });
+      return;
+    }
+    if (i === swanIndex) {
+      close(false);
+      actions.openSwanSettings();
+      // Into the panel, so Tab continues there and Escape closes it again.
+      window.setTimeout(() => document.querySelector<HTMLElement>('.dock[data-dock="swan"] .pane-head .icon-btn')?.focus(), 0);
       return;
     }
     const p = filtered[i];
@@ -121,6 +130,7 @@ function PersonaMenu() {
     <div className="persona-menu" onKeyDown={onKeyDown}>
       <button
         ref={triggerRef}
+        id="persona-trigger"
         type="button"
         className={cls("persona-trigger", open && "is-open")}
         aria-haspopup="listbox"
@@ -186,17 +196,32 @@ function PersonaMenu() {
             {filtered.length === 0 && <li className="persona-none">No persona matches “{query}”.</li>}
             <li role="separator" className="sep" aria-hidden="true" />
             <li
-              id={`${listId}-${filtered.length}`}
+              id={`${listId}-${newIndex}`}
               role="option"
               aria-selected={false}
-              className={cls("persona-opt new", active === filtered.length && "is-active")}
-              onMouseEnter={() => setActive(filtered.length)}
-              onClick={() => choose(filtered.length)}
+              className={cls("persona-opt new", active === newIndex && "is-active")}
+              onMouseEnter={() => setActive(newIndex)}
+              onClick={() => choose(newIndex)}
             >
               <span className="persona-check">
                 <IconPersonaAdd size={16} />
               </span>
               <span className="persona-opt-main">New persona</span>
+            </li>
+            <li
+              id={`${listId}-${swanIndex}`}
+              role="option"
+              aria-selected={false}
+              aria-keyshortcuts={isMac ? "Meta+Comma" : "Control+Comma"}
+              className={cls("persona-opt new", active === swanIndex && "is-active")}
+              onMouseEnter={() => setActive(swanIndex)}
+              onClick={() => choose(swanIndex)}
+            >
+              <span className="persona-check">
+                <IconSliders size={16} />
+              </span>
+              <span className="persona-opt-main">Swan settings</span>
+              <Kbd>{isMac ? "⌘," : "Ctrl+,"}</Kbd>
             </li>
           </ul>
           <div className="pop-hint">

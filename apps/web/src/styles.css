@@ -1,4 +1,6 @@
-/* Swan · Slate Desk (dark only). Flat surfaces, fine separators, 6–8 px corners. */
+/* Swan · Slate Desk (dark only). Flat surfaces told apart by tone and spacing, not lines; 6–8 px corners.
+   The only lines are focus rings, the invalid-field ring, the drop zone, the selected-tab marker and
+   shadows on floating layers (menus, toasts, the overlay dock). */
 
 :root {
   color-scheme: dark;
@@ -27,8 +29,9 @@
   --diff-add: #9fd9b3;
   --focus: #d6ccf7;
 
-  --sans: "Source Sans 3", "Source Sans Pro", "Segoe UI", "Gill Sans", "Noto Sans", system-ui, -apple-system, sans-serif;
-  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* Geist and Geist Mono are bundled (Fontsource, imported in main.tsx). */
+  --sans: "Geist Variable", "Geist", system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   --r-sm: 6px;
   --r: 8px;
   --r-lg: 10px;
@@ -176,7 +179,7 @@ code {
   display: inline-block;
   min-width: 18px;
   padding: 0 5px;
-  border: 1px solid var(--line-strong);
+  background: var(--raised);
   border-radius: 4px;
   font-size: 11px;
   line-height: 17px;
@@ -193,16 +196,16 @@ code {
   gap: 8px;
   height: 36px;
   padding: 0 14px;
-  background: transparent;
+  background: var(--raised);
   color: var(--ink);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   font-size: 15px;
   cursor: pointer;
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
-  background: var(--raised);
+  background: var(--hover);
 }
 .btn:disabled {
   opacity: 0.55;
@@ -215,7 +218,6 @@ code {
 }
 .btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
 }
@@ -223,14 +225,13 @@ code {
   background: #c3b5ef;
 }
 .btn.danger {
-  border-color: var(--error-line);
   color: var(--error);
 }
 .btn.danger:hover:not(:disabled) {
   background: #352527;
 }
 .btn.accent-outline {
-  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--accent-text);
 }
 
@@ -286,7 +287,7 @@ code {
   min-height: 36px;
   padding: 6px 10px;
   background: var(--sunken);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   color: var(--ink);
   font-size: 15px;
@@ -340,7 +341,7 @@ select optgroup {
   outline-offset: 0;
 }
 .input[aria-invalid="true"] {
-  border-color: var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
 }
 .input::placeholder,
 input::placeholder,
@@ -351,8 +352,8 @@ textarea::placeholder {
 .mini-select select {
   height: 32px;
   padding-left: 10px;
-  background-color: transparent;
-  border: 1px solid var(--line-strong);
+  background-color: var(--sunken);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   color: var(--ink);
   font-size: 14px;
@@ -373,7 +374,7 @@ textarea::placeholder {
   height: 40px;
   padding: 0 12px;
   background: var(--sunken);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   color: var(--ink-2);
 }
@@ -478,13 +479,11 @@ textarea::placeholder {
 
 .card {
   background: var(--surface);
-  border: 1px solid var(--line);
   border-radius: var(--r);
 }
 
 .popover {
   background: var(--raised);
-  border: 1px solid var(--line-strong);
   border-radius: var(--r);
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
 }
@@ -563,7 +562,6 @@ textarea::placeholder {
 }
 .seg-tabs {
   gap: 0;
-  border-bottom: 1px solid var(--line);
   width: 100%;
 }
 .seg-tabs .seg-btn {
@@ -616,7 +614,6 @@ textarea::placeholder {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--surface);
   font-size: 14px;
@@ -626,7 +623,7 @@ textarea::placeholder {
   min-width: 0;
 }
 .line-banner.warn {
-  border-color: var(--attention-line);
+  background: var(--attention-soft);
 }
 .line-banner.warn > svg {
   color: var(--attention);
@@ -652,7 +649,6 @@ textarea::placeholder {
   align-items: flex-start;
   padding: 10px 10px 10px 12px;
   background: var(--raised);
-  border: 1px solid var(--line-strong);
   border-radius: var(--r);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
@@ -660,9 +656,6 @@ textarea::placeholder {
   margin-top: 2px;
   flex: none;
   color: var(--ink-2);
-}
-.toast-error {
-  border-color: var(--error-line);
 }
 .toast-error .toast-icon {
   color: var(--error);
@@ -838,11 +831,9 @@ textarea::placeholder {
   color: var(--ink-2);
   font-size: 14px;
 }
-.persona-list .sep,
+/* A gap between groups, not a rule. */
 .sep {
-  height: 1px;
-  margin: 6px 4px;
-  background: var(--line-strong);
+  height: 12px;
   list-style: none;
 }
 .persona-opt.new {
@@ -950,7 +941,6 @@ textarea::placeholder {
   margin: 0.6em 0;
   padding: 10px 12px;
   background: var(--sunken);
-  border: 1px solid var(--line);
   border-radius: var(--r-sm);
   overflow-x: auto;
   font-size: 13.5px;
@@ -968,14 +958,20 @@ textarea::placeholder {
 }
 .md th,
 .md td {
-  border: 1px solid var(--line);
-  padding: 4px 8px;
+  padding: 6px 12px;
+}
+.md th {
+  color: var(--ink-2);
+  text-align: left;
+}
+.md tr:nth-child(even) td {
+  background: var(--surface);
 }
 .md blockquote {
   margin: 0.6em 0;
-  padding-left: 12px;
-  border-left: 3px solid var(--line-strong);
+  padding-left: 14px;
   color: var(--ink-2);
+  font-style: italic;
 }
 .md-copy {
   position: absolute;
@@ -984,7 +980,7 @@ textarea::placeholder {
   display: inline-flex;
   padding: 4px;
   background: var(--raised);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: 4px;
   color: var(--ink-2);
   cursor: pointer;
@@ -1092,8 +1088,7 @@ button.line:focus-visible .chev,
   flex-direction: column;
   gap: 8px;
   margin: 4px 0 8px 6px;
-  padding-left: 14px;
-  border-left: 1px solid var(--line-strong);
+  padding-left: 18px;
 }
 .agent-peek {
   display: block;
@@ -1115,8 +1110,7 @@ button.line:focus-visible .chev,
 }
 .group-body {
   margin: 2px 0 4px 6px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line-strong);
+  padding-left: 18px;
 }
 .thinking-text {
   white-space: pre-wrap;
@@ -1146,14 +1140,14 @@ button.line:focus-visible .chev,
   flex-direction: column;
   gap: 10px;
   margin: 6px 0 6px 6px;
-  padding: 4px 0 4px 14px;
-  border-left: 2px solid var(--attention);
+  padding: 10px 14px;
+  background: var(--attention-soft);
+  border-radius: var(--r-lg);
   scroll-margin: 96px;
 }
 .prompt:focus-visible {
   outline: 2px solid var(--attention);
   outline-offset: 4px;
-  border-radius: 2px;
 }
 .prompt-q {
   margin: 0;
@@ -1242,7 +1236,7 @@ button.line:focus-visible .chev,
   height: 30px;
   padding: 0 12px;
   background: var(--raised);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: 15px;
   font-size: 13px;
   cursor: pointer;
@@ -1277,17 +1271,12 @@ button.line:focus-visible .chev,
   margin: 0;
   padding: 12px 16px;
   background: var(--sunken);
-  border: 1px solid var(--line);
   border-radius: var(--r-sm);
   font-size: 13.5px;
   line-height: 1.6;
   max-height: 420px;
   overflow: auto;
   white-space: pre;
-}
-
-.code.is-error {
-  border-color: var(--error-line);
 }
 
 .code .sh-prompt {
@@ -1357,8 +1346,8 @@ button.line:focus-visible .chev,
 }
 .composer {
   background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg);
+  border: 1px solid transparent;
+  border-radius: 14px;
 }
 .composer:focus-within {
   border-color: var(--accent);
@@ -1393,13 +1382,13 @@ button.line:focus-visible .chev,
 }
 .composer-meta .mini-select select {
   height: 28px;
-  border-color: transparent;
+  background-color: transparent;
   color: var(--ink-2);
   font-size: 13px;
 }
 .composer-meta .mini-select select:hover,
 .composer-meta .mini-select select:focus-visible {
-  border-color: var(--line-strong);
+  background-color: var(--raised);
   color: var(--ink);
 }
 .round-btn {
@@ -1437,8 +1426,8 @@ button.line:focus-visible .chev,
   gap: 6px;
   height: 30px;
   padding: 0 12px;
-  background: transparent;
-  border: 1px solid var(--attention);
+  background: var(--attention-soft);
+  border: 1px solid transparent;
   border-radius: 15px;
   color: var(--attention);
   font-size: 14px;
@@ -1446,7 +1435,7 @@ button.line:focus-visible .chev,
   white-space: nowrap;
 }
 .decisions-btn:hover {
-  background: var(--attention-soft);
+  background: var(--attention-line);
 }
 .decisions-btn.compact {
   height: 28px;
@@ -1475,7 +1464,6 @@ button.line:focus-visible .chev,
 }
 .menu-group.sep-top {
   margin-top: 6px;
-  border-top: 1px solid var(--line-strong);
   padding-top: 10px;
 }
 .command-opt {
@@ -1524,7 +1512,6 @@ button.line:focus-visible .chev,
   list-style: none;
   margin: 20px 0 0;
   padding: 0;
-  border-top: 1px solid var(--line);
 }
 .first-steps li {
   display: flex;
@@ -1532,7 +1519,6 @@ button.line:focus-visible .chev,
   align-items: center;
   gap: 12px;
   padding: 14px 0;
-  border-bottom: 1px solid var(--line);
 }
 .step-text {
   flex: 1 1 240px;
@@ -1542,6 +1528,7 @@ button.line:focus-visible .chev,
 
 /* ---------- Dock ---------- */
 
+/* Set apart by its tone; the resize grip shows only while it is hovered, focused or dragged. */
 .dock {
   position: relative;
   flex: none;
@@ -1549,7 +1536,6 @@ button.line:focus-visible .chev,
   flex-direction: column;
   min-width: 0;
   background: var(--surface);
-  border-left: 1px solid var(--line);
 }
 .dock.dragging {
   user-select: none;
@@ -1571,13 +1557,15 @@ button.line:focus-visible .chev,
   width: 4px;
   height: 36px;
   margin-top: -18px;
-  border-left: 1px solid var(--line-strong);
-  border-right: 1px solid var(--line-strong);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  opacity: 0;
+  transition: opacity 120ms;
 }
 .dock-handle:hover::after,
 .dock-handle:focus-visible::after,
 .dock.dragging .dock-handle::after {
-  border-color: var(--accent);
+  opacity: 1;
 }
 .dock.overlay {
   position: absolute;
@@ -1645,7 +1633,6 @@ button.line:focus-visible .chev,
 .pane-foot {
   flex: none;
   padding: 12px 20px;
-  border-top: 1px solid var(--line);
   font-size: 14px;
 }
 .pane-foot.quiet {
@@ -1663,9 +1650,9 @@ button.line:focus-visible .chev,
   margin: 0 0 2px;
 }
 
-/* Settings sections */
-.set-section {
-  border-bottom: 1px solid var(--line);
+/* Settings sections: space between, no rules */
+.set-section + .set-section {
+  margin-top: 4px;
 }
 .set-head {
   width: 100%;
@@ -1710,12 +1697,82 @@ button.line:focus-visible .chev,
   font-size: 14px;
   font-weight: 600;
 }
+/* Rows of fields (sub-agents, connection rules) need no box: the fields are already filled. */
 .folder-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 10px;
-  border-bottom: 1px dashed var(--line-soft);
+  gap: 4px;
+}
+/* Folders, grouped by access. A row is one button; the list bleeds into the gutter so its hover
+   fill frames the text, which stays aligned with the rest of the section. */
+.folder-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.folder-list {
+  list-style: none;
+  margin: 0 -10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+  border-radius: var(--r);
+}
+.folder-item:hover {
+  background: var(--raised);
+}
+.folder-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--r);
+  text-align: left;
+  cursor: pointer;
+}
+.folder-name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.folder-remove {
+  display: none;
+}
+.folder-item:hover .folder-remove,
+.folder-item:focus-within .folder-remove {
+  display: inline-flex;
+}
+.folder-edit {
+  margin: 0 -10px;
+}
+.folder-list .folder-edit {
+  margin: 0;
+}
+/* Fields inside an inline form sit on its sunken fill, so they take the surface tone. */
+.inline-form .input,
+.inline-form .mini-select select {
+  background-color: var(--surface);
 }
 /* Inputs in the row share its width equally. */
 .row.even > .input {
@@ -1725,21 +1782,11 @@ button.line:focus-visible .chev,
 .input.short {
   width: 120px;
 }
-.mapping summary {
-  cursor: pointer;
-  color: var(--ink-2);
-  font-size: 14px;
-}
-.mapping ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
 .allowances {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
 }
 .allowances > .btn {
   align-self: flex-start;
@@ -1750,10 +1797,9 @@ button.line:focus-visible .chev,
   flex-direction: column;
   gap: 10px;
   padding: 12px 0 16px;
-  border-bottom: 1px solid var(--line);
 }
-.swan-section:last-child {
-  border-bottom: none;
+.swan-section + .swan-section {
+  margin-top: 4px;
 }
 .swan-section h3 {
   margin: 0;
@@ -1766,17 +1812,12 @@ button.line:focus-visible .chev,
   flex-direction: column;
   gap: 2px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.prov-row:last-child {
-  border-bottom: none;
 }
 .approved-hosts {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
 }
 .cred-list {
   gap: 12px;
@@ -1811,8 +1852,7 @@ button.line:focus-visible .chev,
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  background: var(--canvas);
-  border: 1px solid var(--line);
+  background: var(--sunken);
   border-radius: var(--r);
 }
 .inline-form p {
@@ -1842,8 +1882,7 @@ button.line:focus-visible .chev,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line-strong);
+  padding-left: 18px;
 }
 
 /* Memory */
@@ -1857,13 +1896,13 @@ button.line:focus-visible .chev,
   margin: 0;
   padding: 0;
 }
+/* Rows in the dock: a fill on hover or when open, no rules between them. */
 .mem-row {
-  border-bottom: 1px solid var(--line);
+  border-radius: var(--r);
 }
+.mem-row:hover,
 .mem-row.is-open {
-  background: #242b37;
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-sm);
+  background: var(--raised);
 }
 .mem-row.dim .mem-text {
   color: var(--ink-2);
@@ -1939,7 +1978,9 @@ button.line:focus-visible .chev,
 }
 .cp-section {
   padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+}
+.cp-section + .cp-section {
+  margin-top: 4px;
 }
 .cp-section p {
   margin: 4px 0 0;
@@ -1964,12 +2005,11 @@ button.line:focus-visible .chev,
 }
 .tl-row {
   position: relative;
-  border-bottom: 1px solid var(--line-soft);
+  border-radius: var(--r);
 }
+.tl-row:hover,
 .tl-row.is-open {
-  background: #242b37;
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-sm);
+  background: var(--raised);
 }
 .tl-head {
   width: 100%;
@@ -2014,7 +2054,9 @@ button.line:focus-visible .chev,
 
 .usage-section {
   padding: 8px 0 14px;
-  border-bottom: 1px solid var(--line);
+}
+.usage-section + .usage-section {
+  margin-top: 4px;
 }
 .usage-section p {
   margin: 4px 0;
@@ -2055,7 +2097,6 @@ button.line:focus-visible .chev,
 .mini-table th,
 .mini-table td {
   padding: 5px 6px;
-  border-bottom: 1px solid var(--line-soft);
   text-align: right;
   white-space: nowrap;
 }
@@ -2069,8 +2110,7 @@ button.line:focus-visible .chev,
 .meter {
   height: 10px;
   margin: 8px 0;
-  background: var(--canvas);
-  border: 1px solid var(--line-strong);
+  background: var(--sunken);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -2099,10 +2139,11 @@ button.line:focus-visible .chev,
   padding: 0;
 }
 .net-item {
-  border-bottom: 1px solid var(--line-soft);
+  border-radius: var(--r);
 }
+.net-item:hover,
 .net-item.is-open {
-  background: #242b37;
+  background: var(--raised);
 }
 .net-line {
   width: 100%;
@@ -2115,9 +2156,6 @@ button.line:focus-visible .chev,
   text-align: left;
   font-size: 13.5px;
   cursor: pointer;
-}
-.net-line:hover {
-  background: #232a36;
 }
 .net-time {
   flex: none;
@@ -2222,7 +2260,6 @@ button.line:focus-visible .chev,
   height: 40px;
   padding: 0 4px 0 6px;
   background: var(--raised);
-  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   overflow: hidden;
   font-size: 13px;
@@ -2231,7 +2268,7 @@ button.line:focus-visible .chev,
   padding-right: 10px;
 }
 .att-chip.is-error {
-  border-color: var(--error-line);
+  background: var(--attention-soft);
 }
 .att-thumb {
   width: 28px;
@@ -2287,9 +2324,9 @@ button.line:focus-visible .chev,
 .att-thumb-btn {
   display: block;
   padding: 0;
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
-  background: var(--sunken);
+  background: var(--raised);
   overflow: hidden;
   cursor: zoom-in;
 }
@@ -2364,9 +2401,8 @@ button.line:focus-visible .chev,
   color: var(--ink);
 }
 .rail-btn.is-on {
-  background: var(--hover);
+  background: var(--raised);
   color: var(--ink);
-  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .rail-btn:disabled {
   opacity: 0.4;
@@ -2419,14 +2455,19 @@ button.line:focus-visible .chev,
   width: 100%;
   aspect-ratio: 4 / 3;
   padding: 0;
-  background: var(--sunken);
-  border: 1px solid var(--line-strong);
+  background: var(--raised);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   overflow: hidden;
   cursor: pointer;
 }
+/* The open tile shows its fill as a frame around the image. */
 .att-tile.is-open {
-  border-color: var(--accent);
+  padding: 3px;
+  background: var(--accent-soft);
+}
+.att-tile.is-open img {
+  border-radius: 3px;
 }
 .att-tile img {
   display: block;
@@ -2440,7 +2481,10 @@ button.line:focus-visible .chev,
   padding: 0;
 }
 .att-list-item {
-  border-bottom: 1px solid var(--line-soft);
+  border-radius: var(--r);
+}
+.att-list-item:hover {
+  background: var(--raised);
 }
 .att-line {
   width: 100%;
@@ -2453,9 +2497,6 @@ button.line:focus-visible .chev,
   text-align: left;
   cursor: pointer;
   font-size: 14px;
-}
-.att-line:hover {
-  background: #232a36;
 }
 .att-details {
   display: flex;

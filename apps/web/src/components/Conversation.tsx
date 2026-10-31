@@ -238,7 +238,7 @@ export function Conversation() {
                 <strong>This persona cannot start:</strong> {persona.errors[0]}
                 {persona.errors.length > 1 && ` (and ${persona.errors.length - 1} more)`}
               </span>
-              <button type="button" className="btn sm" onClick={() => actions.openSettings("persona")}>
+              <button type="button" className="btn sm" onClick={() => actions.openSettings()}>
                 Open Settings
               </button>
             </div>
@@ -259,7 +259,7 @@ export function Conversation() {
                 )}
                 Requests that need {unready.missing.length + unready.signIn.length > 1 ? "them" : "it"} go out without the credential.
               </span>
-              <button type="button" className="btn sm" onClick={() => actions.openSettings("swan")}>
+              <button type="button" className="btn sm" onClick={actions.openSwanSettings}>
                 Open connections
               </button>
             </div>

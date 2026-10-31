@@ -184,7 +184,7 @@ function EventDetail({ e }: { e: EgressEvent }) {
         )}
       </dl>
       <div className="row gap wrap">
-        <button type="button" className="link-btn" onClick={() => actions.openSettings("persona")}>
+        <button type="button" className="link-btn" onClick={() => actions.openSettings()}>
           Allowed hosts in Settings <IconArrowRight size={13} />
         </button>
         <CopyButton text={JSON.stringify(e, null, 2)} label="Copy event" showLabel />
