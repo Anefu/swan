@@ -50,6 +50,7 @@ def post(url, model, tools=False):
 class MeterTest(unittest.TestCase):
     def setUp(self):
         self.log = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False).name
+        Path(self.log).write_text("")
 
     def start(self, cap, status=200):
         up, self.seen = upstream(status)
@@ -83,6 +84,14 @@ class MeterTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("spending cap", body["error"]["message"])
         self.assertEqual(len(self.seen), 2)
+
+    def test_counts_spend_already_in_the_log_toward_the_cap(self):
+        Path(self.log).write_text(json.dumps({"model": "claude-sonnet-5-5", "kind": "agent", "cost_usd": 4.5}) + "\n")
+        url = self.start(cap=5)
+        self.assertAlmostEqual(self.meter.spent, 4.5)
+        self.assertEqual(post(url, "claude-sonnet-5-5")[0], 200)  # $7.50 now: over the cap
+        self.assertEqual(post(url, "claude-sonnet-5-5")[0], 400)
+        self.assertEqual(len(self.seen), 1)
 
     def test_passes_upstream_errors_through_for_the_harness_to_retry(self):
         url = self.start(cap=5, status=429)

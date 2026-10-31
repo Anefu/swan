@@ -4,7 +4,8 @@
 Compact-Bench neither records token usage nor limits spend. This runs a local Messages endpoint
 that forwards each request to the real one, records the response's token usage and estimated cost,
 and refuses further requests once the cap is reached. It then runs the command after `--` with
-CB_MESSAGES_URL pointing at itself, and prints the totals when it ends.
+CB_MESSAGES_URL pointing at itself, and prints the totals when it ends. Spend already in the log
+counts toward the cap, so a stopped run can resume with the same log and cap.
 
     python scripts/meter.py --cap 4 --log results/usage.jsonl -- python run.py --track task ...
 
@@ -47,6 +48,20 @@ class Meter:
         self.upstream, self.cap, self.log_path = upstream, cap, log_path
         self.spent, self.requests, self.by = 0.0, 0, {}
         self.lock = threading.Lock()
+        if os.path.exists(log_path):
+            with open(log_path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    self.spent += r.get("cost_usd", 0)
+                    self.requests += 1
+                    key = f"{r.get('kind')} · {r.get('model')}"
+                    n, s = self.by.get(key, (0, 0.0))
+                    self.by[key] = (n + 1, s + r.get("cost_usd", 0))
+            if self.requests:
+                print(f"[meter] resuming: {self.requests} requests, ${self.spent:.3f} already spent", file=sys.stderr, flush=True)
 
     def record(self, model, kind, usage):
         c = cost(model, usage)
