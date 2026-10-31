@@ -10,8 +10,9 @@ pnpm bench run bench/campaigns/pilot.yaml --secrets ~/.persona-harness/secrets.y
 pnpm bench report ~/.swan-bench/results/<campaign>-<time>      # rebuild the summary
 ```
 
-Options: `--only <case-id>` runs one case; `--work <dir>` moves the working directory (default
-`~/.swan-bench`, inside `$HOME` so Podman can mount the run's workspace).
+Options: `--only <case-id>` runs one case; `--variant <name>` runs one variant; `--work <dir>`
+moves the working directory (default `~/.swan-bench`, inside `$HOME` so Podman can mount the run's
+workspace).
 
 ## How a run works
 
@@ -47,8 +48,8 @@ pinned host.
 `summary.md` groups runs by variant (memory) or tier (cost) and configuration: pass rate with a
 95% interval, errors (harness or environment, kept out of the pass rate), total cost, cost per
 success (all spend divided by passes), the share spent on checkpoints and dreaming, tokens,
-rollovers and time. Configs with a small `contextTokens` force early rollovers: a labelled local
-variant, not the model's real context window.
+rollovers and time. A config's `contextTokens` applies to rollover runs only, to force a rollover
+(a labelled local variant); the other variants run on the model's real context window.
 
 ## Writing a case
 

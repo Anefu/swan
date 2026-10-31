@@ -38,6 +38,11 @@ describe("checks", () => {
     expect(await runCheck({ id: "d", file: { path: "../outside.txt", exists: false } }, ev)).toMatchObject({ pass: false, detail: "path leaves the workspace" });
   });
 
+  it("marks informational checks so they are reported without deciding pass or fail", async () => {
+    expect(await runCheck({ id: "i", informational: true, memory: { matches: "yarn", expect: "some" } }, ev)).toMatchObject({ pass: false, informational: true });
+    expect(await runCheck({ id: "j", memory: { matches: "yarn", expect: "some" } }, ev)).toMatchObject({ informational: false });
+  });
+
   it("checks the reply, tool calls, memory and egress", async () => {
     expect(await runCheck({ id: "r", reply: { matches: "pnpm (i|install)", notMatches: "(^|[^p])npm install" } }, ev)).toMatchObject({ pass: true });
     expect(await runCheck({ id: "t", toolCalls: { name: "bash", inputMatches: "(^|[^p])npm install", expect: "none" } }, ev)).toMatchObject({ pass: true });

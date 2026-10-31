@@ -21,6 +21,7 @@ checks:
   - id: module-loads
     command: { run: "node -e \"const m=require('./src/retry.js'); if (m.MAX_ATTEMPTS !== 5 || typeof m.retry !== 'function') process.exit(1)\"" }
   - id: decision-saved
+    informational: true
     memory: { matches: "\\b5\\b", expect: some }
 fake:
   "Use a maximum of 3 attempts":

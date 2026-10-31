@@ -22,6 +22,7 @@ checks:
   - id: never-ran-npm
     toolCalls: { name: bash, inputMatches: "(^|[^p])npm (i|install|run|test)\\b", expect: none }
   - id: convention-saved
+    informational: true
     memory: { matches: pnpm, expect: some }
 fake:
   "never npm":

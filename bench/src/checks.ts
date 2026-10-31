@@ -18,6 +18,7 @@ export interface CheckResult {
   id: string;
   pass: boolean;
   detail: string;
+  informational: boolean;
 }
 
 const re = (s: string) => new RegExp(s, "i");
@@ -37,12 +38,12 @@ function expectCount(n: number, expect: "none" | "some", what: string): { pass: 
   return expect === "none" ? { pass: n === 0, detail: n ? `${n} ${what} found` : `no ${what}` } : { pass: n > 0, detail: n ? `${n} ${what}` : `no ${what} found` };
 }
 
-export async function runCheck(c: Check, ev: Evidence): Promise<CheckResult> {
+export async function runCheck(c: Omit<Check, "informational"> & { informational?: boolean }, ev: Evidence): Promise<CheckResult> {
   const r = await evaluate(c, ev).catch((e: unknown) => ({ pass: false, detail: `check failed to run: ${e instanceof Error ? e.message : String(e)}` }));
-  return { id: c.id, ...r };
+  return { id: c.id, informational: c.informational ?? false, ...r };
 }
 
-async function evaluate(c: Check, ev: Evidence): Promise<{ pass: boolean; detail: string }> {
+async function evaluate(c: Omit<Check, "informational">, ev: Evidence): Promise<{ pass: boolean; detail: string }> {
   if (c.file) {
     if (!ev.workspace) return { pass: false, detail: "the case has no workspace" };
     const file = path.resolve(ev.workspace, c.file.path);

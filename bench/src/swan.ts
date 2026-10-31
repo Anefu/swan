@@ -76,13 +76,15 @@ export async function prepareHome(o: {
   campaign: Campaign;
   config: RunConfig;
   kase: Case;
+  /** Only the rollover variant plans against the config's small context; the others use the model's own. */
+  forceContext: boolean;
   secrets: Record<string, string>;
   caDir: string;
 }): Promise<{ home: string; workspace: string | null }> {
   const home = path.join(o.dir, "home");
   await fs.mkdir(path.join(home, "personas"), { recursive: true, mode: 0o700 });
   const providers = structuredClone(o.campaign.providers);
-  if (o.config.contextTokens) {
+  if (o.config.contextTokens && o.forceContext) {
     const p = (providers[o.config.model.provider] ??= { type: "openai" });
     const models = (p.models ??= {});
     models[o.config.model.id] = { ...models[o.config.model.id], contextTokens: o.config.contextTokens };

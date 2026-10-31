@@ -16,6 +16,7 @@ export interface Row {
   costUsd: number | null;
   costPerSuccess: number | null;
   memoryShare: number | null; // checkpoint + dream spend over all spend
+  observed: number | null; // share of informational checks that held, e.g. "saved to memory"
   meanTokens: number;
   meanRollovers: number;
   meanWallS: number;
@@ -48,6 +49,7 @@ export function summarize(results: RunResult[]): Row[] {
     const costs = rs.map((r) => r.costUsd);
     const costUsd = costs.some((c) => c === null) ? null : sum(costs as number[]);
     const memory = rs.map((r) => (r.costByPurpose.checkpoint ?? 0) + (r.costByPurpose.dream ?? 0));
+    const info = rs.flatMap((r) => r.checks.filter((c) => c.informational));
     return {
       suite,
       group,
@@ -62,6 +64,7 @@ export function summarize(results: RunResult[]): Row[] {
       costUsd,
       costPerSuccess: costUsd === null || pass === 0 ? null : costUsd / pass,
       memoryShare: costUsd ? sum(memory) / costUsd : null,
+      observed: info.length ? info.filter((c) => c.pass).length / info.length : null,
       meanTokens: mean(rs.map((r) => r.tokens.input + r.tokens.cacheRead + r.tokens.cacheWrite + r.tokens.output)),
       meanRollovers: mean(rs.map((r) => r.rollovers)),
       meanWallS: mean(rs.map((r) => r.wallMs / 1000)),
@@ -80,15 +83,16 @@ export function markdown(campaign: string, rows: Row[], notes: string[]): string
     lines.push(
       `## ${suite === "memory" ? "Memory" : "Cost per task"}`,
       "",
-      `| ${suite === "memory" ? "Variant" : "Tier"} | Config | Model | Pass | 95% CI | Errors | Cost | Per success | Memory share | Tokens/run | Rollovers | Time/run |`,
-      "|---|---|---|---|---|---|---|---|---|---|---|---|",
+      `| ${suite === "memory" ? "Variant" : "Tier"} | Config | Model | Pass | 95% CI | Errors | Observed | Cost | Per success | Memory share | Tokens/run | Rollovers | Time/run |`,
+      "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
       ...rs.map(
         (r) =>
-          `| ${r.group} | ${r.config} | ${r.model} | ${r.pass}/${r.pass + r.fail} (${pct(r.passRate)}) | ${r.ci95 ? `${pct(r.ci95[0])}–${pct(r.ci95[1])}` : "–"} | ${r.error} | ${usd(r.costUsd)} | ${usd(r.costPerSuccess)} | ${pct(r.memoryShare)} | ${Math.round(r.meanTokens).toLocaleString("en-US")} | ${r.meanRollovers.toFixed(1)} | ${Math.round(r.meanWallS)}s |`,
+          `| ${r.group} | ${r.config} | ${r.model} | ${r.pass}/${r.pass + r.fail} (${pct(r.passRate)}) | ${r.ci95 ? `${pct(r.ci95[0])}–${pct(r.ci95[1])}` : "–"} | ${r.error} | ${pct(r.observed)} | ${usd(r.costUsd)} | ${usd(r.costPerSuccess)} | ${pct(r.memoryShare)} | ${Math.round(r.meanTokens).toLocaleString("en-US")} | ${r.meanRollovers.toFixed(1)} | ${Math.round(r.meanWallS)}s |`,
       ),
       "",
     );
   }
+  lines.push("Observed: the share of informational checks that held (for example, a fact saved to memory). They are reported, not counted in Pass.", "");
   if (notes.length) lines.push("## Notes", "", ...notes.map((n) => `- ${n}`), "");
   return lines.join("\n");
 }

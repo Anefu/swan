@@ -57,14 +57,20 @@ async function runCampaign(file: string, args: string[]) {
   const only = flag(args, "--only");
   const cases = only ? all.filter((k) => k.id === only) : all;
   if (!cases.length) throw new Error(`no case ${only}`);
+  const variant = flag(args, "--variant");
   const work = expand(flag(args, "--work") ?? "~/.swan-bench");
   const secretsFile = flag(args, "--secrets") ? expand(flag(args, "--secrets")!) : undefined;
   for (const c of campaign.configs)
     if (campaign.cap === 0 && !c.allowUnpriced) throw new Error(`config ${c.id}: the cap is $0, so only unpriced (scripted or local) models may run`);
 
   const plan = campaign.configs.flatMap((config) =>
-    cases.flatMap((kase) => variantsOf(kase).flatMap((variant) => Array.from({ length: campaign.trials }, (_, i) => ({ config, kase, variant, trial: i + 1 })))),
+    cases.flatMap((kase) =>
+      variantsOf(kase)
+        .filter((v) => !variant || v === variant)
+        .flatMap((v) => Array.from({ length: campaign.trials }, (_, i) => ({ config, kase, variant: v, trial: i + 1 }))),
+    ),
   );
+  if (!plan.length) throw new Error("nothing to run: check --only and --variant");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const dir = path.join(work, "results", `${campaign.name}-${stamp}`);
   const caDir = path.join(work, ".state", "ca");
@@ -111,7 +117,7 @@ async function runCampaign(file: string, args: string[]) {
     stopFake();
     await cleanupPodman(true);
   }
-  if (campaign.configs.some((c) => c.contextTokens)) notes.push("Configs with contextTokens force early rollovers: a local variant, not the model's real context window.");
+  if (campaign.configs.some((c) => c.contextTokens)) notes.push("Rollover runs use the config's small contextTokens to force a rollover (a local variant); other variants use the model's real context window.");
   console.log("\n" + (await writeReport(dir, campaign.name, notes)));
 }
 
@@ -119,7 +125,7 @@ async function main() {
   const [cmd, target, ...args] = process.argv.slice(2);
   if (cmd === "run" && target) return runCampaign(expand(target), args);
   if (cmd === "report" && target) return void console.log(await writeReport(expand(target), path.basename(target)));
-  console.log("usage: bench run <campaign.yaml> [--secrets <secrets.yaml>] [--work <dir>] [--only <case-id>]\n       bench report <results-dir>");
+  console.log("usage: bench run <campaign.yaml> [--secrets <secrets.yaml>] [--work <dir>] [--only <case-id>] [--variant <name>]\n       bench report <results-dir>");
   process.exitCode = 1;
 }
 

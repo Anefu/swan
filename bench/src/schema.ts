@@ -9,6 +9,8 @@ import { z } from "zod";
 const CheckSchema = z
   .object({
     id: z.string().min(1),
+    /** Reported as an observation (such as "saved to memory") without deciding pass or fail. */
+    informational: z.boolean().default(false),
     /** A file in the workspace copy: must exist, contain or match, or must not contain. */
     file: z
       .object({ path: z.string(), exists: z.boolean().optional(), contains: z.string().optional(), notContains: z.string().optional(), matches: z.string().optional() })
@@ -80,7 +82,7 @@ const ConfigSchema = z.strictObject({
   id: z.string().regex(/^[a-z0-9-]+$/),
   model: z.object({ provider: z.string(), id: z.string(), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }),
   rolloverStrategy: z.enum(["full", "minimal", "retrieval", "none"]).default("full"),
-  /** Context window to plan rollovers against; small values force rollovers (a labelled local variant). */
+  /** Context window for the rollover variant only, small enough that one fill message forces a rollover (a labelled local variant). */
   contextTokens: z.number().int().positive().optional(),
   memoryBrief: z.boolean().default(true),
   /** Run /dream between conversations in the newConversation variant. */

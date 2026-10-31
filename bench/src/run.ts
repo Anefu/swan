@@ -144,7 +144,15 @@ export async function runOne(o: {
 }): Promise<RunResult> {
   const started = Date.now();
   await fs.mkdir(o.dir, { recursive: true });
-  const { home, workspace } = await prepareHome({ dir: o.dir, campaign: o.campaign, config: o.config, kase: o.kase, secrets: o.secrets, caDir: o.caDir });
+  const { home, workspace } = await prepareHome({
+    dir: o.dir,
+    campaign: o.campaign,
+    config: o.config,
+    kase: o.kase,
+    forceContext: o.variant === "rollover",
+    secrets: o.secrets,
+    caDir: o.caDir,
+  });
   const swan = new Swan(home, path.join(o.dir, "swan.log"));
   const ctx: Ctx = { swan, home, kase: o.kase, config: o.config, cap: o.campaign.cap, spentBefore: o.spentBefore, denied: 0 };
   const sessions: string[] = [];
@@ -220,7 +228,7 @@ export async function runOne(o: {
     if (!result.error) {
       const ev: Evidence = { workspace, transcripts, memory, egress, imageTag };
       for (const c of o.kase.checks) result.checks.push(await runCheck(c, ev));
-      result.status = result.checks.every((c) => c.pass) ? "pass" : "fail";
+      result.status = result.checks.every((c) => c.pass || c.informational) ? "pass" : "fail";
     }
   } catch (e) {
     result.error ??= `collecting results: ${e instanceof Error ? e.message : String(e)}`;
