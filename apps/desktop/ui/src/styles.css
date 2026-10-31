@@ -870,14 +870,6 @@ textarea::placeholder {
   overflow-y: auto;
   padding: 24px 0 12px;
 }
-.convo-title {
-  margin: 0 0 16px;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
 .column > .line-banner {
   margin-bottom: 14px;
 }
@@ -2192,9 +2184,6 @@ button.line:focus-visible .chev,
   }
   .main > .line-banner {
     margin: 10px 16px 0;
-  }
-  .convo-title {
-    font-size: 24px;
   }
   .user-block {
     max-width: 92%;

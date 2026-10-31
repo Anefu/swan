@@ -154,7 +154,6 @@ export function Conversation() {
   // Working, streaming and approvals are shown in the transcript; the line above the composer is for other states.
   const statusRaw = items.length === 0 && session?.status === "stopped" ? null : sessionStatusLine(session);
   const status = session?.status === "running" || session?.status === "starting" ? null : statusRaw;
-  const title = session?.title?.trim() || persona.name;
   const queued = session?.queued ?? 0;
   const backgroundText =
     background.length === 0
@@ -230,7 +229,8 @@ export function Conversation() {
       )}
       <div className="convo-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="column" ref={contentRef}>
-          <h1 className="convo-title">{title}</h1>
+          {/* The header names the persona; the heading is for screen readers only. */}
+          <h1 className="sr-only">{persona.name}</h1>
           {persona.errors.length > 0 && (
             <div className="line-banner warn" role="status">
               <IconWarning size={16} />
