@@ -117,7 +117,6 @@ async function runCampaign(file: string, args: string[]) {
     stopFake();
     await cleanupPodman(true);
   }
-  if (campaign.configs.some((c) => c.contextTokens)) notes.push("Rollover runs use the config's small contextTokens to force a rollover (a local variant); other variants use the model's real context window.");
   console.log("\n" + (await writeReport(dir, campaign.name, notes)));
 }
 

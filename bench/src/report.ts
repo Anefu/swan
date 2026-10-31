@@ -87,7 +87,7 @@ export function markdown(campaign: string, rows: Row[], notes: string[]): string
       "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
       ...rs.map(
         (r) =>
-          `| ${r.group} | ${r.config} | ${r.model} | ${r.pass}/${r.pass + r.fail} (${pct(r.passRate)}) | ${r.ci95 ? `${pct(r.ci95[0])}–${pct(r.ci95[1])}` : "–"} | ${r.error} | ${pct(r.observed)} | ${usd(r.costUsd)} | ${usd(r.costPerSuccess)} | ${pct(r.memoryShare)} | ${Math.round(r.meanTokens).toLocaleString("en-US")} | ${r.meanRollovers.toFixed(1)} | ${Math.round(r.meanWallS)}s |`,
+          `| ${r.group} | ${r.config} | ${r.model} | ${r.pass}/${r.pass + r.fail} (${pct(r.passRate)}) | ${r.ci95 ? `${pct(r.ci95[0])}–${pct(r.ci95[1])}` : "–"} | ${r.error} | ${pct(r.observed)} | ${usd(r.costUsd)} | ${r.pass === 0 ? "no passes" : usd(r.costPerSuccess)} | ${pct(r.memoryShare)} | ${Math.round(r.meanTokens).toLocaleString("en-US")} | ${r.meanRollovers.toFixed(1)} | ${Math.round(r.meanWallS)}s |`,
       ),
       "",
     );
@@ -107,7 +107,10 @@ export async function collect(dir: string): Promise<RunResult[]> {
 }
 
 export async function writeReport(dir: string, campaign: string, notes: string[] = []): Promise<string> {
-  const rows = summarize(await collect(dir));
+  const results = await collect(dir);
+  const rows = summarize(results);
+  if (results.some((r) => r.variant === "rollover"))
+    notes = [...notes, "Rollover runs use the config's small contextTokens to force a rollover (a local variant); other variants use the model's real context window."];
   const md = markdown(campaign, rows, notes);
   await fs.writeFile(path.join(dir, "summary.json"), JSON.stringify(rows, null, 2));
   await fs.writeFile(path.join(dir, "summary.md"), md);
