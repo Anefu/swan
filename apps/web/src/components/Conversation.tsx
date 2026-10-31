@@ -2,11 +2,23 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { ChatItem, SessionSummary } from "@ph/shared";
 import { describeTool, type ToolItem } from "../receipts";
 import { conversationSession, useSelectedPersona, useStore } from "../store";
-import { sessionStatusLine } from "../status";
+import { sessionStatusLine, unreadyCredentials } from "../status";
 import { cls, useNow } from "../util";
 import { Composer } from "./Composer";
 import { IconArrowRight, IconWarning } from "./icons";
-import { AgentLine, AssistantText, Dots, HarnessReceipt, NoticeLine, Thinking, ToolGroup, ToolLine, UserMessage } from "./Items";
+import {
+  AgentLine,
+  AssistantText,
+  CredentialBlockedLine,
+  Dots,
+  HarnessReceipt,
+  NoticeLine,
+  SignInCard,
+  Thinking,
+  ToolGroup,
+  ToolLine,
+  UserMessage,
+} from "./Items";
 import { Spinner } from "./ui";
 
 /** Remembered scroll offsets per persona. */
@@ -128,6 +140,7 @@ export function Conversation() {
   const statusRaw = items.length === 0 && session?.status === "stopped" ? null : sessionStatusLine(session);
   const status = session?.status === "running" || session?.status === "starting" ? null : statusRaw;
   const title = session?.title?.trim() || persona.name;
+  const unready = unreadyCredentials(state, persona);
 
   let body: ReactNode;
   if (error && !transcript) {
@@ -208,16 +221,24 @@ export function Conversation() {
               </button>
             </div>
           )}
-          {persona.missingCredentials.length > 0 && (
+          {unready.missing.length + unready.signIn.length > 0 && (
             <div className="line-banner warn" role="status">
               <IconWarning size={16} />
               <span>
-                Missing credential{persona.missingCredentials.length > 1 ? "s" : ""}:{" "}
-                <span className="mono">{persona.missingCredentials.join(", ")}</span>. Requests that need{" "}
-                {persona.missingCredentials.length > 1 ? "them" : "it"} will fail.
+                {unready.missing.length > 0 && (
+                  <>
+                    No value for <span className="mono">{unready.missing.join(", ")}</span>.{" "}
+                  </>
+                )}
+                {unready.signIn.length > 0 && (
+                  <>
+                    <span className="mono">{unready.signIn.join(", ")}</span> {unready.signIn.length > 1 ? "need" : "needs"} a sign-in.{" "}
+                  </>
+                )}
+                Requests that need {unready.missing.length + unready.signIn.length > 1 ? "them" : "it"} go out without the credential.
               </span>
               <button type="button" className="btn sm" onClick={() => actions.openSettings("swan")}>
-                Add value
+                Open connections
               </button>
             </div>
           )}
@@ -307,6 +328,12 @@ function renderItems(all: ChatItem[], sid: string, persona: Parameters<typeof To
         break;
       case "receipt":
         out.push(<HarnessReceipt key={it.id} item={it} />);
+        break;
+      case "sign_in":
+        out.push(<SignInCard key={it.id} item={it} />);
+        break;
+      case "credential_blocked":
+        out.push(<CredentialBlockedLine key={it.id} item={it} persona={persona} />);
         break;
     }
     i++;

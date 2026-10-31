@@ -55,6 +55,11 @@ export function describeTool(item: ToolItem): ReceiptText {
       };
     case "network_access":
       return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
+    case "credential_use": {
+      const op = str(item.input, ["operation"]);
+      const cred = str(item.input, ["credential"]);
+      return { verb: "Credential", target: op && cred ? `${op} with ${cred}` : item.inputPreview, result: null, icon: "globe" };
+    }
     case "grep":
     case "glob": {
       const pattern = str(item.input, ["pattern"]) ?? item.inputPreview;
@@ -184,6 +189,7 @@ const NOUNS: Record<string, [string, string, string]> = {
   Called: ["called", "tool", "tools"],
   "Loaded skill": ["loaded", "skill", "skills"],
   Network: ["requested access to", "host", "hosts"],
+  Credential: ["asked to use", "credential", "credentials"],
   Agent: ["ran", "agent", "agents"],
 };
 

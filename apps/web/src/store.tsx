@@ -3,10 +3,12 @@ import type {
   ApprovalBody,
   AttachmentMeta,
   ChatItem,
-  CredentialStatus,
+  ConnectionStatus,
+  CredentialRule,
   CredentialUpsert,
   Effort,
   EgressEvent,
+  MigrationNote,
   ModelOption,
   PendingApproval,
   PersonaConfigView,
@@ -18,7 +20,7 @@ import type {
   SessionSummary,
   SkillSummary,
 } from "@ph/shared";
-import { api, ApiError, configureApi, probeToken, readToken, uploadAttachment, type ApiHealth } from "./api";
+import { api, ApiError, configureApi, probeToken, readToken, uploadAttachment, type ApiHealth, type ConnectionAction } from "./api";
 import { errorMessage, isMissingEndpoint, loadPref, savePref } from "./util";
 import { EventSocket, wsUrl, type WsState } from "./ws";
 
@@ -72,8 +74,14 @@ export interface SettingsDraft {
   newId?: string;
   result?: SaveResult | null;
   error?: string | null;
-  /** Model-provider keys removed from the loaded config; personas never need them. */
-  removedKeys?: string[];
+}
+
+/** Open persona Settings at a section, optionally adding a credential rule to the draft (never saved by itself). */
+export interface SettingsFocus {
+  personaId: string;
+  section: "connections";
+  rule?: { connection: string; rule: CredentialRule };
+  seq: number;
 }
 
 export interface DraftAttachment {
@@ -110,8 +118,10 @@ export interface State {
   runtime: RuntimeStatus | null;
   providers: ProviderStatus[];
   personas: PersonaSummary[];
-  credentials: CredentialStatus[];
+  connections: ConnectionStatus[];
+  /** Static credential ref -> when it last changed, for the "reloaded, no restart" line. */
   credentialFlash: Record<string, number>;
+  migration: MigrationNote | null;
   skills: SkillSummary[];
   /** null = not loaded or the server has no /api/models. */
   models: ModelOption[] | null;
@@ -127,6 +137,7 @@ export interface State {
   settingsScope: "persona" | "swan";
   /** Settings persona scope shows the new-persona draft instead of the selected persona. */
   settingsNew: boolean;
+  settingsFocus: SettingsFocus | null;
   drafts: Record<string, SettingsDraft>;
   memoryPane: Record<string, MemoryPaneState>;
   composer: Record<string, string>;
@@ -159,8 +170,9 @@ function initState(): State {
     runtime: null,
     providers: [],
     personas: [],
-    credentials: [],
+    connections: [],
     credentialFlash: {},
+    migration: null,
     skills: [],
     models: null,
     approvals: null,
@@ -172,6 +184,7 @@ function initState(): State {
     selectedPersonaId: loadPref<{ id: string | null }>(SELECTION_KEY, { id: null }).id,
     settingsScope: "persona",
     settingsNew: false,
+    settingsFocus: null,
     drafts: {},
     memoryPane: {},
     composer: loadPref<Record<string, string>>(COMPOSER_KEY, {}),
@@ -197,9 +210,10 @@ type Action =
   | { type: "providers"; providers: ProviderStatus[] }
   | { type: "personas"; personas: PersonaSummary[] }
   | { type: "persona.upsert"; persona: PersonaSummary }
-  | { type: "credentials"; credentials: CredentialStatus[]; changed?: string[] }
-  | { type: "credential.upsert"; credential: CredentialStatus }
-  | { type: "credential.remove"; name: string }
+  | { type: "connections"; connections: ConnectionStatus[]; changed?: string[] }
+  | { type: "connection.upsert"; connection: ConnectionStatus; changed?: string }
+  | { type: "connection.remove"; name: string }
+  | { type: "migration"; note: MigrationNote | null }
   | { type: "skills"; skills: SkillSummary[] }
   | { type: "models"; models: ModelOption[] | null }
   | { type: "approvals"; approvals: PendingApproval[] | null }
@@ -218,6 +232,7 @@ type Action =
   | { type: "dock"; dock: DockMode | null }
   | { type: "dock.width"; mode: DockMode; width: number }
   | { type: "settings.scope"; scope: "persona" | "swan"; isNew?: boolean }
+  | { type: "settings.focus"; focus: SettingsFocus | null }
   | { type: "draft.set"; key: string; draft: SettingsDraft | null }
   | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
   | { type: "composer"; personaId: string; text: string }
@@ -290,24 +305,27 @@ function reducer(state: State, a: Action): State {
         : [...state.personas, a.persona];
       return { ...state, personas };
     }
-    case "credentials": {
+    case "connections": {
       let flash = state.credentialFlash;
       if (a.changed && a.changed.length > 0) {
         const now = Date.now();
         flash = { ...flash };
         for (const n of a.changed) flash[n] = now;
       }
-      return { ...state, credentials: a.credentials, credentialFlash: flash };
+      return { ...state, connections: a.connections, credentialFlash: flash };
     }
-    case "credential.upsert": {
-      const exists = state.credentials.some((c) => c.name === a.credential.name);
-      const credentials = exists
-        ? state.credentials.map((c) => (c.name === a.credential.name ? a.credential : c))
-        : [...state.credentials, a.credential].sort((x, y) => x.name.localeCompare(y.name));
-      return { ...state, credentials, credentialFlash: { ...state.credentialFlash, [a.credential.name]: Date.now() } };
+    case "connection.upsert": {
+      const exists = state.connections.some((c) => c.name === a.connection.name);
+      const connections = exists
+        ? state.connections.map((c) => (c.name === a.connection.name ? a.connection : c))
+        : [...state.connections, a.connection].sort((x, y) => x.name.localeCompare(y.name));
+      const credentialFlash = a.changed ? { ...state.credentialFlash, [a.changed]: Date.now() } : state.credentialFlash;
+      return { ...state, connections, credentialFlash };
     }
-    case "credential.remove":
-      return { ...state, credentials: state.credentials.filter((c) => c.name !== a.name) };
+    case "connection.remove":
+      return { ...state, connections: state.connections.filter((c) => c.name !== a.name) };
+    case "migration":
+      return { ...state, migration: a.note };
     case "skills":
       return { ...state, skills: a.skills };
     case "models":
@@ -404,6 +422,8 @@ function reducer(state: State, a: Action): State {
         settingsScope: a.scope,
         settingsNew: a.isNew ?? (a.scope === "persona" ? false : state.settingsNew),
       };
+    case "settings.focus":
+      return { ...state, settingsFocus: a.focus };
     case "draft.set": {
       const drafts = { ...state.drafts };
       if (a.draft) drafts[a.key] = a.draft;
@@ -463,6 +483,8 @@ function reducer(state: State, a: Action): State {
 }
 
 let attachSeq = 0;
+/** Never reused, so each "Add rule…" reopens the section even after the previous focus was cleared. */
+let focusSeq = 0;
 const uploads = new Map<string, () => void>();
 
 function readBase64(file: File): Promise<string> {
@@ -492,6 +514,9 @@ export interface Actions {
   setDockWidth(mode: DockMode, width: number): void;
   openSettings(scope: "persona" | "swan", opts?: { isNew?: boolean }): void;
   setSettingsScope(scope: "persona" | "swan"): void;
+  /** Open this persona's Connections settings with `rule` added to the draft. */
+  addRuleInSettings(personaId: string, connection: string, rule: CredentialRule): void;
+  clearSettingsFocus(): void;
   setDraft(key: string, draft: SettingsDraft | null): void;
   setMemoryPane(personaId: string, patch: Partial<MemoryPaneState>): void;
   openUsage(): void;
@@ -519,8 +544,13 @@ export interface Actions {
   /** These throw so forms can show the error inline. */
   saveConfig(personaId: string, view: PersonaConfigView): Promise<SaveResult>;
   createPersona(id: string, yaml: string): Promise<PersonaSummary>;
-  putCredential(name: string, body: CredentialUpsert): Promise<CredentialStatus>;
-  deleteCredential(name: string): Promise<void>;
+  putCredential(conn: string, name: string, body: CredentialUpsert): Promise<ConnectionStatus>;
+  deleteCredential(conn: string, name: string): Promise<void>;
+  setProviderKey(provider: string, value: string): Promise<void>;
+  removeProviderKey(provider: string): Promise<void>;
+  /** Reports errors itself; false when the action failed. */
+  connectionAction(conn: string, action: ConnectionAction): Promise<boolean>;
+  dismissMigration(): Promise<void>;
   rebuildRuntime(): Promise<void>;
 }
 
@@ -622,18 +652,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const loadAll = async () => {
-      const [runtime, providers, personas, credentials, egress, sessions, skills] = await Promise.allSettled([
+      const [runtime, providers, personas, connections, egress, sessions, skills, migration] = await Promise.allSettled([
         api.runtime(),
         api.providers(),
         api.personas(),
-        api.credentials(),
+        api.connections(),
         api.egress({ limit: 1000 }),
         api.sessions(),
         api.skills(),
+        api.migrationNote(),
       ]);
       if (runtime.status === "fulfilled") dispatch({ type: "runtime", runtime: runtime.value });
       if (providers.status === "fulfilled") dispatch({ type: "providers", providers: providers.value });
-      if (credentials.status === "fulfilled") dispatch({ type: "credentials", credentials: credentials.value });
+      if (connections.status === "fulfilled") dispatch({ type: "connections", connections: connections.value });
+      if (migration.status === "fulfilled") dispatch({ type: "migration", note: migration.value ?? null });
       if (egress.status === "fulfilled") dispatch({ type: "egress.merge", events: egress.value });
       if (sessions.status === "fulfilled") dispatch({ type: "sessions", sessions: sessions.value });
       if (skills.status === "fulfilled") dispatch({ type: "skills", skills: skills.value });
@@ -682,6 +714,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "dock", dock: "settings" });
       },
       setSettingsScope: (scope) => dispatch({ type: "settings.scope", scope }),
+      addRuleInSettings: (personaId, connection, rule) => {
+        const s = stateRef.current;
+        if (personaId !== s.selectedPersonaId) {
+          dispatch({ type: "select.persona", id: personaId });
+          if (!conversationOf(personaId)) void loadConversation(personaId);
+        }
+        focusSeq += 1;
+        dispatch({ type: "settings.focus", focus: { personaId, section: "connections", rule: { connection, rule }, seq: focusSeq } });
+        dispatch({ type: "settings.scope", scope: "persona", isNew: false });
+        dispatch({ type: "dock", dock: "settings" });
+      },
+      clearSettingsFocus: () => dispatch({ type: "settings.focus", focus: null }),
       setDraft: (key, draft) => dispatch({ type: "draft.set", key, draft }),
       setMemoryPane: (personaId, patch) => dispatch({ type: "memoryPane", personaId, patch }),
       openUsage: () => dispatch({ type: "dock", dock: "usage" }),
@@ -812,17 +856,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         void loadConversation(persona.id);
         return persona;
       },
-      putCredential: async (name, body) => {
-        const credential = await api.putCredential(name, body);
-        dispatch({ type: "credential.upsert", credential });
-        void refreshProviders();
-        void refreshModels();
-        return credential;
+      putCredential: async (conn, name, body) => {
+        const connection = await api.putCredential(conn, name, body);
+        dispatch({ type: "connection.upsert", connection, changed: `${conn}/${name}` });
+        return connection;
       },
-      deleteCredential: async (name) => {
-        await api.deleteCredential(name);
-        dispatch({ type: "credential.remove", name });
-        void refreshProviders();
+      deleteCredential: async (conn, name) => {
+        const res = await api.deleteCredential(conn, name);
+        if ("name" in res) dispatch({ type: "connection.upsert", connection: res });
+        else dispatch({ type: "connection.remove", name: conn });
+      },
+      setProviderKey: async (provider, value) => {
+        await api.setProviderKey(provider, value);
+        await refreshProviders();
+        void refreshModels();
+      },
+      removeProviderKey: async (provider) => {
+        await api.removeProviderKey(provider);
+        await refreshProviders();
+        void refreshModels();
+      },
+      connectionAction: async (conn, action) => {
+        try {
+          dispatch({ type: "connection.upsert", connection: await api.connectionAction(conn, action) });
+          return true;
+        } catch (e) {
+          const what = { login: "Sign-in did not start", renew: "Renewal failed", cancel: "Could not cancel the sign-in", logout: "Sign-out failed" }[action];
+          reportError(e, what);
+          return false;
+        }
+      },
+      dismissMigration: async () => {
+        try {
+          await api.dismissMigrationNote();
+          dispatch({ type: "migration", note: null });
+        } catch (e) {
+          reportError(e, "Could not dismiss the note");
+        }
       },
       rebuildRuntime: async () => {
         try {
@@ -869,12 +939,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       case "personas.updated":
         dispatch({ type: "personas", personas: ev.personas });
         break;
-      case "credentials.updated":
-        dispatch({ type: "credentials", credentials: ev.credentials, changed: ev.changed });
-        if (ev.changed.length > 0) actions.toast("success", `${ev.changed.join(", ")} reloaded, no restart`, "Credentials");
-        void actions.refreshProviders();
-        void actions.refreshModels();
+      case "connections.updated": {
+        // Command connections renew on their own; only hand-edited (static) values are worth a toast.
+        const known = [...ev.connections, ...stateRef.current.connections];
+        const isStatic = (ref: string) => known.find((c) => c.name === ref.slice(0, ref.indexOf("/")))?.type !== "command";
+        const changed = ev.changed.filter(isStatic);
+        dispatch({ type: "connections", connections: ev.connections, changed });
+        if (changed.length > 0) actions.toast("success", `${changed.join(", ")} reloaded, no restart`, "Connections");
         break;
+      }
       case "session.updated":
         dispatch({ type: "session.upsert", session: ev.session });
         break;
@@ -894,6 +967,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         break;
       case "approvals.updated":
         dispatch({ type: "approvals", approvals: ev.approvals });
+        break;
+      case "providers.updated":
+        dispatch({ type: "providers", providers: ev.providers });
         break;
       case "usage.updated":
         dispatch({ type: "rev", which: "usageRev", personaId: ev.personaId });

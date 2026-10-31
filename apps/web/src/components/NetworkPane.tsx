@@ -13,6 +13,11 @@ const DECISION: Record<EgressDecision, { label: string; explain: string }> = {
   blocked: { label: "Blocked", explain: "Stopped by the proxy." },
 };
 
+/** "sent without stub/eks · no rule" */
+function deniedLine(d: NonNullable<EgressEvent["denied"]>[number]): string {
+  return `sent without ${d.credential} · ${d.rule ? `rule "${d.rule}"` : "no rule"}`;
+}
+
 function hostLabel(e: EgressEvent): string {
   const port = e.port === 443 || e.port === 80 ? "" : `:${e.port}`;
   if (e.path) return `${e.host}${port}${e.path}`;
@@ -107,6 +112,11 @@ export function NetworkPane({ onClose }: { onClose: () => void }) {
                       <span className="net-host mono">
                         <span className="muted">{e.method}</span> {hostLabel(e)}
                       </span>
+                      {e.denied?.map((d) => (
+                        <span key={d.credential} className="net-host muted">
+                          {deniedLine(d)}
+                        </span>
+                      ))}
                     </span>
                     <span className="net-status mono">{e.status ?? "—"}</span>
                     <span className={cls("net-decision", e.decision === "blocked" ? "tone-error" : e.decision === "injected" ? "tone-accent" : "tone-muted")}>
@@ -143,6 +153,12 @@ function EventDetail({ e }: { e: EgressEvent }) {
           "No credentials were sent."
         )}
       </p>
+      {e.denied?.map((d) => (
+        <p key={d.credential} className="muted">
+          Sent without <span className="mono">{d.credential}</span>: <span className="mono">{d.operation}</span> ·{" "}
+          {d.rule ? <>rule <span className="mono">“{d.rule}”</span></> : "no rule allows it"}.
+        </p>
+      ))}
       <dl className="facts small">
         <dt>Time</dt>
         <dd>{fullTime(e.ts)}</dd>

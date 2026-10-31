@@ -13,6 +13,7 @@ import {
 import { attachmentFileUrl } from "../api";
 import { attachmentPreviews, useStore } from "../store";
 import { basename, cls, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
+import { DeviceCodePanel } from "./DeviceCode";
 import { IconChevronRight, IconFile } from "./icons";
 import { Markdown } from "./Markdown";
 import { CopyButton, Fold, Kbd, Spinner } from "./ui";
@@ -208,6 +209,122 @@ export function HarnessReceipt({ item }: { item: Extract<ChatItem, { kind: "rece
   );
 }
 
+// ---------- Connections ----------
+
+/** A command connection needs a sign-in. The code is for the user; the agent never sees it. */
+export function SignInCard({ item }: { item: Extract<ChatItem, { kind: "sign_in" }> }) {
+  const { actions } = useStore();
+  const [busy, setBusy] = useState(false);
+  const active = item.state === "starting" || item.state === "waiting";
+  if (!active) {
+    const failed = item.state === "failed";
+    const text =
+      item.state === "done"
+        ? `Signed in to ${item.connection}`
+        : item.state === "cancelled"
+          ? `Sign-in to ${item.connection} cancelled`
+          : `Sign-in to ${item.connection} failed${item.message ? `: ${item.message}` : ""}`;
+    return (
+      <div className="line-item" id={`item-${item.id}`}>
+        <div className="line static">
+          <span className={cls("glyph", failed ? "tone-error" : item.state === "done" ? "tone-ok" : "tone-muted")} aria-hidden="true">
+            {failed ? "!" : item.state === "done" ? "●" : "◌"}
+          </span>
+          <span className="line-target plain">{text}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="line-item is-pending" id={`item-${item.id}`}>
+      <div className="line static">
+        <span className="glyph tone-attention" aria-hidden="true">
+          ●
+        </span>
+        <span className="line-verb">Sign in to {item.connection}</span>
+      </div>
+      <div className="prompt" role="group" aria-label={`Sign in to ${item.connection}`}>
+        <DeviceCodePanel
+          code={item.state === "waiting" ? (item.code ?? null) : null}
+          busy={busy}
+          onCancel={async () => {
+            setBusy(true);
+            await actions.connectionAction(item.connection, "cancel");
+            setBusy(false);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Requests that went out without a credential because no rule allowed them. */
+export function CredentialBlockedLine({
+  item,
+  persona,
+}: {
+  item: Extract<ChatItem, { kind: "credential_blocked" }>;
+  persona: PersonaSummary | null;
+}) {
+  const { actions } = useStore();
+  const [open, setOpen] = useState(false);
+  const latest = item.operations[item.operations.length - 1] ?? "";
+  const others = item.operations.slice(0, -1).reverse();
+  const slash = item.credential.indexOf("/");
+  const connection = item.credential.slice(0, slash);
+  const name = item.credential.slice(slash + 1);
+  const body = (
+    <>
+      <span className="glyph tone-attention" aria-hidden="true">
+        ⊘
+      </span>
+      <span className="line-verb">Blocked</span>
+      <span className="line-target mono">{latest}</span>
+      <span className="line-meta">
+        with {item.credential}: {item.rule ? `rule "${item.rule}"` : "no rule"}
+        {item.count > 1 && ` · ×${item.count}`}
+      </span>
+    </>
+  );
+  return (
+    <div className="line-item" id={`item-${item.id}`}>
+      <div className="row gap">
+        {others.length > 0 ? (
+          <button type="button" className="line grow" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {body}
+            <IconChevronRight className="chev" size={14} />
+          </button>
+        ) : (
+          <div className="line static grow">{body}</div>
+        )}
+        {persona && (
+          <button
+            type="button"
+            className="link-btn line-action"
+            title={`Opens Settings with an allow rule for ${item.suggestion}`}
+            aria-label={`Add rule allowing ${item.suggestion} with ${item.credential}`}
+            onClick={() =>
+              actions.addRuleInSettings(persona.id, connection, { credential: name, api: item.api, allow: [item.suggestion], ask: [], deny: [] })
+            }
+          >
+            Add rule…
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="line-detail">
+          <span className="small muted">Also sent without the credential:</span>
+          <ul className="plain-list small mono">
+            {others.map((o) => (
+              <li key={o}>{o}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Tool lines ----------
 
 function ToolGlyph({ item }: { item: ToolItem }) {
@@ -245,10 +362,13 @@ export const ToolLine = memo(function ToolLine({
   const pending = item.status === "pending_approval";
   const status = TOOL_STATUS_TEXT[item.status];
   const isNet = item.name === "network_access";
+  const isCred = item.name === "credential_use";
+  // Network and credential asks are decisions, not commands: their output is a one-line outcome.
+  const isAsk = isNet || isCred;
   const meta: string[] = [];
-  if (isNet && item.output && !pending) meta.push(item.output);
+  if (isAsk && item.output && !pending) meta.push(item.output);
   if (d.result) meta.push(d.result);
-  if (item.durationMs !== undefined && !isNet) meta.push(fmtDuration(item.durationMs));
+  if (item.durationMs !== undefined && !isAsk) meta.push(fmtDuration(item.durationMs));
   const showPrompt = pending && (promptOpen || open);
   return (
     <div className={cls("line-item", pending && "is-pending")} id={`item-${item.id}`}>
@@ -264,7 +384,7 @@ export const ToolLine = memo(function ToolLine({
         )}
         <IconChevronRight className="chev" size={14} />
       </button>
-      {open && !isNet && (
+      {open && !isAsk && (
         <div className="line-detail">
           <ToolInput item={item} />
           {item.output !== undefined && (
@@ -275,7 +395,7 @@ export const ToolLine = memo(function ToolLine({
           <Facts item={item} />
         </div>
       )}
-      {open && isNet && !pending && (
+      {open && isAsk && !pending && (
         <div className="line-detail">
           <Facts item={item} />
         </div>
@@ -283,6 +403,8 @@ export const ToolLine = memo(function ToolLine({
       {showPrompt &&
         (isNet ? (
           <NetworkPrompt item={item} sessionId={sessionId} />
+        ) : isCred ? (
+          <CredentialPrompt item={item} sessionId={sessionId} />
         ) : (
           <ApprovalPrompt item={item} sessionId={sessionId} persona={persona} showInput={!open} />
         ))}
@@ -320,7 +442,7 @@ function Facts({ item }: { item: ToolItem }) {
           <dd>{item.denyReason}</dd>
         </>
       )}
-      {item.name === "network_access" && item.output && (
+      {(item.name === "network_access" || item.name === "credential_use") && item.output && (
         <>
           <dt>Outcome</dt>
           <dd>{item.output}</dd>
@@ -480,14 +602,14 @@ interface DecideHandle {
   startDeny(): void;
 }
 
-/** A / ⇧A / D while focus is inside the prompt. */
-function useDecisionKeys(handle: React.MutableRefObject<DecideHandle | null>) {
+/** A / ⇧A / D while focus is inside the prompt. ⇧A is always "until stopped". */
+function useDecisionKeys(handle: React.MutableRefObject<DecideHandle | null>, untilStopped: ApprovalDecision = "allow_always") {
   return (e: React.KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return;
     const k = e.key.toLowerCase();
     if (k === "a") {
       e.preventDefault();
-      handle.current?.decide(e.shiftKey ? "allow_always" : "allow");
+      handle.current?.decide(e.shiftKey ? untilStopped : "allow");
     } else if (k === "d") {
       e.preventDefault();
       handle.current?.startDeny();
@@ -602,6 +724,43 @@ function NetworkPrompt({ item, sessionId }: { item: ToolItem; sessionId: string 
   );
 }
 
+/** A credential ask: an `ask` rule matched and the request waits. */
+function CredentialPrompt({ item, sessionId }: { item: ToolItem; sessionId: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const handle = useRef<DecideHandle | null>(null);
+  const onKeyDown = useDecisionKeys(handle, "allow_session");
+  useAutoFocus(ref);
+  const credential = str(item.input, ["credential"]) ?? "";
+  const operation = str(item.input, ["operation"]) ?? item.inputPreview;
+  const rule = str(item.input, ["rule"]);
+  return (
+    <div
+      ref={ref}
+      id={`approval-${item.id}`}
+      className="prompt"
+      tabIndex={0}
+      role="group"
+      aria-label={`Use of ${credential}: decision needed`}
+      onKeyDown={onKeyDown}
+    >
+      <p className="prompt-q">
+        Allow <strong className="mono">{operation}</strong> with <span className="mono">{credential}</span>?{" "}
+        <span className="muted">The request is paused{rule ? `; it matches the ask rule “${rule}”` : ""}.</span>
+      </p>
+      <DecisionButtons
+        item={item}
+        sessionId={sessionId}
+        handleRef={handle}
+        labels={{ allow: "Allow once", session: "Allow until stopped", always: "Always allow" }}
+      />
+      <p className="prompt-keys">
+        “Always allow” makes {rule ? `“${rule}”` : "the rule"} an allow rule for this persona. <Kbd>A</Kbd> once · <Kbd>⇧A</Kbd> until
+        stopped · <Kbd>D</Kbd> deny
+      </p>
+    </div>
+  );
+}
+
 function DecisionButtons({
   item,
   sessionId,
@@ -611,7 +770,8 @@ function DecisionButtons({
   item: ToolItem;
   sessionId: string;
   handleRef: React.MutableRefObject<DecideHandle | null>;
-  labels: { allow: string; always: string };
+  /** `session` adds an "allow_session" button between allow and always. */
+  labels: { allow: string; session?: string; always: string };
 }) {
   const { actions } = useStore();
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
@@ -676,6 +836,12 @@ function DecisionButtons({
         {busy === "allow" && <Spinner size={10} />}
         {labels.allow}
       </button>
+      {labels.session && (
+        <button type="button" className="btn sm" disabled={busy !== null} onClick={() => void decide("allow_session")}>
+          {busy === "allow_session" && <Spinner size={10} />}
+          {labels.session}
+        </button>
+      )}
       <button type="button" className="btn sm" disabled={busy !== null} onClick={() => void decide("allow_always")}>
         {busy === "allow_always" && <Spinner size={10} />}
         {labels.always}

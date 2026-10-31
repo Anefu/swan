@@ -1,8 +1,10 @@
-import { useState } from "react";
-import type { CredentialStatus, ProviderStatus } from "@ph/shared";
+import { Fragment, useState } from "react";
+import type { ConnectionCredentialStatus, ConnectionStatus, ProviderStatus } from "@ph/shared";
+import type { ConnectionAction } from "../api";
 import { useStore } from "../store";
-import { providerKeyNames } from "../status";
+import { CONNECTION_STATE } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
+import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
 import { IconPlus } from "./icons";
 import { Spinner } from "./ui";
 
@@ -10,7 +12,7 @@ export function SwanSettings() {
   return (
     <div className="pane-body">
       <Providers />
-      <Credentials />
+      <Connections />
       <Sandbox />
     </div>
   );
@@ -97,7 +99,7 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
           label={`${providerLabel(p)} key (stored as ${secret})`}
           onCancel={() => setEditing(false)}
           onSave={async (value) => {
-            await actions.putCredential(secret, { value });
+            await actions.setProviderKey(p.name, value);
             setEditing(false);
           }}
         />
@@ -118,7 +120,7 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
               onClick={async () => {
                 setBusy(true);
                 try {
-                  await actions.deleteCredential(secret);
+                  await actions.removeProviderKey(p.name);
                   setConfirm(false);
                 } catch (e) {
                   actions.reportError(e, "Could not disconnect");
@@ -204,33 +206,32 @@ function SecretForm({
   );
 }
 
-// ---------- Credentials ----------
+// ---------- Connections ----------
 
-function Credentials() {
+function Connections() {
   const { state } = useStore();
-  const providerKeys = providerKeyNames(state.providers);
-  const creds = state.credentials.filter((c) => !providerKeys.has(c.name));
   const now = useNow(5000);
   const [adding, setAdding] = useState(false);
-  const flash = Object.entries(state.credentialFlash)
-    .filter(([n]) => !providerKeys.has(n))
-    .sort((a, b) => b[1] - a[1])[0];
+  const flash = Object.entries(state.credentialFlash).sort((a, b) => b[1] - a[1])[0];
+  const hasCommand = state.connections.some((c) => c.type === "command");
   return (
     <section className="swan-section">
       <div className="row gap">
-        <h3 className="grow">Credentials</h3>
+        <h3 className="grow">Connections</h3>
         {!adding && (
           <button type="button" className="link-btn" onClick={() => setAdding(true)}>
-            <IconPlus /> Add
+            <IconPlus /> Add credential
           </button>
         )}
       </div>
-      <p className="hint">Secrets the agent's requests can use. Values are never shown. Edits apply on the next request. Model keys live under Model providers.</p>
+      {state.migration && <MigrationNoteView />}
+      <p className="hint">Where the agent's credentials come from. Values are never shown. Model keys live under Model providers.</p>
+      {!hasCommand && <p className="hint">Command connections (sign-in with a code) are defined in config.yaml.</p>}
       {adding && <AddCredential onDone={() => setAdding(false)} />}
-      {creds.length === 0 && !adding && <p className="muted small">No credentials yet.</p>}
+      {state.connections.length === 0 && !adding && <p className="muted small">No connections yet.</p>}
       <ul className="plain-list cred-list">
-        {creds.map((c) => (
-          <CredentialRow key={c.name} c={c} />
+        {state.connections.map((c) => (
+          <ConnectionRow key={c.name} c={c} />
         ))}
       </ul>
       {flash && now - flash[1] < 120_000 && (
@@ -242,112 +243,163 @@ function Credentials() {
   );
 }
 
-function CredentialRow({ c }: { c: CredentialStatus }) {
+function MigrationNoteView() {
+  const { state, actions } = useStore();
+  const note = state.migration;
+  if (!note) return null;
+  const lines: Array<[string, string[]]> = [
+    ["Moved", note.moved],
+    ["Personas updated", note.personas],
+    ["Kept in secrets.yaml (no hosts)", note.kept],
+    ["Problems", note.problems],
+  ];
+  return (
+    <div className="inline-form" role="status">
+      <p className="small">
+        <strong>Credentials are now connections.</strong> Swan converted the earlier secrets format.
+      </p>
+      <dl className="facts small">
+        {lines
+          .filter(([, v]) => v.length > 0)
+          .map(([k, v]) => (
+            <Fragment key={k}>
+              <dt>{k}</dt>
+              <dd className={cls(k === "Moved" || k.startsWith("Kept") ? "mono" : undefined, k === "Problems" && "tone-attention")}>
+                {k === "Personas updated" ? v.join(", ") : v.map((x) => <div key={x}>{x}</div>)}
+              </dd>
+            </Fragment>
+          ))}
+      </dl>
+      <div className="row end">
+        <button type="button" className="btn sm" onClick={() => void actions.dismissMigration()}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function inWords(iso: string, now: number): string {
+  const m = minutesLeft(iso, now) ?? 0;
+  if (m <= 0) return m === 0 ? "expires now" : `expired ${agoWords(iso, now)}`;
+  return m < 90 ? `expires in ${m} min` : m < 48 * 60 ? `expires in ${Math.round(m / 60)} h` : `expires in ${Math.round(m / 1440)} d`;
+}
+
+function ConnectionRow({ c }: { c: ConnectionStatus }) {
+  const now = useNow(30_000);
+  const st = CONNECTION_STATE[c.state];
+  const meta: string[] = [];
+  if (c.expiresAt) meta.push(inWords(c.expiresAt, now));
+  if (c.lastRenewedAt) meta.push(`renewed ${agoWords(c.lastRenewedAt, now)}`);
+  if (c.usedBy.length) meta.push(`used by ${c.usedBy.join(", ")}`);
+  const metaText = meta.join(" · ");
+  return (
+    <li className="prov-row cred-row">
+      <div className="row gap wrap">
+        <span className="grow">
+          <strong className="mono">{c.name}</strong> <span className="muted small">· {c.type}</span>
+        </span>
+        <span className={cls("status-text small", `tone-${st.tone === "ok" ? "muted" : st.tone}`)}>
+          {c.state === "signing_in" && <Spinner size={10} />}
+          {c.state === "ready" && <span className="dot ok" aria-hidden="true" />}
+          {st.label}
+        </span>
+      </div>
+      {metaText && <div className="small muted">{metaText.charAt(0).toUpperCase() + metaText.slice(1)}</div>}
+      {c.message && <p className="hint">{c.message}</p>}
+      {c.credentials.length > 0 && (
+        <ul className="plain-list">
+          {c.credentials.map((cr) => (
+            <CredentialRow key={cr.name} conn={c} c={cr} />
+          ))}
+        </ul>
+      )}
+      {c.type === "command" && c.credentials.length === 0 && c.state !== "ready" && (
+        <p className="small muted">Credentials appear here after a sign-in.</p>
+      )}
+      {c.type === "command" && <CommandControls c={c} />}
+    </li>
+  );
+}
+
+function credentialMeta(c: ConnectionCredentialStatus): string {
+  const parts: string[] = [c.kind];
+  if (c.hosts.length) parts.push(c.hosts.join(", "));
+  if (c.env && c.env !== c.name) parts.push(`$${c.env}`);
+  return parts.join(" · ");
+}
+
+function CredentialRow({ conn, c }: { conn: ConnectionStatus; c: ConnectionCredentialStatus }) {
   const { actions } = useStore();
-  const [mode, setMode] = useState<null | "rotate" | "hosts" | "delete" | "details">(null);
-  const [hosts, setHosts] = useState(c.hosts.join(", "));
+  const [mode, setMode] = useState<null | "replace" | "remove">(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const run = async (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await fn();
-      setMode(null);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
+  const editable = conn.type === "static";
+  const last = conn.credentials.length === 1;
   return (
     <li className="cred-row">
-      <div className="cred-line">
-        <button
-          type="button"
-          className="cred-name mono"
-          aria-expanded={mode === "details"}
-          onClick={() => setMode(mode === "details" ? null : "details")}
-        >
-          {c.name}
-        </button>
-        {c.present ? (
-          <span className="mono small muted" title="First 8 hex characters of the value's SHA-256">
-            {c.fingerprint ?? "set"}
-          </span>
-        ) : (
-          <span className="status-text tone-attention small">Missing</span>
+      <div className="row gap wrap small">
+        <span className="grow">
+          <span className="mono">{c.name}</span> <span className="muted">· {credentialMeta(c)}</span>
+          {c.present && c.fingerprint && (
+            <span className="muted mono" title="First 8 hex characters of the value's SHA-256">
+              {" "}
+              · {c.fingerprint}
+            </span>
+          )}
+        </span>
+        {!c.present && <span className="status-text tone-attention small">{editable ? "Missing" : "Not usable"}</span>}
+        {editable && mode === null && (
+          <>
+            <button type="button" className="link-btn" onClick={() => setMode("replace")} aria-label={`${c.present ? "Replace value of" : "Set value of"} ${c.ref}`}>
+              {c.present ? "Replace value" : "Set value"}
+            </button>
+            <button type="button" className="link-btn" onClick={() => setMode("remove")} aria-label={`Remove ${c.ref}`}>
+              Remove
+            </button>
+          </>
         )}
-        <button type="button" className="link-btn" onClick={() => setMode(mode === "rotate" ? null : "rotate")}>
-          {c.present ? "Rotate" : "Set"}
-        </button>
       </div>
-      <div className="small muted">
-        {c.hosts.length ? `Sent to ${c.hosts.join(", ")}` : "Host-side only"}
-        {c.injects && " · header added by the proxy"}
-        {c.updatedAt && ` · changed ${relTime(c.updatedAt)} ago`.replace(" now ago", " just now")}
-        {c.usedBy.length > 0 && ` · used by ${c.usedBy.join(", ")}`}
-      </div>
-      {mode === "details" && (
-        <div className="row gap wrap">
-          <button type="button" className="btn sm" onClick={() => setMode("hosts")}>
-            Edit hosts
-          </button>
-          <button type="button" className="btn sm danger" onClick={() => setMode("delete")}>
-            Delete
-          </button>
-          <span className="small muted">Source: {c.source ?? "none"}</span>
-        </div>
-      )}
-      {mode === "rotate" && (
+      {mode === "replace" && (
         <SecretForm
-          label={c.present ? `New value for ${c.name}` : `Value for ${c.name}`}
-          submitLabel={c.present ? "Rotate" : "Save"}
+          label={c.present ? `New value for ${c.ref}` : `Value for ${c.ref}`}
+          submitLabel={c.present ? "Replace" : "Save"}
           onCancel={() => setMode(null)}
           onSave={async (value) => {
-            await actions.putCredential(c.name, { value });
+            await actions.putCredential(conn.name, c.name, { value });
             setMode(null);
           }}
         />
       )}
-      {mode === "hosts" && (
-        <form
-          className="inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(() => actions.putCredential(c.name, { hosts: parseList(hosts) }));
-          }}
-        >
-          <label className="field">
-            <span className="field-label">Hosts this value may be sent to (comma separated; empty = host-side only)</span>
-            <input className="input mono" value={hosts} onChange={(e) => setHosts(e.target.value)} autoFocus />
-          </label>
-          {error && <span className="field-error">{error}</span>}
-          <div className="row gap end">
-            <button type="button" className="btn sm" onClick={() => setMode(null)} disabled={busy}>
-              Cancel
-            </button>
-            <button type="submit" className="btn primary sm" disabled={busy}>
-              Save hosts
-            </button>
-          </div>
-        </form>
-      )}
-      {mode === "delete" && (
-        <div className="inline-form" role="group" aria-label={`Delete ${c.name}`}>
+      {mode === "remove" && (
+        <div className="inline-form" role="group" aria-label={`Remove ${c.ref}`}>
           <p className="small">
-            Delete <span className="mono">{c.name}</span>?
-            {c.usedBy.length > 0 ? ` ${c.usedBy.join(", ")} will lose access on the next request.` : " No persona uses it."}
+            Remove <span className="mono">{c.ref}</span> and its value from Swan?
+            {c.usedBy.length > 0 ? ` ${c.usedBy.join(", ")} lose access on the next request.` : " No persona uses it."}
+            {last && ` The ${conn.name} connection goes with it.`}
           </p>
           {error && <span className="field-error">{error}</span>}
           <div className="row gap end">
             <button type="button" className="btn sm" onClick={() => setMode(null)} disabled={busy}>
               Cancel
             </button>
-            <button type="button" className="btn sm danger" disabled={busy} onClick={() => void run(() => actions.deleteCredential(c.name))}>
-              Delete credential
+            <button
+              type="button"
+              className="btn sm danger"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError(null);
+                try {
+                  await actions.deleteCredential(conn.name, c.name);
+                } catch (e) {
+                  setError(errorMessage(e));
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy && <Spinner size={10} />}
+              Remove
             </button>
           </div>
         </div>
@@ -356,42 +408,94 @@ function CredentialRow({ c }: { c: CredentialStatus }) {
   );
 }
 
-const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+function CommandControls({ c }: { c: ConnectionStatus }) {
+  const { actions } = useStore();
+  const [busy, setBusy] = useState<ConnectionAction | null>(null);
+  const run = async (a: ConnectionAction) => {
+    setBusy(a);
+    await actions.connectionAction(c.name, a);
+    setBusy(null);
+  };
+  if (c.signIn || c.state === "signing_in") {
+    return <DeviceCodePanel code={c.signIn} busy={busy === "cancel"} onCancel={() => void run("cancel")} />;
+  }
+  const signedIn = c.state === "ready" || c.credentials.length > 0;
+  return (
+    <div className="row gap wrap">
+      {c.state !== "ready" && (
+        <button type="button" className="btn sm" disabled={!!busy} onClick={() => void run("login")}>
+          {busy === "login" && <Spinner size={10} />}
+          Sign in
+        </button>
+      )}
+      {c.state === "ready" && (
+        <button type="button" className="btn sm" disabled={!!busy} onClick={() => void run("renew")}>
+          {busy === "renew" && <Spinner size={10} />}
+          Renew now
+        </button>
+      )}
+      {signedIn && (
+        <button type="button" className="btn sm" disabled={!!busy} onClick={() => void run("logout")}>
+          {busy === "logout" && <Spinner size={10} />}
+          Sign out
+        </button>
+      )}
+    </div>
+  );
+}
+
+const CONN_RE = /^[a-z0-9-]{1,32}$/;
+const CRED_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HEADER_RE = /^[A-Za-z0-9-]+$/;
 
 function AddCredential({ onDone }: { onDone: () => void }) {
   const { state, actions } = useStore();
+  const statics = state.connections.filter((c) => c.type === "static");
+  const [conn, setConn] = useState(statics.length === 1 ? statics[0].name : "");
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [hosts, setHosts] = useState("");
   const [inject, setInject] = useState(false);
   const [header, setHeader] = useState("Authorization");
   const [format, setFormat] = useState("Bearer {value}");
+  const [env, setEnv] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const providerKeys = providerKeyNames(state.providers);
+  const existing = state.connections.find((c) => c.name === conn);
+  const connError = !conn
+    ? null
+    : !CONN_RE.test(conn)
+      ? "Use lowercase letters, digits and dashes."
+      : existing?.type === "command"
+        ? `${conn} is a command connection; its credentials come from its wrapper.`
+        : null;
   const nameError = !name
     ? null
-    : !NAME_RE.test(name)
-      ? "Use UPPER_SNAKE_CASE."
-      : providerKeys.has(name)
-        ? "This is a model key. Add it under Model providers."
-        : state.credentials.some((c) => c.name === name)
-          ? "Already exists; use Rotate."
-          : null;
+    : !CRED_RE.test(name)
+      ? "Use letters, digits, _ and -."
+      : existing?.credentials.some((c) => c.name === name)
+        ? "Already exists; use Replace value."
+        : null;
+  const envError = env && !ENV_RE.test(env) ? "Use letters, digits and _, not starting with a digit." : null;
+  const injectError = inject && (!HEADER_RE.test(header) || !format.includes("{value}")) ? "Use a header name, and a format that contains {value}." : null;
   const hostList = parseList(hosts);
+  const ready = !!conn && !!name && !!value && hostList.length > 0 && !connError && !nameError && !envError && !injectError;
+  const listId = "static-connections";
   return (
     <form
       className="inline-form"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!name || nameError || !value) return;
+        if (!ready) return;
         setBusy(true);
         setError(null);
         try {
-          await actions.putCredential(name, {
+          await actions.putCredential(conn, name, {
             value,
             hosts: hostList,
-            ...(inject && hostList.length ? { inject: { header, format } } : {}),
+            ...(inject ? { inject: { header, format } } : {}),
+            ...(env ? { env } : {}),
           });
           onDone();
         } catch (err) {
@@ -400,31 +504,64 @@ function AddCredential({ onDone }: { onDone: () => void }) {
         }
       }}
     >
-      <label className="field">
-        <span className="field-label">Name</span>
-        <input
-          className="input mono"
-          value={name}
-          autoFocus
-          placeholder="GITHUB_TOKEN"
-          onChange={(e) => setName(e.target.value.toUpperCase().replace(/[\s-]+/g, "_"))}
-          aria-invalid={!!nameError}
-        />
-        {nameError && <span className="field-error">{nameError}</span>}
-      </label>
+      <div className="row gap wrap">
+        <label className="field grow">
+          <span className="field-label">Connection</span>
+          <input
+            className="input mono"
+            value={conn}
+            autoFocus
+            placeholder="github"
+            list={listId}
+            spellCheck={false}
+            aria-invalid={!!connError}
+            onChange={(e) => setConn(e.target.value.toLowerCase().replace(/[\s_]+/g, "-"))}
+          />
+          <datalist id={listId}>
+            {statics.map((c) => (
+              <option key={c.name} value={c.name} />
+            ))}
+          </datalist>
+        </label>
+        <label className="field grow">
+          <span className="field-label">Credential name</span>
+          <input
+            className="input mono"
+            value={name}
+            placeholder="GITHUB_TOKEN"
+            spellCheck={false}
+            aria-invalid={!!nameError}
+            onChange={(e) => setName(e.target.value.replace(/\s+/g, "_"))}
+          />
+        </label>
+      </div>
+      {connError && <span className="field-error">{connError}</span>}
+      {nameError && <span className="field-error">{nameError}</span>}
       <label className="field">
         <span className="field-label">Value</span>
         <input className="input mono" type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} />
       </label>
       <label className="field">
-        <span className="field-label">Hosts it may be sent to (comma separated; empty = host-side only)</span>
-        <input className="input mono" value={hosts} placeholder="api.github.com" onChange={(e) => setHosts(e.target.value)} />
+        <span className="field-label">Hosts it may be sent to (comma separated)</span>
+        <input className="input mono" value={hosts} placeholder="api.github.com" spellCheck={false} onChange={(e) => setHosts(e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="field-label">Sandbox variable (optional)</span>
+        <input
+          className="input mono"
+          value={env}
+          placeholder={name || "GITHUB_TOKEN"}
+          spellCheck={false}
+          aria-invalid={!!envError}
+          onChange={(e) => setEnv(e.target.value)}
+        />
+        {envError ? <span className="field-error">{envError}</span> : <span className="hint">Holds a placeholder; defaults to the credential name.</span>}
       </label>
       <label className="check-row">
-        <input type="checkbox" checked={inject} disabled={hostList.length === 0} onChange={(e) => setInject(e.target.checked)} />
+        <input type="checkbox" checked={inject} onChange={(e) => setInject(e.target.checked)} />
         <span>Proxy adds an auth header on those hosts</span>
       </label>
-      {inject && hostList.length > 0 && (
+      {inject && (
         <div className="row gap">
           <label className="field grow">
             <span className="field-label">Header</span>
@@ -436,17 +573,13 @@ function AddCredential({ onDone }: { onDone: () => void }) {
           </label>
         </div>
       )}
+      {injectError && <span className="field-error">{injectError}</span>}
       {error && <span className="field-error">{error}</span>}
       <div className="row gap end">
-        <button
-          type="button"
-          className="btn sm"
-          onClick={onDone}
-          disabled={busy}
-        >
+        <button type="button" className="btn sm" onClick={onDone} disabled={busy}>
           Cancel
         </button>
-        <button type="submit" className="btn primary sm" disabled={busy || !name || !!nameError || !value}>
+        <button type="submit" className="btn primary sm" disabled={busy || !ready}>
           {busy && <Spinner size={10} />}
           Add credential
         </button>

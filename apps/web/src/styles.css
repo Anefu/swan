@@ -1606,6 +1606,8 @@ button.line:focus-visible .chev,
   font-size: 14px;
 }
 .pane-body {
+  /* Contains absolutely positioned labels (.sr-only) so they never extend the page. */
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -1785,6 +1787,33 @@ button.line:focus-visible .chev,
 }
 .inline-form p {
   margin: 0;
+}
+
+/* Connections */
+.device {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.device p {
+  margin: 0;
+}
+.device-code {
+  font-family: var(--mono);
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  user-select: all;
+}
+.line-action {
+  flex: none;
+  white-space: nowrap;
+}
+.rule-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line-strong);
 }
 
 /* Memory */

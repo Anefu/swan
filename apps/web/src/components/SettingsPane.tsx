@@ -1,8 +1,8 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
-import type { FolderMode, PermissionMode, PersonaConfigView, PersonaSummary } from "@ph/shared";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import type { ConnectionStatus, CredentialRule, FolderMode, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi } from "@ph/shared";
 import { api } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
-import { providerKeyNames } from "../status";
+import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
 import { DecisionsShortcut } from "./Composer";
@@ -67,7 +67,7 @@ function blankConfig(): PersonaConfigView {
     instructions: "",
     folders: [],
     networkAllow: [],
-    credentials: [],
+    connections: {},
     permissions: { default: "ask", allow: ["read_file", "list_dir", "glob", "grep", "load_skill"], ask: ["bash", "write_file", "edit_file"], deny: [] },
     skills: [],
     mcpServers: {},
@@ -86,8 +86,22 @@ function cleaned(v: PersonaConfigView): PersonaConfigView {
   x.networkAllow = x.networkAllow.map((h) => h.trim()).filter(Boolean);
   for (const k of ["allow", "ask", "deny"] as const) x.permissions[k] = x.permissions[k].map((r) => r.trim()).filter(Boolean);
   x.folders = x.folders.map((f) => ({ ...f, path: f.path.trim(), ...(f.mount ? { mount: f.mount.trim() } : {}) }));
+  for (const pc of Object.values(x.connections))
+    pc.rules = pc.rules.map((r) => ({
+      ...r,
+      credential: r.credential.trim(),
+      allow: patterns(r.allow),
+      ask: patterns(r.ask),
+      deny: patterns(r.deny),
+    }));
   return x;
 }
+
+function patterns(list: string[] | undefined): string[] {
+  return (list ?? []).map((p) => p.trim()).filter(Boolean);
+}
+
+const RULE_CREDENTIAL_RE = /^[A-Za-z0-9_*?-]{1,64}$/;
 
 function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: boolean, mcpError: string | null): Errors {
   const e: Errors = {};
@@ -105,6 +119,12 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
     if (!h.trim()) e[`host${i}`] = "Enter a host or remove the row.";
     else if (!HOST_RE.test(h.trim())) e[`host${i}`] = "Use a hostname, *.domain or host:port.";
   });
+  for (const [conn, pc] of Object.entries(d.connections))
+    pc.rules.forEach((r, i) => {
+      const c = r.credential.trim();
+      if (!c) e[`rule-${conn}-${i}`] = "Choose a credential or enter a pattern.";
+      else if (!RULE_CREDENTIAL_RE.test(c)) e[`rule-${conn}-${i}`] = "Use a credential name or a pattern with * and ?.";
+    });
   if (!Number.isInteger(d.memory.briefTokens) || d.memory.briefTokens < 0) e.briefTokens = "Use a whole number of tokens.";
   if (mcpError) e.mcp = mcpError;
   return e;
@@ -119,15 +139,23 @@ function Section({
   summary,
   children,
   invalid,
+  reveal,
 }: {
   id: string;
   title: string;
   summary?: string;
   children: ReactNode;
   invalid?: boolean;
+  /** Changing this opens the section. */
+  reveal?: number;
 }) {
   const [open, setOpen] = useState(openSections.has(id) || !!invalid);
   const bodyId = useId();
+  useEffect(() => {
+    if (!reveal) return;
+    openSections.add(id);
+    setOpen(true);
+  }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section className={cls("set-section", open && "is-open")}>
       <button
@@ -193,19 +221,40 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     } else void load();
   }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Model-provider keys are Swan's own; a persona never gets them. Untick any that the loaded config lists.
-  const providerKeys = providerKeyNames(state.providers);
-  const providerKeyList = [...providerKeys].sort().join(",");
+  // "Add rule…" from a blocked-request notice: add the rule to the draft once it is loaded, then show it.
+  const [reveal, setReveal] = useState<{ id: string; n: number } | null>(null);
+  const focus = state.settingsFocus;
   useEffect(() => {
-    if (!entry || providerKeys.size === 0) return;
-    const bad = entry.draft.credentials.filter((c) => providerKeys.has(c));
-    if (bad.length === 0) return;
-    actions.setDraft(draftKey, {
-      ...entry,
-      draft: { ...entry.draft, credentials: entry.draft.credentials.filter((c) => !providerKeys.has(c)) },
-      removedKeys: Array.from(new Set([...(entry.removedKeys ?? []), ...bad])),
-    });
-  }, [entry, providerKeyList]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!entry || !persona || !focus || focus.personaId !== persona.id) return;
+    actions.clearSettingsFocus();
+    if (!focus.rule) {
+      setReveal({ id: "", n: focus.seq });
+      return;
+    }
+    const { connection, rule } = focus.rule;
+    const rules = entry.draft.connections[connection]?.rules ?? [];
+    const wanted = rule.allow ?? [];
+    let idx = rules.findIndex((r) => r.credential === rule.credential && r.api === rule.api && wanted.every((p) => (r.allow ?? []).includes(p)));
+    if (idx < 0) {
+      idx = rules.length;
+      const draft = clone(entry.draft);
+      (draft.connections[connection] ??= { rules: [] }).rules.push(clone(rule));
+      actions.setDraft(draftKey, { ...entry, draft, result: null, error: null });
+    }
+    setReveal({ id: `rule-${connection}-${idx}`, n: focus.seq });
+  }, [entry, focus]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!reveal?.id) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(reveal.id);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.querySelector<HTMLElement>("textarea, select, input")?.focus({ preventScroll: true });
+      el.classList.add("flash");
+      window.setTimeout(() => el.classList.remove("flash"), 1600);
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [reveal]);
 
   // Default model for a new persona: the first model whose provider is ready.
   useEffect(() => {
@@ -244,7 +293,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
   const errorCount = Object.keys(errors).length;
   const session = persona ? conversationSession(state, persona.id) : null;
   const netAllowances = (session?.allowances ?? []).filter((r) => r.startsWith("net:"));
-  const toolAllowances = (session?.allowances ?? []).filter((r) => !r.startsWith("net:"));
+  const credAllowances = (session?.allowances ?? []).filter(isCredentialAllowance);
+  const toolAllowances = (session?.allowances ?? []).filter((r) => !r.startsWith("net:") && !isCredentialAllowance(r));
 
   /** Keep a host approved "until stopped": save it to the persona now, then drop the temporary allowance. */
   const keepHost = async (sessionId: string, rule: string) => {
@@ -289,7 +339,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
       actions.setSettingsScope("persona");
       return;
     }
-    actions.setDraft(draftKey, { base: entry.base, draft: clone(entry.base), removedKeys: entry.removedKeys });
+    actions.setDraft(draftKey, { base: entry.base, draft: clone(entry.base) });
   };
 
   const save = async () => {
@@ -307,7 +357,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           folders: d.folders.map((f) => ({ path: f.path.trim(), ...(f.mount ? { mount: f.mount } : {}), mode: f.mode })),
           skills: d.skills,
           mcpServers: d.mcpServers,
-          credentials: d.credentials,
+          connections: d.connections,
           network: { allow: d.networkAllow.map((h) => h.trim()) },
           permissions: d.permissions,
         });
@@ -343,9 +393,6 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     }
   };
 
-  const allCreds = Array.from(new Set([...state.credentials.map((c) => c.name), ...d.credentials]))
-    .filter((n) => !providerKeys.has(n))
-    .sort();
   const allSkills = Array.from(new Set([...state.skills.map((s) => s.name), ...d.skills])).sort();
   const mcpValue = mcpText ?? JSON.stringify(d.mcpServers, null, 2);
 
@@ -582,34 +629,57 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           )}
         </Section>
 
-        <Section id="credentials" title="Credentials" summary={d.credentials.length ? plural(d.credentials.length, "credential") : "None"}>
-          <p className="hint">The agent gets placeholders. Values are managed under Swan.</p>
-          {(entry.removedKeys ?? []).map((k) => (
-            <p key={k} className="hint">
-              <span className="mono">{k}</span> is Swan's own model key; the agent never needs it.
-            </p>
+        <Section
+          id="connections"
+          title="Connections"
+          summary={
+            Object.keys(d.connections).length + credAllowances.length
+              ? [
+                  Object.keys(d.connections).length && plural(Object.keys(d.connections).length, "connection"),
+                  credAllowances.length && `${credAllowances.length} until stopped`,
+                ]
+                  .filter(Boolean)
+                  .join(", ")
+              : "None"
+          }
+          invalid={Object.keys(errors).some((k) => k.startsWith("rule-"))}
+          reveal={reveal?.n}
+        >
+          <p className="hint">
+            Rules say what each credential may be used for. Checked deny, then ask, then allow; a request nothing allows goes out
+            without the credential. Values are managed under Swan.
+          </p>
+          {Object.entries(d.connections).map(([conn, pc]) => (
+            <ConnectionRules
+              key={conn}
+              name={conn}
+              rules={pc.rules}
+              status={state.connections.find((c) => c.name === conn)}
+              errors={errors}
+              onChange={(fn) => update((x) => fn(x.connections[conn].rules))}
+              onRemove={() => update((x) => void delete x.connections[conn])}
+            />
           ))}
-          {allCreds.length === 0 && <p className="muted small">No credentials defined yet.</p>}
-          {allCreds.map((name) => {
-            const c = state.credentials.find((x) => x.name === name);
-            const where = !c ? "not defined" : c.hosts.length ? c.hosts.join(", ") : "host-side only";
-            return (
-              <label key={name} className="check-row">
-                <input
-                  type="checkbox"
-                  checked={d.credentials.includes(name)}
-                  onChange={(e) =>
-                    update((x) => {
-                      x.credentials = e.target.checked ? [...x.credentials, name] : x.credentials.filter((n) => n !== name);
-                    })
-                  }
-                />
-                <span className="mono">{name}</span>
-                <span className="muted small">· {where}</span>
-                {c && !c.present && <span className="status-text tone-attention small">Missing value</span>}
-              </label>
-            );
-          })}
+          <AddConnection
+            used={Object.keys(d.connections)}
+            onAdd={(c) => update((x) => void (x.connections[c.name] = { rules: [newRule(c)] }))}
+          />
+          {credAllowances.length > 0 && session && (
+            <div className="approved-hosts">
+              <h4>Allowed in the conversation</h4>
+              <p className="hint">From “Allow until stopped”. They end when the agent stops and never edit the persona.</p>
+              <ul className="plain-list">
+                {credAllowances.map((rule) => (
+                  <li key={rule} className="row gap">
+                    <span className="grow mono small">{allowanceLabel(rule)}</span>
+                    <button type="button" className="btn sm" onClick={() => void actions.removeAllowance(session.id, rule)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Section>
 
         <Section id="permissions" title="Permissions" summary={`Default: ${d.permissions.default}`}>
@@ -654,8 +724,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
             <div className="allowances">
               <h4>Temporary allowances</h4>
               <p className="hint">
-                From “Allow … until stopped”. They end when the agent stops or Swan restarts; they never edit the persona. Hosts approved
-                this way are listed under Allowed hosts.
+                From “Allow … until stopped”. They end when the agent stops or Swan restarts; they never edit the persona. Hosts and
+                credential uses approved this way are listed under Allowed hosts and Connections.
               </p>
               {!session || toolAllowances.length === 0 ? (
                 <p className="muted small">None active.</p>
@@ -664,7 +734,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
                   <ul className="plain-list">
                     {toolAllowances.map((rule) => (
                       <li key={rule} className="row gap">
-                        <span className="mono grow">{rule}</span>
+                        <span className="mono grow">{allowanceLabel(rule)}</span>
                         <button type="button" className="btn sm" onClick={() => void actions.removeAllowance(session.id, rule)}>
                           Remove
                         </button>
@@ -780,6 +850,234 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         {!dirty && !entry.result && <span className="muted small">All changes saved.</span>}
       </div>
     </>
+  );
+}
+
+// ---------- Connections ----------
+
+const CUSTOM = "\u0001custom";
+
+const PATTERN_HINT: Record<RuleApi, string> = {
+  kubernetes: "verb resource[/sub] [in namespace], e.g. get pods in payments",
+  aws: "service:Action, e.g. s3:GetObject or logs:Describe*",
+  http: "METHOD /path, with * for one segment and ** for any, e.g. GET /repos/**",
+};
+
+function newRule(c: ConnectionStatus | undefined, credential?: string): CredentialRule {
+  const name = credential ?? c?.credentials[0]?.name ?? "*";
+  const kind = c?.credentials.find((x) => x.name === name)?.kind;
+  return { credential: name, api: kind === "aws-sigv4" ? "aws" : "http", allow: [], ask: [], deny: [] };
+}
+
+function AddConnection({ used, onAdd }: { used: string[]; onAdd: (c: ConnectionStatus) => void }) {
+  const { state } = useStore();
+  const free = state.connections.filter((c) => !used.includes(c.name));
+  if (state.connections.length === 0) return <p className="muted small">No connections yet. Add credentials under Swan.</p>;
+  if (free.length === 0) return null;
+  return (
+    <label>
+      <span className="sr-only">Add connection</span>
+      <select
+        className="input"
+        value=""
+        onChange={(e) => {
+          const c = free.find((x) => x.name === e.target.value);
+          if (c) onAdd(c);
+        }}
+      >
+        <option value="">Add connection…</option>
+        {free.map((c) => (
+          <option key={c.name} value={c.name}>
+            {c.name} · {c.type}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ConnectionRules({
+  name,
+  rules,
+  status,
+  errors,
+  onChange,
+  onRemove,
+}: {
+  name: string;
+  rules: CredentialRule[];
+  status: ConnectionStatus | undefined;
+  errors: Errors;
+  onChange: (fn: (rules: CredentialRule[]) => void) => void;
+  onRemove: () => void;
+}) {
+  const st = status ? CONNECTION_STATE[status.state] : null;
+  return (
+    <div className="folder-row">
+      <div className="row gap">
+        <span className="grow">
+          <span className="mono strong">{name}</span>
+          {status && st && (
+            <span className="muted small">
+              {" "}
+              · {status.type} · <span className={st.tone === "ok" ? undefined : `tone-${st.tone}`}>{st.label}</span>
+            </span>
+          )}
+        </span>
+        <button type="button" className="icon-btn" aria-label={`Remove connection ${name}`} onClick={onRemove}>
+          <IconTrash />
+        </button>
+      </div>
+      {!status && <span className="field-error">Not defined in config.yaml; these rules do nothing.</span>}
+      {rules.length === 0 && <p className="muted small">No rules: requests go out without these credentials.</p>}
+      {rules.map((r, i) => (
+        <RuleEditor
+          key={i}
+          id={`rule-${name}-${i}`}
+          rule={r}
+          status={status}
+          error={errors[`rule-${name}-${i}`]}
+          onChange={(fn) => onChange((rs) => fn(rs[i]))}
+          onRemove={() => onChange((rs) => void rs.splice(i, 1))}
+        />
+      ))}
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => {
+          const next = status?.credentials.find((c) => !rules.some((r) => r.credential === c.name))?.name ?? "*";
+          onChange((rs) => void rs.push(newRule(status, next)));
+        }}
+      >
+        <IconPlus /> Add rule
+      </button>
+    </div>
+  );
+}
+
+function RuleEditor({
+  id,
+  rule,
+  status,
+  error,
+  onChange,
+  onRemove,
+}: {
+  id: string;
+  rule: CredentialRule;
+  status: ConnectionStatus | undefined;
+  error?: string;
+  onChange: (fn: (r: CredentialRule) => void) => void;
+  onRemove: () => void;
+}) {
+  const names = status?.credentials.map((c) => c.name) ?? [];
+  const known = rule.credential === "*" || names.includes(rule.credential);
+  const [custom, setCustom] = useState(!known);
+  const showInput = custom || !known;
+  const label = rule.credential || "new rule";
+  const presets = RULE_PRESETS[rule.api];
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (custom && known) inputRef.current?.focus();
+  }, [custom]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="rule-edit" id={id}>
+      <div className="row gap wrap">
+        <label>
+          <span className="sr-only">Credential for rule {label}</span>
+          <select
+            className="input"
+            value={showInput ? CUSTOM : rule.credential}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === CUSTOM) setCustom(true);
+              else {
+                setCustom(false);
+                onChange((r) => void (r.credential = v));
+              }
+            }}
+          >
+            {names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+            <option value="*">Every credential (*)</option>
+            <option value={CUSTOM}>Name or pattern…</option>
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">API for rule {label}</span>
+          <select className="input" value={rule.api} onChange={(e) => onChange((r) => void (r.api = e.target.value as RuleApi))}>
+            {RULE_APIS.map((a) => (
+              <option key={a} value={a}>
+                {RULE_API_LABEL[a]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">Apply a preset to rule {label}</span>
+          <select
+            className="input"
+            value=""
+            onChange={(e) => {
+              const p = presets[e.target.value];
+              if (p) onChange((r) => Object.assign(r, clone(p)));
+            }}
+          >
+            <option value="">Preset…</option>
+            {Object.keys(presets).map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {showInput && (
+        <label>
+          <span className="sr-only">Credential name or pattern for rule {label}</span>
+          <input
+            ref={inputRef}
+            className="input mono sm"
+            value={rule.credential}
+            placeholder="name, or a pattern like prod-*"
+            spellCheck={false}
+            aria-invalid={!!error}
+            onChange={(e) => onChange((r) => void (r.credential = e.target.value))}
+          />
+        </label>
+      )}
+      {error && <span className="field-error">{error}</span>}
+      {(["allow", "ask", "deny"] as const).map((k) => {
+        const list = rule[k] ?? [];
+        return (
+          <Field key={k} label={`${k[0].toUpperCase()}${k.slice(1)}`}>
+            {(fid) => (
+              <textarea
+                id={fid}
+                className="input mono"
+                rows={Math.min(8, list.length + 1)}
+                value={list.join("\n")}
+                spellCheck={false}
+                onChange={(e) => onChange((r) => void (r[k] = e.target.value.split("\n")))}
+                onBlur={() => {
+                  const clean = patterns(list);
+                  if (!sameJson(clean, list)) onChange((r) => void (r[k] = clean));
+                }}
+              />
+            )}
+          </Field>
+        );
+      })}
+      <div className="row gap">
+        <p className="hint grow">One pattern per line: {PATTERN_HINT[rule.api]}.</p>
+        <button type="button" className="link-btn line-action" aria-label={`Remove rule ${label}`} onClick={onRemove}>
+          Remove rule
+        </button>
+      </div>
+    </div>
   );
 }
 

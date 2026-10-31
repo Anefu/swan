@@ -15,8 +15,9 @@ import type {
   SaveResult,
   SlashCommand,
   UsageReport,
-  CredentialStatus,
+  ConnectionStatus,
   CredentialUpsert,
+  MigrationNote,
   EgressEvent,
   FileEntry,
   PersonaSource,
@@ -133,6 +134,7 @@ export interface FileContent {
 export interface Ok {
   ok: true;
 }
+export type ConnectionAction = "login" | "renew" | "cancel" | "logout";
 
 export const api = {
   runtime: () => request<RuntimeStatus>("GET", "/api/runtime"),
@@ -152,10 +154,17 @@ export const api = {
 
   skills: () => request<SkillSummary[]>("GET", "/api/skills"),
 
-  credentials: () => request<CredentialStatus[]>("GET", "/api/credentials"),
-  putCredential: (name: string, body: CredentialUpsert) =>
-    request<CredentialStatus>("PUT", `/api/credentials/${enc(name)}`, body),
-  deleteCredential: (name: string) => request<Ok>("DELETE", `/api/credentials/${enc(name)}`),
+  connections: () => request<ConnectionStatus[]>("GET", "/api/connections"),
+  putCredential: (conn: string, name: string, body: CredentialUpsert) =>
+    request<ConnectionStatus>("PUT", `/api/connections/${enc(conn)}/credentials/${enc(name)}`, body),
+  deleteCredential: (conn: string, name: string) =>
+    request<ConnectionStatus | Ok>("DELETE", `/api/connections/${enc(conn)}/credentials/${enc(name)}`),
+  connectionAction: (conn: string, action: ConnectionAction) =>
+    request<ConnectionStatus>("POST", `/api/connections/${enc(conn)}/${action}`),
+  migrationNote: () => request<MigrationNote | null>("GET", "/api/connections/migration"),
+  dismissMigrationNote: () => request<Ok>("DELETE", "/api/connections/migration"),
+  setProviderKey: (name: string, value: string) => request<ProviderStatus>("PUT", `/api/providers/${enc(name)}/key`, { value }),
+  removeProviderKey: (name: string) => request<Ok>("DELETE", `/api/providers/${enc(name)}/key`),
 
   sessions: (personaId?: string) =>
     request<SessionSummary[]>("GET", personaId ? `/api/sessions?personaId=${enc(personaId)}` : "/api/sessions"),
