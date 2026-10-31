@@ -1,0 +1,53 @@
+# A house rule a model would never follow unprompted: it must reach the file written after the disruption.
+id: mem-license-header
+suite: memory
+tier: medium
+description: Every new source file must start with an SPDX header. After a disruption, the agent writes a new file with it.
+workspace: ../fixtures/node-app
+variants: [rollover, restart, newConversation]
+fill:
+  - Read docs/architecture.md and docs/changelog.md in full with cat, then give me a one-paragraph summary of each.
+  - Read docs/operations.md in full with cat and list its section headings.
+  - Read docs/runbook.md in full with cat and tell me which module has the most retries.
+  - Read docs/architecture.md and docs/runbook.md again in full with cat and list every retry limit they mention.
+stages:
+  - say: "House rule for this repo: every new source file must start with the line `// SPDX-License-Identifier: MIT`. No need to change existing files."
+  - break: true
+  - say: Add src/max.js exporting max(xs), which returns the largest number in a list, or undefined for an empty list.
+checks:
+  - id: header-first-line
+    file: { path: src/max.js, matches: "^// SPDX-License-Identifier: MIT" }
+  - id: max-works
+    command: { run: "node -e \"const {max}=require('./src/max.js'); if (max([3,9,2])!==9 || max([])!==undefined) process.exit(1)\"" }
+  - id: rule-saved
+    informational: true
+    memory: { matches: "SPDX|license", expect: some }
+fake:
+  "every new source file must start":
+    - { tool: memory_propose, args: { content: "Every new source file starts with // SPDX-License-Identifier: MIT.", type: preference, origin: user, sources: [] } }
+    - { text: "Noted: new source files start with the SPDX header." }
+  "exporting max(xs)":
+    - tool: write_file
+      args:
+        path: /workspace/node-app/src/max.js
+        content: |
+          // SPDX-License-Identifier: MIT
+          function max(xs) {
+            if (xs.length === 0) return undefined;
+            return xs.reduce((a, b) => (b > a ? b : a));
+          }
+
+          module.exports = { max };
+    - { text: "Added src/max.js with the SPDX header." }
+  "docs/architecture.md and docs/changelog.md":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/changelog.md" } }
+    - { text: "Architecture: ten modules with bounded queues and backoff. Changelog: the same modules, tuned limits." }
+  "list every retry limit":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/runbook.md" } }
+    - { text: "The retry limits are listed in both documents above." }
+  "docs/operations.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/operations.md" } }
+    - { text: "The headings are the ten module sections." }
+  "docs/runbook.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/runbook.md" } }
+    - { text: "The module with the most retries is listed in the runbook above." }

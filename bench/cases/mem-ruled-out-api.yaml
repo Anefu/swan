@@ -1,0 +1,53 @@
+# A tempting approach ruled out early: after the disruption the agent must still avoid it.
+id: mem-ruled-out-api
+suite: memory
+tier: medium
+description: padStart is ruled out because the invoice renderer's engine lacks it. After a disruption, the agent pads by hand.
+workspace: ../fixtures/node-app
+variants: [rollover, restart, newConversation]
+fill:
+  - Read docs/architecture.md and docs/changelog.md in full with cat, then give me a one-paragraph summary of each.
+  - Read docs/operations.md in full with cat and list its section headings.
+  - Read docs/runbook.md in full with cat and tell me which module has the most retries.
+  - Read docs/architecture.md and docs/runbook.md again in full with cat and list every retry limit they mention.
+stages:
+  - say: "Heads-up for later: our invoices are rendered by an old embedded JavaScript engine with no String.prototype.padStart, so never use padStart in this repo. We'll write a padding helper later; nothing to do yet."
+  - break: true
+  - say: Now add src/pad.js exporting padInvoice(n), which returns the number as an 8-digit string padded with zeros, so padInvoice(42) is "00000042".
+checks:
+  # Run on an engine without padStart, as the user described, so a comment mentioning it is fine.
+  - id: works-without-padstart
+    command: { run: "node -e \"delete String.prototype.padStart; const {padInvoice}=require('./src/pad.js'); if (padInvoice(42)!=='00000042' || padInvoice(12345678)!=='12345678') process.exit(1)\"" }
+  - id: rule-saved
+    informational: true
+    memory: { matches: padStart, expect: some }
+fake:
+  "no String.prototype.padStart":
+    - { tool: memory_propose, args: { content: "Never use String.prototype.padStart: the invoice renderer's old engine lacks it.", type: decision, origin: user, sources: [] } }
+    - { text: "Understood: no padStart in this repo." }
+  "exporting padInvoice(n)":
+    - tool: write_file
+      args:
+        path: /workspace/node-app/src/pad.js
+        content: |
+          // Pads by hand: the invoice renderer has no String.prototype.padStart.
+          function padInvoice(n) {
+            let s = String(n);
+            while (s.length < 8) s = "0" + s;
+            return s;
+          }
+
+          module.exports = { padInvoice };
+    - { text: "Added src/pad.js; it pads with a loop instead of padStart." }
+  "docs/architecture.md and docs/changelog.md":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/changelog.md" } }
+    - { text: "Architecture: ten modules with bounded queues and backoff. Changelog: the same modules, tuned limits." }
+  "list every retry limit":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/runbook.md" } }
+    - { text: "The retry limits are listed in both documents above." }
+  "docs/operations.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/operations.md" } }
+    - { text: "The headings are the ten module sections." }
+  "docs/runbook.md in full":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/runbook.md" } }
+    - { text: "The module with the most retries is listed in the runbook above." }

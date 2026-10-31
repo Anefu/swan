@@ -20,6 +20,8 @@ export interface TurnRequest {
   effort?: Effort;
   signal: AbortSignal;
   sessionId?: string; // stateful providers (copilot) keep one runtime session per harness session
+  /** False for one-off requests (checkpoints, /dream): a cache write costs extra and nothing reads it back. */
+  cache?: boolean;
 }
 
 export interface TurnCallbacks {
@@ -90,7 +92,7 @@ class AnthropicProvider implements Provider {
         ...(officialApi ? { eager_input_streaming: true } : {}),
       })),
       messages: req.messages,
-      cache_control: { type: "ephemeral" },
+      ...(req.cache === false ? {} : { cache_control: { type: "ephemeral" as const } }),
       ...(modern
         ? {
             thinking: { type: "adaptive", display: "summarized" },

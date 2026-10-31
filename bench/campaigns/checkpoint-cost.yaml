@@ -1,0 +1,32 @@
+# Which checkpoint setup keeps rollovers passing at the lowest cost? Run with --variant rollover.
+#   pnpm bench run bench/campaigns/checkpoint-cost.yaml --variant rollover --secrets ~/.persona-harness/secrets.yaml
+name: checkpoint-cost
+cap: 10
+trials: 2
+cases:
+  - ../cases/mem-pnpm-convention.yaml
+  - ../cases/mem-correction.yaml
+  - ../cases/mem-license-header.yaml
+  - ../cases/mem-ruled-out-api.yaml
+providers:
+  anthropic: { type: anthropic, apiKeySecret: ANTHROPIC_API_KEY }
+configs:
+  # The conversation is always Sonnet 5.5; what changes is the checkpoint's size and the model writing it.
+  - id: full-sonnet
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: full
+    contextTokens: 16000
+  - id: full-haiku
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: full
+    contextTokens: 16000
+    memoryModel: { provider: anthropic, id: claude-haiku-5-5 }
+  - id: minimal-sonnet
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: minimal
+    contextTokens: 16000
+  - id: minimal-haiku
+    model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
+    rolloverStrategy: minimal
+    contextTokens: 16000
+    memoryModel: { provider: anthropic, id: claude-haiku-5-5 }

@@ -695,7 +695,8 @@ export class Session {
     try {
       const result = await this.deps.providers.runTurn(
         m.provider,
-        { model: m.id, system, tools: [], messages: [{ role: "user", content: prompt }], maxTokens: 16_000, effort: "medium", signal: ac.signal, sessionId: auxId },
+        // Low effort and no cache write: a summary needs little thinking, and this request is never repeated.
+        { model: m.id, system, tools: [], messages: [{ role: "user", content: prompt }], maxTokens: 16_000, effort: "low", signal: ac.signal, sessionId: auxId, cache: false },
         { onBlockStart: () => {}, onDelta: (_i, kind, t) => kind === "text" && (text += t), onBlockStop: () => {} },
       );
       if (!text) text = result.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");

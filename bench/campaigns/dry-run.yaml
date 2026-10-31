@@ -6,6 +6,8 @@ fakeModel: true
 cases:
   - ../cases/mem-pnpm-convention.yaml
   - ../cases/mem-correction.yaml
+  - ../cases/mem-license-header.yaml
+  - ../cases/mem-ruled-out-api.yaml
   - ../cases/cost-fix-sum.yaml
 providers:
   fake: { type: openai, baseURL: "http://127.0.0.1:8299/v1" }

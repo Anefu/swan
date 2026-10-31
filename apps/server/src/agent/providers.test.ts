@@ -57,3 +57,52 @@ describe("OpenAI-compatible provider", () => {
     expect(bodies.at(-1)).toMatchObject({ model: "glm-5", stream: true, provider: { order: ["z-ai"], allow_fallbacks: false } });
   });
 });
+
+/** A stand-in Anthropic Messages API: records the request body and streams a one-word reply. */
+function fakeAnthropic() {
+  const bodies: Record<string, unknown>[] = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      bodies.push(JSON.parse(raw));
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify({ type: event, ...(data as object) })}\n\n`);
+      send("message_start", { message: { id: "m1", type: "message", role: "assistant", model: "claude-sonnet-5-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+      send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+      send("content_block_delta", { index: 0, delta: { type: "text_delta", text: "ok" } });
+      send("content_block_stop", { index: 0 });
+      send("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } });
+      send("message_stop", {});
+      res.end();
+    });
+  });
+  return { server, bodies };
+}
+
+describe("Anthropic provider", () => {
+  const { server, bodies } = fakeAnthropic();
+  let registry: ProviderRegistry;
+  beforeAll(async () => {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const baseURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    process.env.SWAN_TEST_ANTHROPIC_KEY = "test-key"; // read from the environment when the secrets store has none
+    registry = new ProviderRegistry({ providers: { a: { type: "anthropic", baseURL, apiKeySecret: "SWAN_TEST_ANTHROPIC_KEY" } } } as unknown as Settings, new SecretStore());
+  });
+  afterAll(() => server.close());
+
+  const turn = (extra: { cache?: boolean; effort?: "low" | "high" }) =>
+    registry.runTurn(
+      "a",
+      { model: "claude-sonnet-5-5", system: "sys", tools: [], messages: [{ role: "user", content: "hello" }], maxTokens: 100, signal: new AbortController().signal, ...extra },
+      { onBlockStart() {}, onDelta() {}, onBlockStop() {} },
+    );
+
+  it("caches conversation turns but not one-off requests", async () => {
+    await turn({});
+    expect(bodies.at(-1)).toMatchObject({ cache_control: { type: "ephemeral" } });
+    await turn({ cache: false, effort: "low" });
+    expect(bodies.at(-1)).not.toHaveProperty("cache_control");
+    expect(bodies.at(-1)).toMatchObject({ output_config: { effort: "low" } });
+  });
+});
