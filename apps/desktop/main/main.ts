@@ -135,10 +135,21 @@ function createWindow(): BrowserWindow {
     show: false,
     title: "Swan",
     backgroundColor: BACKGROUND,
+    // No title bar: Swan's header takes its place, with the window buttons centred on it (50 px).
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 18, y: 18 },
     webPreferences: SAFE_PREFS,
   });
   if (state.maximized) w.maximize();
   trackWindowState(w, stateFile);
+  // The page leaves room for the window buttons, except in full screen where macOS hides them.
+  const markButtons = () => {
+    if (isAppUrl(w.webContents.getURL()))
+      void w.webContents.executeJavaScript(`document.documentElement.classList.toggle("window-buttons", ${!w.isFullScreen()})`).catch(() => {});
+  };
+  w.webContents.on("did-finish-load", markButtons);
+  w.on("enter-full-screen", markButtons);
+  w.on("leave-full-screen", markButtons);
   w.once("ready-to-show", () => w.show());
   w.on("closed", () => {
     if (win === w) win = null;
@@ -150,7 +161,7 @@ function createWindow(): BrowserWindow {
 function showStatus(text: string) {
   win ??= createWindow();
   const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<title>Swan</title><style>html{color-scheme:dark}body{margin:0;height:100vh;display:grid;place-items:center;background:${BACKGROUND};color:#aeb9ca;font:14px system-ui,-apple-system,sans-serif}</style>
+<title>Swan</title><style>html{color-scheme:dark}body{margin:0;height:100vh;display:grid;place-items:center;background:${BACKGROUND};color:#aeb9ca;font:14px system-ui,-apple-system,sans-serif;-webkit-app-region:drag}</style>
 <p role="status">${escapeAttr(text)}</p>`;
   void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
