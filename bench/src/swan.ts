@@ -52,7 +52,9 @@ export async function pickSecrets(file: string | undefined, names: string[]): Pr
   const all = (YAML.parse(await fs.readFile(file, "utf8")) ?? {}) as Record<string, unknown>;
   const out: Record<string, string> = {};
   for (const n of names) {
-    const v = all[n];
+    // Swan's secrets.yaml takes `NAME: value` or `NAME: { value: ... }`.
+    const e = all[n];
+    const v = typeof e === "string" ? e : e && typeof e === "object" ? (e as { value?: unknown }).value : undefined;
     if (typeof v !== "string" || !v) throw new Error(`${file} has no value for ${n}`);
     out[n] = v;
   }

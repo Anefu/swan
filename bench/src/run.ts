@@ -228,6 +228,8 @@ export async function runOne(o: {
   } finally {
     await swan.stop();
     await cleanupPodman();
+    // Run folders are kept for diagnosis; the provider keys copied into them are not.
+    await fs.rm(path.join(home, "secrets.yaml"), { force: true });
   }
 
   const usage = await readUsage(home);

@@ -21,16 +21,16 @@ providers:
   #       price: { input: 0.0, output: 0.0, cacheRead: 0.0 }
   #       extraBody: { provider: { order: ["<host>"], allow_fallbacks: false } }
 configs:
-  # 40k contexts force rollovers without long fills (a labelled local variant).
+  # 30k contexts force rollovers after a few fill messages (a labelled local variant).
   - id: sonnet-full
     model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
     rolloverStrategy: full
-    contextTokens: 40000
+    contextTokens: 30000
   - id: sonnet-none
     model: { provider: anthropic, id: claude-sonnet-5-5, effort: medium }
     rolloverStrategy: none
-    contextTokens: 40000
+    contextTokens: 30000
   # - id: open-full
   #   model: { provider: openrouter, id: "<vendor>/<model>" }
   #   rolloverStrategy: full
-  #   contextTokens: 40000
+  #   contextTokens: 30000

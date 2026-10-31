@@ -9,6 +9,7 @@ fill:
   - Read docs/architecture.md and docs/changelog.md in full with cat, then give me a one-paragraph summary of each.
   - Read docs/operations.md in full with cat and list its section headings.
   - Read docs/runbook.md in full with cat and tell me which module has the most retries.
+  - Read docs/architecture.md and docs/runbook.md again in full with cat and list every retry limit they mention.
 stages:
   - say: "Ground rule for this repo: we use pnpm, never npm. Please remember that for future work."
   - break: true
@@ -36,6 +37,9 @@ fake:
   "docs/operations.md in full":
     - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/operations.md" } }
     - { text: "The headings are the ten module sections." }
+  "list every retry limit":
+    - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/architecture.md docs/runbook.md" } }
+    - { text: "The retry limits are listed in both documents above." }
   "docs/runbook.md in full":
     - { tool: bash, args: { command: "cd /workspace/node-app && cat docs/runbook.md" } }
     - { text: "The module with the most retries is listed in the runbook above." }
