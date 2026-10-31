@@ -86,6 +86,19 @@ describe("SubAgent", () => {
     expect(a.run.question).toBeUndefined();
   });
 
+  it("has no ask_parent when its parent cannot answer", () => {
+    const a = new SubAgent(
+      { id: "ag_2", name: "auto", model: { provider: "p", id: "m" }, context: "brief", background: false, maxTurns: 5, brief: "x" },
+      host([{ text: "ok" }]),
+      "system",
+      [echo, { ...echo, name: "ask_parent" }],
+      [{ role: "user", content: "x" }],
+      "k",
+      false,
+    );
+    expect((a as unknown as { toolDefs: ToolDef[] }).toolDefs.map((t) => t.name)).toEqual(["echo"]);
+  });
+
   it("reads steering messages before its next step", async () => {
     const seen: MessageParam[][] = [];
     let release!: () => void;

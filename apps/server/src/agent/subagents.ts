@@ -21,11 +21,13 @@ export interface SubAgentHost {
   outputLimit: number;
 }
 
-export const PREAMBLE = (background: boolean) =>
+export const PREAMBLE = (background: boolean, canAsk: boolean) =>
   [
     "# You are a sub-agent",
     "Another agent delegated one task to you. Work on it independently with your tools; you cannot talk to the user.",
-    "If you need a decision you cannot make yourself, call ask_parent with one clear question and wait for the answer instead of guessing.",
+    canAsk
+      ? "If you need a decision you cannot make yourself, call ask_parent with one clear question and wait for the answer instead of guessing."
+      : "Nobody can answer questions while you work: make reasonable assumptions and say which ones in your report.",
     background ? "You run in the background while the other agent continues; it may send you new instructions, which arrive with your tool results." : "",
     "Finish with a concise report of what you found or changed (paths, commands, results, open issues): that report is all the other agent will see.",
   ]
@@ -60,13 +62,16 @@ export class SubAgent {
     private toolDefs: ToolDef[],
     private messages: MessageParam[],
     private sessionKey: string,
+    canAsk = true,
   ) {
     this.run = { ...init, turns: 0, state: "running", startedAt: nowIso() };
     // The parent's ask_parent only refuses; this agent's own one pauses it. Keep the parent's
-    // definition (and so its prompt cache) when it has one.
+    // definition (and so its prompt cache) when it has one. Without a parent that can answer
+    // (an older context with no agent_message), there is no ask_parent at all.
     const ask = this.askTool();
     const i = toolDefs.findIndex((t) => t.name === "ask_parent");
-    if (i >= 0) this.toolDefs = toolDefs.map((t, j) => (j === i ? { ...ask, description: t.description, inputSchema: t.inputSchema } : t));
+    if (!canAsk) this.toolDefs = toolDefs.filter((t) => t.name !== "ask_parent");
+    else if (i >= 0) this.toolDefs = toolDefs.map((t, j) => (j === i ? { ...ask, description: t.description, inputSchema: t.inputSchema } : t));
     else this.toolDefs = [...toolDefs, ask];
   }
 

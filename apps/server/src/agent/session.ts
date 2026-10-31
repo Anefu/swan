@@ -1259,7 +1259,9 @@ export class Session {
     }
 
     const id = randomId("ag_", 3);
-    const brief = `${PREAMBLE(!!i.background)}\n\n# Your task\n${i.prompt}`;
+    // A context opened before agent_message existed cannot answer, so its sub-agents get no ask_parent.
+    const canAsk = e.frozen.tools.some((t) => t.name === "agent_message");
+    const brief = `${PREAMBLE(!!i.background, canAsk)}\n\n# Your task\n${i.prompt}`;
     const sameModel = model.provider === e.model.provider && model.id === e.model.id;
     const messages = i.context === "fork" ? forkMessages(e.messages, ctx.toolUseId, sameModel, brief) : [{ role: "user" as const, content: brief }];
     // The parent's exact tool list and system prompt, so a same-model sub-agent shares its prompt cache.
@@ -1287,6 +1289,7 @@ export class Session {
       defs,
       messages,
       `${this.id}:sub:${id}`,
+      canAsk,
     );
     const entry: AgentEntry = { sub, toolUseId: ctx.toolUseId, description: i.description };
     this.agents.set(id, entry);
