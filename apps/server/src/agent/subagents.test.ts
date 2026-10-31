@@ -47,7 +47,7 @@ const echo: ToolDef = {
 
 const make = (h: SubAgentHost, opts: { maxTurns?: number; background?: boolean } = {}) =>
   new SubAgent(
-    { id: "ag_1", name: "auto", model: { provider: "p", id: "m" }, context: "brief", background: !!opts.background, maxTurns: opts.maxTurns ?? 10, brief: "do it" },
+    { id: "ag_1", name: "auto", model: { provider: "p", id: "m" }, auto: true, context: "brief", background: !!opts.background, maxTurns: opts.maxTurns ?? 10, brief: "do it" },
     h,
     "system",
     [echo, { ...echo, name: "ask_parent" }],
@@ -88,7 +88,7 @@ describe("SubAgent", () => {
 
   it("has no ask_parent when its parent cannot answer", () => {
     const a = new SubAgent(
-      { id: "ag_2", name: "auto", model: { provider: "p", id: "m" }, context: "brief", background: false, maxTurns: 5, brief: "x" },
+      { id: "ag_2", name: "auto", model: { provider: "p", id: "m" }, auto: true, context: "brief", background: false, maxTurns: 5, brief: "x" },
       host([{ text: "ok" }]),
       "system",
       [echo, { ...echo, name: "ask_parent" }],

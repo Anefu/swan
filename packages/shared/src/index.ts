@@ -224,6 +224,7 @@ export interface AgentRun {
   id: string; // what agent_message / agent_stop take
   name: string; // the persona's sub-agent, or "auto"
   model: { provider: string; id: string; effort?: Effort };
+  auto: boolean; // the parent chose the model (an auto sub-agent)
   context: "brief" | "fork";
   background: boolean;
   maxTurns: number;

@@ -1273,7 +1273,7 @@ export class Session {
     const maxTokens = cfg?.model?.maxTokens ?? DEFAULT_MAX_TOKENS;
     const noop = { onBlockStart: () => {}, onDelta: () => {}, onBlockStop: () => {} };
     const sub = new SubAgent(
-      { id, name, model: { ...model, ...(effort ? { effort } : {}) }, context: i.context ?? "brief", background: !!i.background, maxTurns, brief: i.prompt },
+      { id, name, model: { ...model, ...(effort ? { effort } : {}) }, auto: !fixed, context: i.context ?? "brief", background: !!i.background, maxTurns, brief: i.prompt },
       {
         runTurn: async (r) => {
           const res = await this.deps.providers.runTurn(r.model.provider, { model: r.model.id, system: r.system, tools: r.tools, messages: r.messages, maxTokens, effort: r.model.effort, signal: r.signal, sessionId: r.sessionId }, noop);
@@ -1300,7 +1300,8 @@ export class Session {
       void this.watchBackground(entry);
       return {
         text: `Started background agent ${id} ("${i.description}") on ${model.id}. You'll get a message when it finishes or asks something; carry on meanwhile. agent_status lists agents, agent_message sends one instructions, agent_stop stops one.`,
-        itemPatch: { status: "running", agent: { ...sub.run } },
+        // The call returned at once; the line's duration is the agent's, filled in when it ends.
+        itemPatch: { status: "running", agent: { ...sub.run }, durationMs: undefined },
       };
     }
     const o = await sub.next();
@@ -1312,7 +1313,7 @@ export class Session {
   private outcomeOutput(entry: AgentEntry, o: Outcome): ToolOutput {
     const text = entry.sub.describe(o, entry.description);
     const agent = { ...entry.sub.run };
-    if (o.kind === "question") return { text, itemPatch: { status: "running", agent } };
+    if (o.kind === "question") return { text, itemPatch: { status: "running", agent, durationMs: undefined } };
     if (o.kind === "report") return { text, itemPatch: { agent } };
     return { text, isError: true, itemPatch: { agent, status: o.kind === "stopped" ? "interrupted" : "error" } };
   }
@@ -1329,7 +1330,7 @@ export class Session {
     const agent = { ...entry.sub.run };
     if (o.kind === "question") this.patchAgentItem(entry, { status: "running", agent });
     else if (o.kind === "report") this.patchAgentItem(entry, { status: "done", isError: false, output: o.text, agent, durationMs: Date.now() - Date.parse(agent.startedAt) });
-    else this.patchAgentItem(entry, { status: o.kind === "stopped" ? "interrupted" : "error", isError: true, ...(o.kind === "error" ? { output: o.text } : {}), agent });
+    else this.patchAgentItem(entry, { status: o.kind === "stopped" ? "interrupted" : "error", isError: true, ...(o.kind === "error" ? { output: o.text } : {}), agent, durationMs: Date.now() - Date.parse(agent.startedAt) });
   }
 
   /** A background agent's reports, questions and failures reach the parent as messages; an idle parent wakes up. */
@@ -1339,7 +1340,7 @@ export class Session {
       this.onAgentOutcome(entry, o);
       if (o.kind === "stopped") return;
       const run = entry.sub.run;
-      const uses = this.items.filter((x) => x.kind === "tool_call" && x.parentId === entry.toolUseId).length;
+      const uses = this.items.filter((x) => x.kind === "tool_call" && x.parentId === entry.toolUseId && x.name !== "ask_parent").length;
       const title = o.kind === "report" ? "Background agent finished" : o.kind === "question" ? "Background agent asked a question" : "Background agent failed";
       const detail = `${entry.description} · ${fmtElapsed(Date.now() - Date.parse(run.startedAt))} · ${uses} tool ${uses === 1 ? "use" : "uses"}`;
       this.receipt("agent", title, detail, o.kind === "error" ? "error" : "done");
