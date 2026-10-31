@@ -50,6 +50,7 @@ describe("sandbox image setup", () => {
   it("sends the build's downloads through the proxy, reaching a proxy on this Mac from Podman's VM", () => {
     const args = (url: string) => buildArgs(mirrors(), SettingsSchema.parse({ proxy: { url, noProxy: [".corp.example.com"] } }).proxy);
     expect(args("http://proxy.corp.example.com:8080")).toEqual([
+      "--http-proxy=false",
       "--build-arg", "HTTP_PROXY=http://proxy.corp.example.com:8080",
       "--build-arg", "HTTPS_PROXY=http://proxy.corp.example.com:8080",
       "--build-arg", "http_proxy=http://proxy.corp.example.com:8080",
@@ -57,9 +58,9 @@ describe("sandbox image setup", () => {
       "--build-arg", "NO_PROXY=localhost,127.0.0.1,::1,.corp.example.com",
       "--build-arg", "no_proxy=localhost,127.0.0.1,::1,.corp.example.com",
     ]);
-    expect(args("http://127.0.0.1:3128")[1]).toBe("HTTP_PROXY=http://host.containers.internal:3128");
-    expect(args("http://localhost:3128/")[1]).toBe("HTTP_PROXY=http://host.containers.internal:3128/");
-    expect(args("http://localhost.corp.example.com:3128")[1]).toBe("HTTP_PROXY=http://localhost.corp.example.com:3128");
+    expect(args("http://127.0.0.1:3128")[2]).toBe("HTTP_PROXY=http://host.containers.internal:3128");
+    expect(args("http://localhost:3128/")[2]).toBe("HTTP_PROXY=http://host.containers.internal:3128/");
+    expect(args("http://localhost.corp.example.com:3128")[2]).toBe("HTTP_PROXY=http://localhost.corp.example.com:3128");
   });
 
   it("adds extra certificates for apt's first download and for the system store", () => {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import tls from "node:tls";
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import type { Settings } from "./settings.js";
-import { expandHome, writeFileAtomic } from "./util.js";
+import { expandHome, log, writeFileAtomic } from "./util.js";
 
 // Local model servers, the home probe and the egress proxy's own listener never go through a proxy.
 const ALWAYS_DIRECT = ["localhost", "127.0.0.1", "::1"];
@@ -58,6 +58,8 @@ export async function applyNetwork(settings: Pick<Settings, "proxy">, extraCas: 
     setGlobalDispatcher(new Agent(tlsOptions));
   }
   hostEnv = env;
+  if (settings.proxy) log.info("network", `proxy ${settings.proxy.url} (direct: ${noProxyList(settings.proxy).join(", ")})`);
+  if (extraCas.length) log.info("network", `trusting ${extraCas.length} extra root certificate${extraCas.length === 1 ? "" : "s"} from caFiles`);
 }
 
 /** Proxy and certificate variables for the Copilot runtime and connection wrappers (empty when not configured). */

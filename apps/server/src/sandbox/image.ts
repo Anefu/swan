@@ -60,6 +60,8 @@ export function buildArgs(m: Mirrors, proxy?: Settings["proxy"]): string[] {
   if (!proxy) return args;
   const url = proxy.url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i, "$1host.containers.internal");
   const noProxy = noProxyList(proxy).join(",");
+  // Only this proxy: Podman would otherwise also pass in the proxy variables of Swan's own (the shell's) environment.
+  args.push("--http-proxy=false");
   for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) args.push("--build-arg", `${k}=${url}`);
   args.push("--build-arg", `NO_PROXY=${noProxy}`, "--build-arg", `no_proxy=${noProxy}`);
   return args;
