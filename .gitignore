@@ -5,3 +5,6 @@ dist/
 .env
 secrets.yaml
 secrets.env
+apps/desktop/build/
+apps/desktop/release/
+apps/desktop/.cache/

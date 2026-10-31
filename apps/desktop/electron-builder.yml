@@ -1,0 +1,35 @@
+# Unsigned (ad-hoc) macOS builds for now; see docs/DESKTOP.md for what signing will add.
+appId: io.github.anefu.swan
+productName: Swan
+copyright: Copyright © 2026 Anefu
+directories:
+  output: release
+  buildResources: build-resources
+files:
+  - dist/main.cjs
+  - package.json
+# The UI, the server bundle, the Node runtime, the Containerfile and examples (scripts/build.mjs).
+extraResources:
+  - from: build/resources
+    to: .
+asar: true
+npmRebuild: false # no native modules in the app itself
+electronLanguages: [en, en-GB] # the UI is English only
+electronFuses:
+  runAsNode: false # ELECTRON_RUN_AS_NODE cannot turn Swan into a script runner
+  enableNodeOptionsEnvironmentVariable: false # nor can NODE_OPTIONS load code into it
+  enableNodeCliInspectArguments: false # nor can --inspect attach a debugger
+  onlyLoadAppFromAsar: true
+  enableEmbeddedAsarIntegrityValidation: true # enforced once the app is signed
+  enableCookieEncryption: true
+  grantFileProtocolExtraPrivileges: false
+  loadBrowserProcessSpecificV8Snapshot: false
+mac:
+  target: dmg
+  icon: build-resources/icon.png
+  category: public.app-category.developer-tools
+  identity: "-" # ad-hoc: Apple silicon only runs signed code
+  hardenedRuntime: false
+dmg:
+  artifactName: Swan-${version}-${arch}.dmg
+publish: null

@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerEvent } from "@ph/shared";
+import { pageMeta } from "./api";
 
 export interface WsState {
   status: "connecting" | "open" | "closed";
@@ -150,7 +151,9 @@ export class EventSocket {
   }
 }
 
+/** The app names the server's WebSocket address in the page; in development the page's own host proxies it. */
 export function wsUrl(token: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/ws?token=${encodeURIComponent(token)}`;
+  const base = pageMeta("ph-ws") ?? `${proto}//${window.location.host}/api/ws`;
+  return `${base}?token=${encodeURIComponent(token)}`;
 }

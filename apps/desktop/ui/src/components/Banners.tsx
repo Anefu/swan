@@ -113,8 +113,8 @@ export function ServerGate() {
     body = (
       <>
         <p>
-          The page has no API token. Start the server (for example <code>pnpm dev</code> at the repository root); it writes{" "}
-          <code>~/.swan/api-token</code>.
+          The page has no API token yet. The server writes it to <code>~/.swan/api-token</code> when it starts (in development:{" "}
+          <code>pnpm dev</code> at the repository root).
         </p>
         <p className="muted">
           <Spinner size={10} /> Waiting for the server. This page reloads by itself.
@@ -138,9 +138,7 @@ export function ServerGate() {
     title = "Cannot reach the Swan server";
     body = (
       <>
-        <p>
-          Nothing answers on <code>/api</code>. The server listens on <code>127.0.0.1:4317</code>.
-        </p>
+        <p>Nothing answers on <code>/api</code>. Swan restarts its server if it stopped; Help → Show Server Log says why.</p>
         <p className="muted">{state.ws.status === "connecting" ? "Trying again…" : secs !== null ? `Next try in ${secs} s.` : ""}</p>
         <button type="button" className="btn primary" onClick={actions.retryConnection}>
           Retry now

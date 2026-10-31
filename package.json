@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @ph/server --filter @ph/web dev",
-    "build": "pnpm --filter @ph/web build",
-    "start": "pnpm --filter @ph/server start",
+    "dev": "pnpm -r --parallel --filter @ph/server --filter @ph/desktop dev",
+    "build": "pnpm --filter @ph/desktop build",
+    "start": "pnpm --filter @ph/desktop start",
+    "package": "pnpm --filter @ph/desktop package",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "aws-stub": "pnpm --filter @ph/aws-stub start"

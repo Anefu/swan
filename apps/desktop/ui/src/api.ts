@@ -33,11 +33,16 @@ import type {
 // rewrites the placeholder in served files can never rewrite this check.
 const PLACEHOLDER_RE = /^__[A-Z_]+__$/;
 
-function tokenFromDocument(doc: Document): string | null {
-  const value = doc.querySelector<HTMLMetaElement>('meta[name="ph-token"]')?.content?.trim() ?? "";
+function metaFrom(doc: Document, name: string): string | null {
+  const value = doc.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content?.trim() ?? "";
   if (!value || PLACEHOLDER_RE.test(value)) return null;
   return value;
 }
+
+const tokenFromDocument = (doc: Document) => metaFrom(doc, "ph-token");
+
+/** A value the app filled into the page (ph-token, ph-ws); null when it is still the placeholder. */
+export const pageMeta = (name: string) => metaFrom(document, name);
 
 export function readToken(): string | null {
   return tokenFromDocument(document);

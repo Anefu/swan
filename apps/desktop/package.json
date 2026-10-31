@@ -1,0 +1,35 @@
+{
+  "name": "@ph/desktop",
+  "productName": "Swan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Swan for macOS: runs the Swan server and shows its UI",
+  "author": "Anefu",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs && electron .",
+    "dev": "node scripts/dev.mjs",
+    "package": "node scripts/build.mjs --node && electron-builder --mac --arm64 --publish never",
+    "smoke-server": "node scripts/smoke-server.mjs",
+    "typecheck": "tsc -p . && tsc -p ui"
+  },
+  "devDependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@ph/shared": "workspace:*",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "dompurify": "^3.4.17",
+    "electron": "44.10.0",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2",
+    "marked": "^18.1.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}

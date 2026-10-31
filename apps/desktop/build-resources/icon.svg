@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The favicon's swan on the macOS icon grid (824 px tile, 100 px margin). -->
+  <g transform="translate(100 100) scale(25.75)">
+    <rect width="32" height="32" rx="7" fill="#202631"/>
+    <path d="M9 21c3 3 11 3 14-2-3 1-6 0-7-3 0-3 2-5 1-8-1-2-4-2-5 0 2 0 3 1 2 3-1 2-3 4-2 7" fill="none" stroke="#B2A1E8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -12,7 +12,7 @@ export const HOME_FROM_ENV = !!process.env.PH_HOME;
 export const PH_HOME = path.resolve(expandHome(process.env.PH_HOME ?? "~/.swan"));
 export const LEGACY_HOME = path.resolve(expandHome("~/.persona-harness"));
 
-// The desktop app ships the web build, Containerfile and examples outside the repository layout.
+// The desktop app ships the Containerfile and examples outside the repository layout.
 const RESOURCES = process.env.PH_RESOURCES ? path.resolve(process.env.PH_RESOURCES) : null;
 
 export const paths = {
@@ -32,7 +32,6 @@ export const paths = {
   migrationNote: path.join(PH_HOME, "connections-migration.json"),
   apiToken: path.join(PH_HOME, "api-token"),
   serverLock: path.join(PH_HOME, "server.json"), // the server running for this home
-  webDist: RESOURCES ? path.join(RESOURCES, "web") : path.join(REPO_ROOT, "apps/web/dist"),
   containerfile: path.join(RESOURCES ?? REPO_ROOT, "sandbox/Containerfile"),
   examples: path.join(RESOURCES ?? REPO_ROOT, "examples"),
 };

@@ -2,9 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import { promises as fs, realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
 import type { AttachmentStore } from "./attachments.js";
@@ -19,11 +18,11 @@ import { PERSONA_ID, type PersonaStore } from "./personas.js";
 import type { EgressProxy } from "./proxy/egress.js";
 import type { PodmanRuntime } from "./sandbox/podman.js";
 import type { SecretStore } from "./secrets.js";
-import { paths, type Settings } from "./settings.js";
+import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { builtinTools, skillTool } from "./agent/tools.js";
 import { PermissionPolicy } from "./agent/permissions.js";
-import { exists, log } from "./util.js";
+import { log } from "./util.js";
 
 export interface ApiDeps {
   settings: Settings;
@@ -52,7 +51,13 @@ class HttpError extends Error {
 }
 
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
-const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+// The desktop app's own pages (swan://app), or a local page in development (Vite on localhost).
+const LOCAL_ORIGIN = /^(https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?|swan:\/\/app)$/i;
+
+/** DNS-rebinding guard: only requests addressed to a loopback name. */
+export const hostAllowed = (host: string | undefined) => LOCAL_HOST.test(host ?? "");
+/** CSRF guard: browsers send Origin, and only Swan's own pages may call the API. */
+export const originAllowed = (origin: string | undefined) => origin === undefined || LOCAL_ORIGIN.test(origin);
 
 /** Fans server events out to WebSocket clients; item-level events only to subscribers. */
 export class Hub {
@@ -92,9 +97,8 @@ export async function startApi(d: ApiDeps, hub: Hub) {
 
   // DNS-rebinding and CSRF guard for everything, token for the API.
   app.addHook("onRequest", async (req, reply) => {
-    if (!LOCAL_HOST.test(req.headers.host ?? "")) return reply.code(403).send({ error: "forbidden host" });
-    const origin = req.headers.origin;
-    if (origin && !LOCAL_ORIGIN.test(origin)) return reply.code(403).send({ error: "forbidden origin" });
+    if (!hostAllowed(req.headers.host)) return reply.code(403).send({ error: "forbidden host" });
+    if (!originAllowed(req.headers.origin)) return reply.code(403).send({ error: "forbidden origin" });
     if (req.url.startsWith("/api/")) {
       const t = req.headers["x-ph-token"] ?? new URL(req.url, "http://x").searchParams.get("token");
       if (!tokenOk(t)) return reply.code(401).send({ error: "missing or invalid token" });
@@ -443,29 +447,13 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     });
   });
 
-  // ----- web UI -----
-  const serveIndex = async (_req: FastifyRequest, reply: FastifyReply) => {
-    const index = path.join(paths.webDist, "index.html");
-    if (!(await exists(index)))
-      return reply
-        .type("text/html")
-        .send(`<!doctype html><title>Swan</title><p style="font-family:system-ui;padding:2rem">The web UI is not built. Run <code>pnpm build</code>, or use <code>pnpm dev</code> and open <a href="http://localhost:5173">localhost:5173</a>.</p>`);
-    const html = (await fs.readFile(index, "utf8")).replace("__PH_TOKEN__", d.token);
-    return reply.type("text/html").header("cache-control", "no-store").send(html);
-  };
-  if (await exists(paths.webDist)) {
-    await app.register(fastifyStatic, { root: paths.webDist, index: false, wildcard: false, prefix: "/" });
-    // Static files registered with wildcard:false get explicit routes; the rest falls to the SPA.
-  }
-  app.get("/", serveIndex);
-  app.setNotFoundHandler(async (req, reply) => {
-    if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
-    return serveIndex(req, reply);
-  });
+  // The UI ships inside the desktop app; this server only answers the API.
+  app.get("/", async (_req, reply) => reply.type("text/plain").send("This is Swan's server. Open the Swan app to use it.\n"));
+  app.setNotFoundHandler(async (_req, reply) => reply.code(404).send({ error: "not found" }));
 
   await app.listen({ host: "127.0.0.1", port: d.settings.port });
   const port = (app.server.address() as AddressInfo).port;
-  log.info("api", `UI and API on http://127.0.0.1:${port}`);
+  log.info("api", `API on http://127.0.0.1:${port}`);
   return { app, port };
 }
 

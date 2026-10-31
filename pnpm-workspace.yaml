@@ -3,4 +3,7 @@ packages:
   - packages/*
   - tools/*
 onlyBuiltDependencies:
+  - electron # downloads its binary (skipped in CI's Linux jobs)
   - esbuild
+ignoredBuiltDependencies:
+  - electron-winstaller # Windows installers only

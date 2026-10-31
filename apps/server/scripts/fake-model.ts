@@ -2,7 +2,7 @@
 //
 //   pnpm --filter @ph/server exec tsx scripts/fake-model.ts        # listens on 127.0.0.1:8099
 //
-// Add to ~/.persona-harness/config.yaml:   providers: { fake: { type: openai, baseURL: http://127.0.0.1:8099/v1 } }
+// Add to ~/.swan/config.yaml:   providers: { fake: { type: openai, baseURL: http://127.0.0.1:8099/v1 } }
 // and set a persona's model to { provider: fake, id: scripted }.
 //
 // Each user message picks a script by keyword (see SCRIPTS); every model turn after it plays the
