@@ -12,11 +12,12 @@ if [ ! -d "$DIR/.git" ]; then
   git clone -q https://github.com/cai-jianfeng/compact-bench.git "$DIR"
 fi
 cd "$DIR"
-git checkout -q -- . && git clean -qfd harness tests run.py
+git checkout -q -- . && git clean -qfd harness tests scripts run.py
 git checkout -q "$COMMIT"
 git apply "$HERE/swan.patch"
 cp "$HERE/swan_checkpoint.py" harness/
-cp "$HERE/test_swan_checkpoint.py" tests/
+cp "$HERE/test_swan_checkpoint.py" "$HERE/test_meter.py" tests/
+cp "$HERE/meter.py" scripts/
 mkdir -p data results work
 podman build -q -t "$IMAGE" . >/dev/null
 echo "Built $IMAGE from $DIR"

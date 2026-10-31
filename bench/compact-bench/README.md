@@ -46,10 +46,16 @@ CB_MESSAGES_URL=https://api.anthropic.com/v1/messages
 CB_AGENT_MODEL=claude-sonnet-5-5       # the fixed continuation agent
 ```
 
+Compact-Bench has no spending limit and records no token usage, so every paid run goes through
+`meter.py`. It forwards each request to the Messages API, logs tokens and estimated cost to a JSONL
+file, refuses models without a price, and refuses everything once the cap is reached:
+
 ```bash
 B=~/.swan-bench/compact-bench
 podman run --rm --env-file $B/.env -v $B/data:/bench/data -v $B/results:/bench/results -v $B/work:/bench/work \
-  localhost/compact-bench:9dd9a3f-swan --track task --prompt swan-minimal --model claude-haiku-5-5 --limit 5
+  --entrypoint python localhost/compact-bench:9dd9a3f-swan \
+  scripts/meter.py --cap 4 --log /bench/results/usage.jsonl -- \
+  python run.py --track task --prompt swan-minimal --model claude-haiku-5-5 --limit 5
 ```
 
 `--model` is the model that writes the summary; `CB_AGENT_MODEL` continues from it. Run a method per
