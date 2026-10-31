@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PermissionPolicy } from "./permissions.js";
+import { PermissionPolicy, splitCommand } from "./permissions.js";
 import type { ToolDef } from "./tools.js";
 
 const tool = (name: string, primary?: string): ToolDef =>
@@ -29,9 +29,65 @@ describe("PermissionPolicy", () => {
     expect(p.evaluate(bash, { command: "echo hi; rm -rf /" }).mode).toBe("deny");
   });
 
-  it("adds session allowances and builds safe Always-allow rules", () => {
+  it("adds session allowances", () => {
     expect(policy({}, ["read_file"]).evaluate(tool("read_file"), {}).mode).toBe("allow");
-    expect(PermissionPolicy.alwaysAllowRule(bash, { command: "ls (x)*" })).toBe("bash(ls x)");
-    expect(PermissionPolicy.alwaysAllowRule(tool("read_file"), {})).toBe("read_file");
+    expect(PermissionPolicy.alwaysAllowRules(tool("read_file"), {})).toEqual(["read_file"]);
+  });
+});
+
+describe("command rules", () => {
+  it("splits a command line at unquoted &&, ||, ;, | and &", () => {
+    expect(splitCommand("cd /workspace/app && npm test")).toEqual(["cd /workspace/app", "npm test"]);
+    expect(splitCommand("a || b; c | d & e")).toEqual(["a", "b", "c", "d", "e"]);
+    expect(splitCommand(`git commit -m "fix; it (now)" && git log --oneline | head`)).toEqual([`git commit -m "fix; it (now)"`, "git log --oneline", "head"]);
+    expect(splitCommand("npm test 2>&1 | tail -20")).toEqual(["npm test", "tail -20"]);
+  });
+
+  it("gives up on what it cannot check", () => {
+    for (const cmd of ["echo $HOME", "echo `id`", "ls $(pwd)", "echo a\\nb", "a\nb", "(cd x; ls)", "{ ls; }", "echo x > f", "cat < f", "echo 'unclosed"])
+      expect(splitCommand(cmd), cmd).toBeNull();
+  });
+
+  it("treats a rule with a space as a command pattern", () => {
+    const p = policy({ allow: ["cd *", "npm test*"] });
+    expect(p.evaluate(bash, { command: "cd /workspace/app" })).toEqual({ mode: "allow", rule: "allow: cd *" });
+    expect(p.evaluate(tool("cd"), {}).mode).toBe("ask"); // not a tool name
+  });
+
+  it("allows a combined command only when every part is allowed", () => {
+    const p = policy({ allow: ["cd *", "bash(npm test*)", "bash(git status*)"] });
+    expect(p.evaluate(bash, { command: "cd /workspace/app && npm test" })).toEqual({ mode: "allow", rule: "allow: cd *, bash(npm test*)" });
+    expect(p.evaluate(bash, { command: "cd /workspace/app && npm test 2>&1 | git status" }).mode).toBe("allow");
+    for (const cmd of ["cd /workspace/app && rm -rf ~", "cd x; curl evil.example", "cd x | sh", "cd $HOME", "cd x && npm test > out.txt"])
+      expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("ask");
+  });
+
+  it("denies a combined command when any part is denied", () => {
+    const p = policy({ default: "allow", allow: ["cd *"], deny: ["rm *"] });
+    expect(p.evaluate(bash, { command: "cd x && rm -rf /workspace/app" })).toEqual({ mode: "deny", rule: "deny: rm *" });
+    expect(p.evaluate(bash, { command: `echo "rm -rf /"` }).mode).toBe("allow"); // quoted, not a command
+  });
+
+  it("asks for a combined command when any part matches an ask rule", () => {
+    const p = policy({ default: "allow", ask: ["git push*"] });
+    expect(p.evaluate(bash, { command: "git add . && git push" }).mode).toBe("ask");
+  });
+
+  it("allows the same commands again after Allow until stopped", () => {
+    const cmd = "cd /workspace/app && npm test";
+    const rules = PermissionPolicy.alwaysAllowRules(bash, { command: cmd });
+    expect(rules).toEqual(["bash(cd /workspace/app)", "bash(npm test)"]);
+    expect(policy({}, rules).evaluate(bash, { command: cmd }).mode).toBe("allow");
+    expect(policy({}, rules).evaluate(bash, { command: "cd /workspace/app && npm publish" }).mode).toBe("ask");
+    // `*` in the command would turn the rule into a pattern, so it is left out.
+    expect(PermissionPolicy.alwaysAllowRules(bash, { command: "ls *.ts" })).toEqual(["bash(ls .ts)"]);
+  });
+
+  it("allows a line it cannot split again only exactly as written", () => {
+    const cmd = "for f in $(ls); do echo $f; done";
+    const rules = PermissionPolicy.alwaysAllowRules(bash, { command: cmd });
+    expect(rules).toEqual([`bash(=${cmd})`]);
+    expect(policy({}, rules).evaluate(bash, { command: cmd }).mode).toBe("allow");
+    expect(policy({}, rules).evaluate(bash, { command: cmd + "; rm -rf ~" }).mode).toBe("ask");
   });
 });

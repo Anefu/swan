@@ -288,13 +288,41 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
     }
   };
 
+  // The persona file also changes outside this form: "Always allow" on a request adds a host, and an
+  // editor or the Copilot model menu can change it. Follow it, and never let a stale form overwrite it.
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
+  const refresh = async () => {
+    if (!persona || isNew) return;
+    let fresh: PersonaConfigView;
+    try {
+      fresh = withDefaults(await api.config(persona.id));
+    } catch {
+      return;
+    }
+    const cur = entryRef.current;
+    if (!cur || sameJson(cur.base, fresh)) return;
+    if (sameJson(cur.base, cur.draft)) {
+      actions.setDraft(draftKey, { base: fresh, draft: clone(fresh) });
+      setFoldersSeq((n) => n + 1);
+    } else actions.setDraft(draftKey, { ...cur, base: fresh, outdated: true });
+  };
+
   useEffect(() => {
-    if (entry) return;
+    if (entry) {
+      void refresh(); // a form kept from earlier may be out of date
+      return;
+    }
     if (isNew) {
       const base = blankConfig();
       actions.setDraft(draftKey, { base, draft: clone(base), newId: "" });
     } else void load();
   }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const summaryKey = persona ? JSON.stringify(persona) : "";
+  useEffect(() => {
+    if (entryRef.current) void refresh();
+  }, [summaryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Add rule…" from a blocked-request notice: add the rule to the draft once it is loaded, then show it.
   const [reveal, setReveal] = useState<{ id: string; n: number } | null>(null);
@@ -714,7 +742,9 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         >
           <p className="hint">
             Checked in order: deny, allow, ask, then the default. Rules look like <span className="mono">read_file</span>,{" "}
-            <span className="mono">mcp__github__*</span> or <span className="mono">bash(git status*)</span>. Applies to the next call.
+            <span className="mono">mcp__github__*</span>, or a command pattern such as <span className="mono">cd *</span> or{" "}
+            <span className="mono">npm test*</span>. A command that joins several, like <span className="mono">cd app &amp;&amp; npm test</span>,
+            is allowed when every part is. Applies to the next call.
           </p>
           <Field label="Default for anything unmatched">
             {(id) => (
@@ -929,6 +959,12 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           </p>
         )}
         {!dirty && entry.result && <SaveSummary result={entry.result} />}
+        {dirty && entry.outdated && (
+          <p className="small tone-attention" role="status">
+            This persona changed elsewhere while you were editing (for example “Always allow” on a request). Saving replaces those
+            changes; Discard shows them.
+          </p>
+        )}
         {dirty && (
           <div className="row gap">
             <span className="grow tone-attention">

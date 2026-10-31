@@ -3,24 +3,69 @@ import type { PersonaConfig } from "../personas.js";
 import { wildcardMatch } from "../util.js";
 import type { ToolDef } from "./tools.js";
 
-// Shell metacharacters that could chain a second command after an allowed prefix.
-const SHELL_CHAIN = /[;&|`$<>(){}\n\\]/;
+// What Swan cannot check in a command line, anywhere: substitution ($, `), escapes and line breaks.
+const UNCHECKABLE_ANYWHERE = /[$`\\\n\r]/;
+// ...and outside quotes: grouping and redirection to files.
+const UNCHECKABLE_UNQUOTED = new Set(["(", ")", "{", "}", "<", ">"]);
+
+/**
+ * The simple commands in a shell command line, split at unquoted `&&`, `||`, `;`, `|` and `&`.
+ * Null when Swan cannot check the line: substitution, escapes, line breaks, grouping, redirection
+ * (except the harmless `2>&1`) or unbalanced quotes. Allow rules never match such a line.
+ */
+export function splitCommand(command: string): string[] | null {
+  if (UNCHECKABLE_ANYWHERE.test(command)) return null;
+  const line = command.replace(/(^|\s)2>&1(?=$|[\s;&|])/g, "$1"); // stderr into stdout writes no file
+  const parts: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      cur += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+    } else if (UNCHECKABLE_UNQUOTED.has(c)) {
+      return null;
+    } else if (c === ";" || c === "|" || c === "&") {
+      if ((c === "&" || c === "|") && line[i + 1] === c) i++; // && and ||
+      parts.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  if (quote) return null;
+  parts.push(cur);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
 
 interface Rule {
   raw: string;
   name: string;
   arg?: string;
+  exact?: boolean; // matches the whole argument as written, no wildcards
 }
+
+const EXACT = "=";
 
 function parseRule(raw: string): Rule {
   const m = /^([^()]+)\((.*)\)$/s.exec(raw.trim());
-  return m ? { raw, name: m[1].trim(), arg: m[2] } : { raw, name: raw.trim() };
+  if (m) {
+    const arg = m[2]!;
+    return arg.startsWith(EXACT) ? { raw, name: m[1]!.trim(), arg: arg.slice(EXACT.length), exact: true } : { raw, name: m[1]!.trim(), arg };
+  }
+  // Tool names have no spaces: "cd *" or "npm test*" is a command pattern, as bash(cd *).
+  if (/\s/.test(raw.trim())) return { raw, name: "bash", arg: raw.trim() };
+  return { raw, name: raw.trim() };
 }
 
 /**
- * Rules: deny > allow > ask > default. A rule is a tool-name glob (`mcp__github__*`) or
- * `tool(argGlob)` matched against the tool's primary argument, e.g. `bash(git status*)`.
- * Arg-scoped *allow* rules never match shell commands that chain or substitute.
+ * Rules: deny > allow > ask > default. A rule is a tool-name glob (`mcp__github__*`),
+ * `tool(argGlob)` matched against the tool's primary argument, e.g. `bash(git status*)`, or a
+ * command pattern on its own (`cd *`). A command line that joins several commands is allowed only
+ * when every part matches an allow rule, and denied when any part matches a deny rule. Allow rules
+ * never match a line Swan cannot split safely (see splitCommand).
  */
 export class PermissionPolicy {
   private deny: Rule[];
@@ -36,19 +81,48 @@ export class PermissionPolicy {
     this.ask = cfg.ask.map(parseRule);
   }
 
-  private matches(rule: Rule, tool: ToolDef, input: Record<string, unknown> | null, forAllow: boolean): boolean {
+  /** A rule with an argument against one value (the whole argument, or one part of a command). */
+  private static argMatches(rule: Rule, value: string): boolean {
+    return rule.exact ? value === rule.arg : wildcardMatch(value, rule.arg!);
+  }
+
+  /** deny and ask: the whole argument or, for a command line, any part of it. */
+  private hits(rule: Rule, tool: ToolDef, arg: string | undefined, parts: string[] | null): boolean {
     if (!wildcardMatch(tool.name, rule.name)) return false;
     if (rule.arg === undefined) return true;
-    const arg = input ? tool.primaryArg?.(input) : undefined;
     if (arg === undefined) return false;
-    if (forAllow && tool.name === "bash" && SHELL_CHAIN.test(arg)) return false;
-    return wildcardMatch(arg, rule.arg);
+    return PermissionPolicy.argMatches(rule, arg) || (!!parts && parts.some((p) => PermissionPolicy.argMatches(rule, p)));
+  }
+
+  /** allow: rules covering the call, or null. A command line needs a rule for every part. */
+  private allowedBy(tool: ToolDef, arg: string | undefined, parts: string[] | null): Rule[] | null {
+    const named = this.allow.filter((r) => wildcardMatch(tool.name, r.name));
+    const whole = named.find((r) => r.arg === undefined);
+    if (whole) return [whole];
+    if (arg === undefined) return null;
+    if (tool.name !== "bash") {
+      const r = named.find((x) => PermissionPolicy.argMatches(x, arg));
+      return r ? [r] : null;
+    }
+    const exact = named.find((r) => r.exact && r.arg === arg); // "until stopped" on a line Swan cannot split
+    if (exact) return [exact];
+    if (!parts?.length) return null;
+    const used: Rule[] = [];
+    for (const p of parts) {
+      const r = named.find((x) => !x.exact && PermissionPolicy.argMatches(x, p));
+      if (!r) return null;
+      if (!used.includes(r)) used.push(r);
+    }
+    return used;
   }
 
   evaluate(tool: ToolDef, input: Record<string, unknown> | null): { mode: PermissionMode; rule: string } {
-    for (const r of this.deny) if (this.matches(r, tool, input, false)) return { mode: "deny", rule: `deny: ${r.raw}` };
-    for (const r of this.allow) if (this.matches(r, tool, input, true)) return { mode: "allow", rule: `allow: ${r.raw}` };
-    for (const r of this.ask) if (this.matches(r, tool, input, false)) return { mode: "ask", rule: `ask: ${r.raw}` };
+    const arg = input ? tool.primaryArg?.(input) : undefined;
+    const parts = tool.name === "bash" && arg !== undefined ? splitCommand(arg) : null;
+    for (const r of this.deny) if (this.hits(r, tool, arg, parts)) return { mode: "deny", rule: `deny: ${r.raw}` };
+    const allowed = this.allowedBy(tool, arg, parts);
+    if (allowed) return { mode: "allow", rule: `allow: ${allowed.map((r) => r.raw).join(", ")}` };
+    for (const r of this.ask) if (this.hits(r, tool, arg, parts)) return { mode: "ask", rule: `ask: ${r.raw}` };
     return { mode: this.cfg.default, rule: `default: ${this.cfg.default}` };
   }
 
@@ -61,12 +135,16 @@ export class PermissionPolicy {
     return this.cfg.default;
   }
 
-  /** The rule "Always allow" adds for the rest of the session. */
-  static alwaysAllowRule(tool: ToolDef, input: Record<string, unknown>): string {
-    if (tool.name === "bash") {
-      const cmd = tool.primaryArg?.(input) ?? "";
-      return `bash(${cmd.replace(/[()*]/g, "")})`;
-    }
-    return tool.name;
+  /**
+   * The rules "Allow … until stopped" adds: for a command line, one per part (without `*`, which
+   * would make it a pattern), so the same commands run again without asking; a line Swan cannot
+   * split is allowed again only exactly as written.
+   */
+  static alwaysAllowRules(tool: ToolDef, input: Record<string, unknown>): string[] {
+    if (tool.name !== "bash") return [tool.name];
+    const cmd = tool.primaryArg?.(input) ?? "";
+    const parts = splitCommand(cmd);
+    if (!parts) return [`bash(${EXACT}${cmd})`];
+    return [...new Set(parts.map((p) => `bash(${p.replace(/\*/g, "")})`))];
   }
 }

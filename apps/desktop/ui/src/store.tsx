@@ -82,6 +82,8 @@ export interface SettingsDraft {
   newId?: string;
   result?: SaveResult | null;
   error?: string | null;
+  /** The persona changed outside this form (e.g. "Always allow") while it had unsaved edits. */
+  outdated?: boolean;
 }
 
 /** Open persona Settings at a section, optionally adding a credential rule to the draft (never saved by itself). */

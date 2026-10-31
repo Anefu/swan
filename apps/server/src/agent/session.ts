@@ -1478,8 +1478,8 @@ export class Session {
         return finish("denied", { text: `The user denied this tool call${why ? `: ${why}` : "."}`, isError: true }, { denyReason: why || "denied by user" });
       }
       if (decision.decision === "allow_always") {
-        const rule = PermissionPolicy.alwaysAllowRule(tool, v.value);
-        if (!this.summary.allowances.includes(rule)) this.setAllowances([...this.summary.allowances, rule]);
+        const rules = PermissionPolicy.alwaysAllowRules(tool, v.value).filter((r) => !this.summary.allowances.includes(r));
+        if (rules.length) this.setAllowances([...this.summary.allowances, ...rules]);
       }
       item.status = "running";
       item.approvalReason = undefined;

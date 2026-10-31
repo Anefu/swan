@@ -49,6 +49,18 @@ body,
   height: 100%;
 }
 
+/* The page itself never scrolls or bounces (macOS rubber-banding moved the composer); the
+   conversation and panes scroll inside it. Only the start-up screens can overflow #root. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+#root {
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   background: var(--canvas);
@@ -869,6 +881,7 @@ textarea::placeholder {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px 0 12px;
 }
 .column > .line-banner {

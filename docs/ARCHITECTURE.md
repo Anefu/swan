@@ -140,8 +140,11 @@ sandbox: { cpus: 2, memory: 2g, pidsLimit: 512 }
 ```
 
 Path guards: folders must exist, must not contain `~/.swan`, and must not be `/`, `~`,
-or a system directory. Rule precedence: deny > allow > ask > default; "Always allow" in the UI adds a
-session-scoped allow rule.
+or a system directory. Rule precedence: deny > allow > ask > default. A command pattern (`cd *`, also
+written `bash(cd *)`) is matched against each part of a command line split at unquoted `&&`, `||`,
+`;`, `|` and `&`: every part must be allowed, and any denied part denies the line. A line with
+substitution (`$`, backticks), grouping, redirection to files, escapes or line breaks never matches
+an allow rule. "Allow … until stopped" in the UI adds session-scoped allow rules, one per part.
 
 ## Agent loop
 
