@@ -75,7 +75,10 @@ async function main() {
   await sessions.loadAll();
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
-  secrets.on("changed", () => catalog.invalidate());
+  secrets.on("changed", () => {
+    catalog.invalidate();
+    hub.broadcast({ type: "providers.updated", providers: providers.status() });
+  });
   const broadcastConnections = debounce(() => hub.broadcast({ type: "connections.updated", connections: connections.status(), changed: [] }), 50);
   connections.on("updated", broadcastConnections);
   connections.on("changed", (changed) => {

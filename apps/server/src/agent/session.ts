@@ -258,6 +258,7 @@ export class Session {
       if (it.kind === "tool_call" && (it.status === "running" || it.status === "pending_approval")) it.status = "interrupted";
       if ((it.kind === "assistant_text" || it.kind === "thinking") && it.streaming) it.streaming = false;
       if (it.kind === "receipt" && it.status === "running") it.status = "error";
+      if (it.kind === "sign_in" && (it.state === "starting" || it.state === "waiting")) Object.assign(it, { state: "cancelled", code: undefined, message: "Swan restarted before the sign-in finished" });
     }
     const s = new Session(deps, data);
     s.repairTranscript();

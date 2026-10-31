@@ -363,6 +363,7 @@ export type ServerEvent =
   | { type: "item.delta"; sessionId: string; itemId: string; delta: string } // append to text
   | { type: "egress"; event: EgressEvent }
   | { type: "approvals.updated"; approvals: PendingApproval[] } // every waiting call, all personas
+  | { type: "providers.updated"; providers: ProviderStatus[] } // a model-provider key changed
   | { type: "usage.updated"; personaId: string }
   | { type: "memory.updated"; personaId: string };
 

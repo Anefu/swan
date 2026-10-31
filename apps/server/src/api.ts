@@ -319,7 +319,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
   });
   app.post("/api/sessions/:id/approvals/:toolUseId", async (req: FastifyRequest<{ Params: { id: string; toolUseId: string }; Body: ApprovalBody }>) => {
     const body = req.body;
-    if (!body || !["allow", "allow_always", "deny"].includes(body.decision)) throw new HttpError(400, "decision must be allow, allow_always or deny");
+    if (!body || !["allow", "allow_session", "allow_always", "deny"].includes(body.decision)) throw new HttpError(400, "decision must be allow, allow_session, allow_always or deny");
     session(req.params.id).approve(req.params.toolUseId, body);
     return { ok: true };
   });

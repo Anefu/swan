@@ -591,7 +591,7 @@ export class ConnectionManager extends TypedEmitter<Events> {
   private async editConfig(fn: (doc: YAML.Document) => void) {
     const doc = YAML.parseDocument((await exists(paths.config)) ? await fs.readFile(paths.config, "utf8") : "{}");
     fn(doc);
-    await writeFileAtomic(paths.config, doc.toString(), 0o600);
+    await writeFileAtomic(paths.config, doc.toString({ lineWidth: 0 }), 0o600);
     await this.loadConfig();
   }
 
@@ -611,7 +611,9 @@ export class ConnectionManager extends TypedEmitter<Events> {
         else if (u.inject) entry.inject = u.inject;
         if (u.env === null) delete entry.env;
         else if (u.env) entry.env = u.env;
-        doc.setIn(["connections", conn, "credentials", name], doc.createNode(entry));
+        const node = doc.createNode(entry);
+        node.flow = false; // keep edits readable even when the existing block is written in flow style
+        doc.setIn(["connections", conn, "credentials", name], node);
       });
       if (this.configError) throw new Error(this.configError);
     }

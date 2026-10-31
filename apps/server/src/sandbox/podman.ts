@@ -272,9 +272,12 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     return r.code === 0 && r.stdout.trim() === "true";
   }
 
-  /** Remove session containers left over from a previous run. */
+  /**
+   * Remove session containers left over from a previous run of this instance. Only containers on
+   * this instance's network: another Swan (a second PH_HOME, a test run) has its own and keeps them.
+   */
   async removeOrphans(keep: Set<string> = new Set()): Promise<void> {
-    const r = await this.run(["ps", "-a", "--filter", "label=ph.session", "--format", "{{.Names}}"]);
+    const r = await this.run(["ps", "-a", "--filter", "label=ph.session", "--filter", `network=${this.rt.network}`, "--format", "{{.Names}}"]);
     if (r.code !== 0) return;
     for (const n of r.stdout.split("\n").map((s) => s.trim()).filter(Boolean)) {
       if (!keep.has(n)) await this.run(["rm", "-f", "-t", "1", n]);
