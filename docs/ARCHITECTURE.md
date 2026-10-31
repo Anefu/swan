@@ -44,6 +44,13 @@ What runs where:
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
+Every container carries `ph.home=<real path of the home>`. Two Swans with different homes can share
+one Podman, but the per-home lock (`server.json`) does not stop them from sharing runtime names
+(network, subnet, relay name and IP). A server therefore replaces only its own relay (or an
+unlabelled one from an older version), and on start removes only its own leftover session
+containers (plus unlabelled ones on its network). When another home's relay holds the relay name,
+running or not, the runtime stops with an error naming that home instead of taking it over.
+
 ## Credential flow
 
 1. Every credential comes from a **connection** in `config.yaml` (`connections:`, hot-reloaded).

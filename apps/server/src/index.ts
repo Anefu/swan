@@ -72,7 +72,8 @@ async function main() {
   const proxy = new EgressProxy(connections, ca);
   settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));
 
-  const runtime = new PodmanRuntime(settings, ca);
+  // The real path, so the same home reached through a link (the old ~/.persona-harness) matches.
+  const runtime = new PodmanRuntime(settings, ca, await fs.realpath(paths.home));
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
   const memory = new MemoryStore();

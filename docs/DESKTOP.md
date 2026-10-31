@@ -32,7 +32,7 @@ also downloads the Node runtime pinned in `apps/desktop/node-runtime.json` and c
 
 `PH_HOME` in the app's launch environment selects another data folder. That instance gets its own
 browser profile, single-instance lock and server log, so it can run beside your everyday Swan.
-Give its `config.yaml` its own ports and Podman names, or it competes with your Swan for them:
+Give its `config.yaml` its own ports and Podman names:
 
 ```yaml
 port: 4517
@@ -43,6 +43,11 @@ runtime: { network: swan-test, subnet: 10.231.0.0/24, relayIp: 10.231.0.2, relay
 ```bash
 PH_HOME=/tmp/swan-test apps/desktop/release/mac-arm64/Swan.app/Contents/MacOS/Swan
 ```
+
+If two Swans share the Podman names, the one that started the relay keeps it. The other leaves that
+Swan's containers alone and its sandbox stays off, with an error naming the data folder that owns
+the relay. (An older Swan's relay has no owner label and is still replaced; Swan labels its own
+relay when it next starts.)
 
 With `SWAN_SMOKE_TEST=1` the app starts, checks the UI, API and WebSocket, prints `SWAN SMOKE OK`
 and quits (CI runs this).

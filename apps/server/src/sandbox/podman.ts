@@ -5,6 +5,7 @@ import type { FolderMount, RuntimeStatus } from "@ph/shared";
 import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
+import { HOME_LABEL, RELAY_LABEL, SESSION_LABEL, orphanSessions, parseInspect, parsePs, planRelay, relayTakenMessage, type RelayPlan } from "./owner.js";
 
 export interface RunResult {
   code: number;
@@ -44,9 +45,11 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   status: RuntimeStatus;
   private rt: Settings["runtime"];
 
+  /** @param home real path of this server's home, labelled on every container it starts */
   constructor(
     private settings: Settings,
     private ca: CertAuthority,
+    private home: string,
   ) {
     super();
     this.rt = settings.runtime;
@@ -157,6 +160,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
         if (info.code !== 0) throw new Error(`podman is installed but not usable: ${info.stderr.trim()}`);
       }
       this.update({ available: true });
+      await this.relayPlan(); // before building an image for names another Swan holds
       await this.ensureNetwork();
       this.update({ networkReady: true });
       await this.ensureImage();
@@ -227,9 +231,9 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
 
   async rebuild(): Promise<void> {
     try {
+      await this.relayPlan();
       await this.ensureImage(true);
-      await this.run(["rm", "-f", this.rt.relayName]);
-      await this.ensureRelay();
+      await this.ensureRelay(true); // the tag is unchanged, so the relay would keep the old image
       this.update({ imageReady: true, imageTag: this.imageTag, relayRunning: true, errors: [] });
     } catch (e) {
       this.update({ errors: [errMsg(e)] });
@@ -238,21 +242,29 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     }
   }
 
+  private get relayLabel() {
+    return `${this.imageTag}|${this.settings.proxyPort}`;
+  }
+
+  /** What to do with the container holding the relay's name; throws when another Swan's relay holds it. */
+  private async relayPlan(force = false): Promise<RelayPlan> {
+    const r = await this.run(["container", "inspect", this.rt.relayName], { timeoutMs: 30_000 });
+    const plan = planRelay(r.code === 0 ? parseInspect(r.stdout) : null, { home: this.home, relay: this.relayLabel, force });
+    if (plan.action === "refuse") throw new Error(relayTakenMessage(this.rt.relayName, plan.owner, paths.config));
+    return plan;
+  }
+
   /** The relay is the only thing on both networks; it forwards :3128 to the host proxy and holds nothing. */
-  private async ensureRelay() {
+  private async ensureRelay(force = false) {
     const { relayName, network, relayIp } = this.rt;
-    const want = `${this.imageTag}|${this.settings.proxyPort}`;
-    const inspect = await this.run(["inspect", relayName, "--format", '{{.State.Running}}|{{index .Config.Labels "ph.relay"}}']);
-    if (inspect.code === 0) {
-      const out = inspect.stdout.trim();
-      const sep = out.indexOf("|"); // the label itself contains "|"
-      if (out.slice(0, sep) === "true" && out.slice(sep + 1) === want) return;
-      await this.run(["rm", "-f", relayName]);
-    }
+    const plan = await this.relayPlan(force);
+    if (plan.action === "keep") return;
+    if (plan.action === "replace") await this.run(["rm", "-f", relayName]);
     log.info("runtime", `starting relay ${relayName} -> host:${this.settings.proxyPort}`);
     await this.ok(
       [
-        "run", "-d", "--name", relayName, "--label", `ph.relay=${want}`, "--restart", "always",
+        "run", "-d", "--name", relayName, "--label", `${RELAY_LABEL}=${this.relayLabel}`, "--label", `${HOME_LABEL}=${this.home}`,
+        "--restart", "always",
         "--network", "podman", "--network", `${network}:ip=${relayIp}`,
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", "128m", "--pids-limit", "256",
         this.imageTag,
@@ -287,7 +299,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     };
     const args = [
       "run", "-d", "--init", "--name", name,
-      "--label", `ph.session=${spec.sessionId}`, "--label", `ph.persona=${spec.personaId}`,
+      "--label", `${SESSION_LABEL}=${spec.sessionId}`, "--label", `ph.persona=${spec.personaId}`, "--label", `${HOME_LABEL}=${this.home}`,
       "--hostname", spec.personaId.slice(0, 63),
       "--network", this.rt.network,
       "--userns", "keep-id:uid=1000,gid=1000", "--user", "1000:1000",
@@ -313,15 +325,20 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   }
 
   /**
-   * Remove session containers left over from a previous run of this instance. Only containers on
-   * this instance's network: another Swan (a second PH_HOME, a test run) has its own and keeps them.
+   * Remove session containers left over from a previous run of this home. Another Swan's (a second
+   * PH_HOME, a test run) carry its home label and stay, even on the same network.
    */
   async removeOrphans(keep: Set<string> = new Set()): Promise<void> {
-    const r = await this.run(["ps", "-a", "--filter", "label=ph.session", "--filter", `network=${this.rt.network}`, "--format", "{{.Names}}"]);
+    const r = await this.run(["ps", "-a", "--filter", `label=${SESSION_LABEL}`, "--format", "json"], { timeoutMs: 30_000 });
     if (r.code !== 0) return;
-    for (const n of r.stdout.split("\n").map((s) => s.trim()).filter(Boolean)) {
-      if (!keep.has(n)) await this.run(["rm", "-f", "-t", "1", n]);
+    let names: string[];
+    try {
+      names = orphanSessions(parsePs(r.stdout), { home: this.home, network: this.rt.network, keep });
+    } catch (e) {
+      log.warn("runtime", `left old session containers in place: ${errMsg(e)}`);
+      return;
     }
+    for (const n of names) await this.run(["rm", "-f", "-t", "1", n]);
   }
 
   /** Args for `podman exec` used by stdio MCP transports. */
