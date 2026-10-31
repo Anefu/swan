@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ConnectionManager } from "../connections/manager.js";
@@ -61,5 +62,29 @@ describe("EgressProxy", () => {
     expect((await connect("localhost:443", "s1:t0ken")).status).toBe(403);
     expect((await connect("127.0.0.1:443", "s1:t0ken")).status).toBe(403);
     expect(proxy.events("s1").at(-1)).toMatchObject({ decision: "blocked", host: "127.0.0.1", reason: expect.stringContaining("private") });
+  });
+});
+
+describe("EgressProxy history", () => {
+  const days = ["egress-2001-01-01.jsonl", "egress-2001-01-02.jsonl"];
+  const event = (id: string, ts: string) =>
+    JSON.stringify({ id, ts, sessionId: "old", personaId: "p-old", method: "CONNECT", host: "example.org", port: 443, decision: "tunneled", credentials: [] });
+  afterAll(() => Promise.all(days.map((f) => fs.rm(path.join(paths.audit, f), { force: true }))));
+
+  it("reloads earlier days from the audit log on start, oldest first, skipping broken lines", async () => {
+    await fs.mkdir(paths.audit, { recursive: true });
+    await fs.mkdir(paths.ca, { recursive: true });
+    await fs.writeFile(path.join(paths.audit, days[0]), event("eg_day1", "2001-01-01T10:00:00.000Z") + "\nnot json\n");
+    await fs.writeFile(path.join(paths.audit, days[1]), event("eg_day2", "2001-01-02T10:00:00.000Z") + "\n");
+    const proxy = new EgressProxy(new ConnectionManager(new SecretStore(), { providers: {} } as unknown as Settings), await CertAuthority.load());
+    await proxy.listen(0);
+    try {
+      const ids = proxy.events(undefined, 2000).map((e) => e.id);
+      expect(ids).toContain("eg_day1");
+      expect(ids.indexOf("eg_day1")).toBeLessThan(ids.indexOf("eg_day2"));
+      expect(proxy.events("old").map((e) => e.id)).toEqual(["eg_day1", "eg_day2"]);
+    } finally {
+      proxy.close();
+    }
   });
 });

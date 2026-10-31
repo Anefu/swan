@@ -166,17 +166,17 @@ const SELECTION_KEY = "swan.persona.v1";
 const COMPOSER_KEY = "swan.composer.v1";
 const MAX_EGRESS = 2000;
 
-export const DOCK_DEFAULT = 440;
+export const DOCK_DEFAULT = 380;
 const DEFAULT_UI: UiPrefs = {
   dock: null,
   widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT },
 };
 
-/** Saved prefs hold every width, chosen or not; 400 was the old default, so it moves to the new one. */
+/** Saved prefs hold every width, chosen or not; 400 and 440 were earlier defaults, so they move to the new one. */
 function loadUi(): UiPrefs {
   const ui = loadPref(PREFS_KEY, DEFAULT_UI);
   const widths = { ...DEFAULT_UI.widths, ...ui.widths };
-  for (const k of Object.keys(widths) as DockMode[]) if (widths[k] === 400) widths[k] = DOCK_DEFAULT;
+  for (const k of Object.keys(widths) as DockMode[]) if (widths[k] === 400 || widths[k] === 440) widths[k] = DOCK_DEFAULT;
   return { ...DEFAULT_UI, ...ui, widths };
 }
 

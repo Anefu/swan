@@ -41,6 +41,8 @@ const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 const MAX_RESIGN_BODY = 64 * 1024 * 1024;
+/** Requests reloaded from the audit log on start, newest last; the UI asks for at most this many. */
+const RESTORED_EVENTS = 2000;
 // Payload markers the proxy can carry over to a new signature: the body itself is not signed.
 const PASSTHROUGH_PAYLOAD = new Set(["UNSIGNED-PAYLOAD", "STREAMING-UNSIGNED-PAYLOAD-TRAILER"]);
 
@@ -168,18 +170,7 @@ export class EgressProxy extends TypedEmitter<Events> {
   }
 
   async listen(port: number): Promise<number> {
-    // Restore recent history from today's audit log so the UI survives restarts.
-    try {
-      const file = path.join(paths.audit, `egress-${nowIso().slice(0, 10)}.jsonl`);
-      const lines = (await fs.readFile(file, "utf8")).trim().split("\n").slice(-2000);
-      this.recent = lines.flatMap((l) => {
-        try {
-          return [JSON.parse(l) as EgressEvent];
-        } catch {
-          return [];
-        }
-      });
-    } catch {}
+    this.recent = await restoreEvents();
     return new Promise((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(port, "127.0.0.1", () => {
@@ -710,3 +701,35 @@ export class EgressProxy extends TypedEmitter<Events> {
   }
 }
 
+/**
+ * Recent history from the audit logs (one file per UTC day), newest files first until there is enough,
+ * so the UI keeps earlier requests across restarts and past midnight. Unreadable files and lines are skipped.
+ */
+async function restoreEvents(): Promise<EgressEvent[]> {
+  let files: string[];
+  try {
+    files = (await fs.readdir(paths.audit)).filter((f) => /^egress-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f));
+  } catch {
+    return [];
+  }
+  let events: EgressEvent[] = [];
+  for (const f of files.sort().reverse()) {
+    let text: string;
+    try {
+      text = await fs.readFile(path.join(paths.audit, f), "utf8");
+    } catch {
+      continue;
+    }
+    const day = text.split("\n").flatMap((l) => {
+      if (!l.trim()) return [];
+      try {
+        return [JSON.parse(l) as EgressEvent];
+      } catch {
+        return [];
+      }
+    });
+    events = day.concat(events);
+    if (events.length >= RESTORED_EVENTS) break;
+  }
+  return events.slice(-RESTORED_EVENTS);
+}
