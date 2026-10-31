@@ -79,9 +79,9 @@ folder, from the app or a checkout, does not start; the app offers to open the o
 1. Set the version in `apps/desktop/package.json` and merge it to `main`.
 2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
-`.github/workflows/release.yml` checks that the tag is on `main` and matches the version, runs
-typecheck and tests, builds the app on macOS, starts it once as a check, and publishes a GitHub
-pre-release with the DMG and `SHA256SUMS.txt`.
+`.github/workflows/release.yml` checks that the tag is on `main` and matches the version, runs the
+same checks as CI on Linux, builds the app on macOS, starts it once as a check, and publishes a
+GitHub pre-release with the DMG and `SHA256SUMS.txt`.
 
 CI on every pull request builds the server bundle and starts it the way the app does (Linux). It
 builds and starts the packaged app on macOS only when `apps/desktop/`, the workflows or the lockfile

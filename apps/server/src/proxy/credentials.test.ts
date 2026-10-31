@@ -62,7 +62,13 @@ beforeAll(async () => {
   await secrets.load();
   m = new ConnectionManager(secrets, { providers: {} } as unknown as Settings);
   await m.loadConfig();
-  expect(await m.login("stub")).toBe("ready");
+  const signedIn = await m.login("stub");
+  if (signedIn !== "ready") {
+    // Say why: the wrapper's message and its stderr log.
+    const status = m.status().find((c) => c.name === "stub");
+    const wrapperLog = await fs.readFile(path.join(paths.connections, "stub", "wrapper.log"), "utf8").catch(() => "(no wrapper.log)");
+    throw new Error(`stub sign-in ended in "${signedIn}": ${status?.message ?? "no message"}\n${wrapperLog.slice(-4000)}`);
+  }
 
   ca = await CertAuthority.load();
   const port = Number(new URL(stub.url).port);

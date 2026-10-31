@@ -14,12 +14,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build Swan for macOS
-    runs-on: macos-15
-    timeout-minutes: 40
+  # The same checks as CI, on Linux where CI runs them; the Mac job only packages the app.
+  check:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # electron-builder fetches its own copy
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # nothing here starts Electron
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +38,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm build
+      - name: Bundled server starts the way the app starts it
+        run: pnpm --filter @ph/desktop smoke-server
+
+  build:
+    name: Build Swan for macOS
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # electron-builder fetches its own copy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm package
       - name: The packaged app starts its server and shows the UI
         run: |
