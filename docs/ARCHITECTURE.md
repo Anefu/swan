@@ -1,7 +1,7 @@
-# persona-harness — architecture
+# Swan — architecture
 
-A local, single-user agent harness: an agent loop (Claude or any OpenAI-compatible model) with a
-web UI, where every tool call runs in a Podman sandbox that can only see approved folders and can
+A local, single-user agent harness for macOS: an agent loop (Claude or any OpenAI-compatible model)
+with a desktop app, where every tool call runs in a Podman sandbox that can only see approved folders and can
 only reach the network through a credential-injecting egress proxy. Agents never see secret values.
 
 ## Trust boundaries
@@ -9,7 +9,7 @@ only reach the network through a credential-injecting egress proxy. Agents never
 ```
  ┌──────────────────────────── macOS host (trusted) ─────────────────────────────┐
  │                                                                                │
- │  Browser UI ──HTTP/WS (127.0.0.1:4317, token + Host/Origin checks)──┐          │
+ │  Swan app UI ──HTTP/WS (127.0.0.1:4317, token + Host/Origin checks)─┐          │
  │                                                                     ▼          │
  │  ┌────────────────────────── harness server (Node) ──────────────────────────┐ │
  │  │ agent loop ─ providers (Anthropic, OpenAI-compatible) ── LLM APIs/local   │ │
@@ -47,7 +47,7 @@ What runs where:
 ## Credential flow
 
 1. Every credential comes from a **connection** in `config.yaml` (`connections:`, hot-reloaded).
-   `static` connections keep values in `~/.persona-harness/secrets.yaml` / `secrets.env` as
+   `static` connections keep values in `~/.swan/secrets.yaml` / `secrets.env` as
    `connection/NAME`, outside every mount; `command` connections run a wrapper on the host
    (argv, no shell, the user's environment minus Swan's secrets, working directory
    `connections/<name>/`) that prints credentials and config files in protocol v1
@@ -101,7 +101,7 @@ GITHUB__GITHUB_TOKEN=ghp_xxx
 
 ## Personas (workspaces)
 
-`~/.persona-harness/personas/<id>.yaml`, file-watched. See `examples/personas/`.
+`~/.swan/personas/<id>.yaml`, file-watched. See `examples/personas/`.
 
 ```yaml
 name: Backend dev
@@ -139,7 +139,7 @@ permissions:
 sandbox: { cpus: 2, memory: 2g, pidsLimit: 512 }
 ```
 
-Path guards: folders must exist, must not contain `~/.persona-harness`, and must not be `/`, `~`,
+Path guards: folders must exist, must not contain `~/.swan`, and must not be `/`, `~`,
 or a system directory. Rule precedence: deny > allow > ask > default; "Always allow" in the UI adds a
 session-scoped allow rule.
 
@@ -157,7 +157,7 @@ session-scoped allow rule.
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with
   "interrupted" results so the transcript stays valid.
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
-- Sessions persist to `~/.persona-harness/sessions/<id>.json`; after a restart a session is
+- Sessions persist to `~/.swan/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
 
 ## Copilot provider
@@ -182,7 +182,12 @@ Copilot's own agent runtime. To keep the harness in charge of the loop:
 ## Harness API hardening
 
 - Binds 127.0.0.1 only; rejects requests whose Host is not localhost/127.0.0.1 (DNS rebinding) and
-  whose Origin is foreign; requires `x-ph-token` (random per install, `~/.persona-harness/api-token`).
+  whose Origin is not a loopback page or the app's `swan://app` (CSRF); requires `x-ph-token`
+  (random per install, `~/.swan/api-token`).
+- Serves no UI. The desktop app (Electron, [DESKTOP.md](DESKTOP.md)) runs the server as a child
+  process on its own Node, serves the UI from its bundle at `swan://app` with a Content Security
+  Policy, passes `/api/` to the server, and keeps the window on Swan's own pages. No browser
+  extension can reach the page, and the token never appears in browser history.
 - The sandbox cannot reach it: no route from `ph-internal`, and the proxy refuses loopback/private
   destinations.
 

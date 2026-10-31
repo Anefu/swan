@@ -43,7 +43,7 @@ It prints a `device_code` line, waits for approval (open the link, or `POST /_st
 
 The kubeconfig carries no `certificate-authority-data`: inside Swan the proxy terminates TLS for credential hosts and checks the cluster certificate itself, using the `ca` attached to the credential. `--sandbox-url` and `--cluster-url` set the addresses written into the files and used as credential hosts (default: the stub's own), and `--ca FILE` attaches a CA to every credential.
 
-To use it from Swan, add a connection to `~/.persona-harness/config.yaml`:
+To use it from Swan, add a connection to `~/.swan/config.yaml`:
 
 ```yaml
 connections:

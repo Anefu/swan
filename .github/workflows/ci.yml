@@ -17,6 +17,8 @@ jobs:
     name: Typecheck, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # nothing here starts Electron
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -29,6 +31,8 @@ jobs:
       # The AWS CLI, kubectl and openssl on the runner image also run the stub's end-to-end tests.
       - run: pnpm test
       - run: pnpm build
+      - name: Bundled server starts the way the app starts it
+        run: pnpm --filter @ph/desktop smoke-server
 
   sandbox-image:
     name: Sandbox image
@@ -47,3 +51,55 @@ jobs:
           out=$(podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges ph-sandbox-ci sh -c 'id -u; id -un; test -w /workspace && echo writable')
           echo "$out"
           test "$out" = "$(printf '1000\nagent\nwritable')"
+
+  changes:
+    name: Desktop packaging changed?
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || git diff --name-only "$BASE" "$GITHUB_SHA" | grep -qE '^(apps/desktop/|\.github/workflows/|pnpm-lock\.yaml)'; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # macOS minutes are costly, so the packaged app is built here only when packaging could have
+  # changed; the release workflow always builds it.
+  desktop:
+    name: macOS app (unsigned)
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # electron-builder fetches its own copy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package
+      - name: The packaged app starts its server and shows the UI
+        run: |
+          SWAN_SMOKE_TEST=1 PH_HOME="$RUNNER_TEMP/swan-home" SWAN_SMOKE_SCREENSHOT="$RUNNER_TEMP/swan.png" \
+            apps/desktop/release/mac-arm64/Swan.app/Contents/MacOS/Swan
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke
+          path: |
+            ${{ runner.temp }}/swan.png
+            ~/Library/Logs/Swan/
+          if-no-files-found: ignore

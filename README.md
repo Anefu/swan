@@ -1,6 +1,6 @@
 # Swan (persona-harness)
 
-A local agent harness with a web UI: an agent loop (Claude or any OpenAI-compatible model) whose
+A local agent harness for macOS: an agent loop (Claude or any OpenAI-compatible model) whose
 tool calls run in a Podman sandbox that only sees the folders you approved, and whose network
 traffic goes through an egress proxy that injects credentials, so the agent never sees a secret.
 
@@ -25,31 +25,30 @@ rules for the credentials it may use, a network allowlist and tool permissions.
 | Sub-agents | An `agent` tool runs focused sub-loops with the same sandbox, credentials and permissions: in parallel, in the background (the parent is told when they finish or ask), with a named sub-agent or a model the parent picks, a forked or brief-only context, and a turn limit per task. Sub-agents can ask the parent a question (`ask_parent`); the parent answers with `agent_message` |
 | Attachments | Paperclip, paste or drag-and-drop; files are copied into the sandbox at `/home/agent/attachments/`, images and PDFs also go to the model |
 | Usage | Per-request ledger in `audit/usage-*.jsonl` (foreground, subagent, checkpoint, dream), context occupancy, estimated cost where rates are known |
-| UI | Swan: persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |
+| UI | The Swan app (Electron): persona dropdown, one conversation column, and a right icon rail opening Settings (persona and global), Memory, Usage, Network activity and Attachments |
 
 Design and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working on the code (people or agents): [AGENTS.md](AGENTS.md).
 
-## Requirements
+## Install
 
-- macOS with Podman (`brew install podman && podman machine init && podman machine start`)
-- Node ≥ 22.12 and pnpm 10
+Download the DMG from Releases; [docs/DESKTOP.md](docs/DESKTOP.md) covers opening an unsigned build,
+Podman, test instances and releases. Swan needs Podman (`brew install podman`); on first start it
+offers to set up Podman's machine.
 
-## Run
+On first start Swan creates `~/.swan/`, seeds two example personas, builds the sandbox image (about
+a minute) and starts the relay container. Add a model key under Settings → Swan → Model providers,
+or to `~/.swan/secrets.yaml` (`ANTHROPIC_API_KEY: sk-ant-…`).
+
+## Build from source
+
+Node ≥ 22.12 and pnpm 10.
 
 ```bash
 pnpm install
+pnpm start      # build and open the app
+pnpm package    # Swan.app and a DMG in apps/desktop/release
+pnpm dev        # server with auto-restart + the UI with hot reload, in the app window
 ```
-
-```bash
-pnpm build && pnpm start
-```
-
-Open http://127.0.0.1:4317. On first start the harness creates `~/.persona-harness/`, seeds two
-example personas, builds the sandbox image (about a minute) and starts the relay container.
-
-Add your Anthropic key to `~/.persona-harness/secrets.yaml` (`ANTHROPIC_API_KEY: sk-ant-…`)
-or under Settings → Swan → Model providers. Without one, the harness falls back to
-`$ANTHROPIC_API_KEY` or an `ant auth login` profile.
 
 Tests (no network, Podman or API keys needed):
 
@@ -57,15 +56,7 @@ Tests (no network, Podman or API keys needed):
 pnpm typecheck && pnpm test
 ```
 
-Development (server with auto-restart, plus Vite with HMR):
-
-```bash
-pnpm dev
-```
-
-Vite prints its port (5173, or the next free one).
-
-## Files in `~/.persona-harness`
+## Files in `~/.swan`
 
 | Path | What |
 |---|---|
@@ -82,6 +73,9 @@ Vite prints its port (5173, or the next free one).
 | `ca/` | Local CA used to terminate TLS for credential hosts; trusted only inside the sandbox image |
 | `copilot-runtime/` | Working and state directory of the Copilot SDK runtime (copilot provider only) |
 | `api-token` | Token the UI uses for the API |
+| `server.json` | The server running for this folder (pid, ports, version); one at a time |
+
+Swan used `~/.persona-harness` before; the first start moves it to `~/.swan` and leaves a link.
 
 ## Connections
 
@@ -157,7 +151,8 @@ third-party apps, and this is the supported route.
    `secrets.yaml`. Model-provider keys are used only by the harness; they are not connections, so
    no persona rule can name them and they never reach the sandbox.
 3. List the model ids your plan offers:
-   `curl -H "x-ph-token: $(cat ~/.persona-harness/api-token)" http://127.0.0.1:4317/api/providers/copilot/models`
+   `curl -H "x-ph-token: $(cat ~/.swan/api-token)" http://127.0.0.1:4317/api/providers/copilot/models`
+   (the port is in `~/.swan/server.json` if 4317 was taken)
 4. Use one in a persona: `model: { provider: copilot, id: <id>, effort: high }`.
 
 How it works: the SDK runs Copilot's agent runtime on the host in `empty` mode, with no built-in
@@ -182,7 +177,7 @@ explains how to wire it up.
 
 ```
 apps/server     Node harness: agent loop, providers, MCP, sandbox runtime, egress proxy, API
-apps/web        React UI (Vite)
+apps/desktop    The macOS app: Electron main process (main/) and the React UI (ui/)
 packages/shared Wire protocol types shared by both
 packages/aws-sigv4  AWS Signature V4 signing and verification
 tools/aws-stub  Local AWS + Kubernetes stand-in and a reference connection wrapper (see its README)
