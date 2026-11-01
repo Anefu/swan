@@ -1809,6 +1809,9 @@ button.line:focus-visible .chev,
   font-size: 16px;
   font-weight: 600;
 }
+.swan-section p.mono {
+  overflow-wrap: anywhere; /* image tags and paths have no spaces to wrap at */
+}
 .prov-row {
   font-size: 14px;
   display: flex;

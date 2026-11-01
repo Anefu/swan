@@ -613,7 +613,7 @@ function Sandbox() {
   const [busy, setBusy] = useState(false);
   const r = state.runtime;
   const level = runtimeLevel(r);
-  const label = !r ? "Unknown" : r.busy ? `${r.busy}…` : level === "ok" ? "Ready" : "Not ready";
+  const label = !r ? "Unknown" : r.busy ? "Working" : level === "ok" ? "Ready" : "Not ready";
   return (
     <section className="swan-section">
       <h3>Sandbox</h3>
@@ -626,6 +626,13 @@ function Sandbox() {
           {label}
         </span>
       </div>
+      {/* What it is doing, with the build's current step (a log line): on its own line, wrapped. */}
+      {r?.busy && (
+        <pre className="code-plain small">
+          {r.busy[0]!.toUpperCase()}
+          {r.busy.slice(1)}…
+        </pre>
+      )}
       {r?.imageTag && <p className="small muted mono">{r.imageTag}</p>}
       {r && level === "error" && (
         <>
