@@ -33,6 +33,8 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
+      - name: Install script
+        run: shellcheck install.sh
 
   sandbox-image:
     name: Sandbox image

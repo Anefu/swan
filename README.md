@@ -37,15 +37,20 @@ provider you chose, and agents' requests go only to hosts you've allowed.
 
 ## Install
 
-1. Download `Swan-<version>-arm64.dmg` from [Releases](https://github.com/Anefu/swan/releases) and
-   drag Swan to Applications.
-2. Builds are not signed by Apple yet, so macOS blocks the first open. Either run this once:
+1. In Terminal, run:
    ```bash
-   xattr -dr com.apple.quarantine /Applications/Swan.app
+   curl -fsSL https://raw.githubusercontent.com/Anefu/swan/main/install.sh | bash
    ```
-   or open Swan, then choose System Settings → Privacy & Security → Open Anyway.
-3. Open Swan. If Podman has no machine yet, click **Set up Podman** (a one-time download of about
+   It downloads the latest release, checks it against the release's checksums and puts Swan in
+   Applications. [install.sh](install.sh) is short; read it first if you like.
+2. Open Swan. If Podman has no machine yet, click **Set up Podman** (a one-time download of about
    1 GB). Swan then builds its sandbox, which takes a minute or two the first time.
+
+You can also download `Swan-<version>-arm64.dmg` from
+[Releases](https://github.com/Anefu/swan/releases) and drag Swan to Applications. Builds are not
+signed by Apple yet, so macOS blocks a downloaded app the first time: choose System Settings →
+Privacy & Security → Open Anyway, or run `xattr -dr com.apple.quarantine /Applications/Swan.app`.
+The install script avoids this, because files `curl` downloads aren't marked as downloaded.
 
 ## Getting started
 
@@ -156,9 +161,9 @@ was renamed, in `~/.persona-harness`, is moved to `~/.swan` on first start.
 
 ## Updating and uninstalling
 
-To update, download the new DMG from [Releases](https://github.com/Anefu/swan/releases) and replace
-the app; your data stays. Builds are unsigned, so macOS may ask again for access to folders such as
-Documents.
+To update, quit Swan and run the install command again (end it with `bash -s -- 0.1.3` for a
+specific version), or replace the app with a new DMG. Your data stays. Builds are unsigned, so
+macOS may ask again for access to folders such as Documents.
 
 To remove Swan completely:
 1. Quit Swan and delete `/Applications/Swan.app`.

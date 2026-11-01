@@ -23,6 +23,7 @@ packages/aws-sigv4  AWS Signature V4 signing and verification (no dependencies)
 tools/aws-stub    Local AWS + Kubernetes stand-in and a reference connection wrapper, for tests without an AWS account
 sandbox/          Containerfile for the session image
 examples/         Seed personas, skills, secrets template, demo workspace
+install.sh        Installs or updates Swan from the newest release (curl … | bash; bash 3.2, shellcheck clean)
 ```
 
 ## Commands

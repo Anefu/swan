@@ -1,5 +1,6 @@
 # A tag vX.Y.Z on main builds Swan for Apple silicon and attaches it to a GitHub pre-release.
-# The build is unsigned (ad-hoc); docs/DESKTOP.md explains opening it and what signing will add.
+# The build is unsigned (ad-hoc); install.sh installs it without macOS blocking it, and
+# docs/DESKTOP.md explains what signing will add.
 name: Release
 
 on:
@@ -41,6 +42,8 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
+      - name: Install script
+        run: shellcheck install.sh
 
   build:
     name: Build Swan for macOS
@@ -89,9 +92,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'EOF'
-          Unsigned build for Apple silicon. macOS blocks it the first time: after opening it once, allow it in
+          Install or update Swan (Apple silicon, macOS 13 or later):
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/Anefu/swan/main/install.sh | bash
+          ```
+
+          Or download the DMG below. It isn't signed by Apple, so macOS blocks the first open: allow it in
           System Settings → Privacy & Security → Open Anyway (or run `xattr -dr com.apple.quarantine /Applications/Swan.app`).
           Podman is required (`brew install podman`); Swan offers to set up its machine on first start.
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease \
             --title "Swan ${GITHUB_REF_NAME#v}" --notes-file notes.md --generate-notes
+
+  # What users run: the install script installs the release just published, without quarantine.
+  install:
+    name: Install script installs the release
+    needs: publish
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install into a temporary folder
+        env:
+          SWAN_APP_DIR: ${{ runner.temp }}/apps
+        run: |
+          bash install.sh "$GITHUB_REF_NAME"
+          app="$SWAN_APP_DIR/Swan.app"
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          [ "$version" = "${GITHUB_REF_NAME#v}" ] || { echo "::error::installed $version, expected ${GITHUB_REF_NAME#v}"; exit 1; }
+          if xattr -p com.apple.quarantine "$app" 2>/dev/null; then echo "::error::the installed app is quarantined"; exit 1; fi

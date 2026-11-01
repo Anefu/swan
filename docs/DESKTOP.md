@@ -5,8 +5,20 @@ server when you quit. There is no browser mode: the server answers the API only.
 
 ## Install
 
-Download `Swan-<version>-arm64.dmg` from the repository's Releases and drag Swan to Applications.
-Builds are not signed yet, so macOS blocks the first open: open it once, then choose
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anefu/swan/main/install.sh | bash
+```
+
+[install.sh](../install.sh) finds the newest release (pre-releases included) from the releases
+feed, downloads its DMG, checks it against `SHA256SUMS.txt` and copies Swan into `/Applications`,
+or `~/Applications` when `/Applications` isn't writable. It updates Swan where it already is,
+refuses while Swan is running, and replaces the app only once the new copy is complete. A version
+after `bash -s --` installs that one; `SWAN_APP_DIR` installs somewhere else (tests use it). Files
+`curl` downloads aren't quarantined, so macOS opens the unsigned app without blocking it. It uses
+`https_proxy` if you need a proxy.
+
+Or download `Swan-<version>-arm64.dmg` from the repository's Releases and drag Swan to
+Applications. Builds are not signed yet, so macOS blocks a downloaded app the first time: choose
 System Settings → Privacy & Security → Open Anyway (or run
 `xattr -dr com.apple.quarantine /Applications/Swan.app`).
 
@@ -119,7 +131,8 @@ folder, from the app or a checkout, does not start; the app offers to open the o
 
 `.github/workflows/release.yml` checks that the tag is on `main` and matches the version, runs the
 same checks as CI on Linux, builds the app on macOS, starts it once as a check, and publishes a
-GitHub pre-release with the DMG and `SHA256SUMS.txt`.
+GitHub pre-release with the DMG and `SHA256SUMS.txt`. Then it runs `install.sh` for that version on
+macOS and checks that the installed app is the new version and isn't quarantined.
 
 CI on every pull request builds the server bundle and starts it the way the app does (Linux). It
 builds and starts the packaged app on macOS only when `apps/desktop/`, the workflows or the lockfile
