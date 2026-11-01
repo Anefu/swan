@@ -42,8 +42,10 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
-      - name: Install script
-        run: shellcheck install.sh
+      - name: Install script (shellcheck, ASCII only for macOS's bash 3.2)
+        run: |
+          shellcheck install.sh
+          perl -ne 'if (/[^\x00-\x7F]/) { print "install.sh:$.: $_"; $bad = 1 } END { exit $bad }' install.sh
 
   build:
     name: Build Swan for macOS
@@ -116,6 +118,7 @@ jobs:
       - name: Install into a temporary folder
         env:
           SWAN_APP_DIR: ${{ runner.temp }}/apps
+          LANG: en_US.UTF-8 # as in Terminal; macOS's bash 3.2 parses differently in a UTF-8 locale
         run: |
           bash install.sh "$GITHUB_REF_NAME"
           app="$SWAN_APP_DIR/Swan.app"

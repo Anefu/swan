@@ -7,7 +7,9 @@
 # internet, so macOS opens Swan without blocking it; the DMG is checked against the release's
 # SHA256SUMS.txt first. SWAN_APP_DIR installs somewhere other than /Applications.
 #
-# Everything runs from main at the end, so a half-downloaded script does nothing.
+# Everything runs from main at the end, so a half-downloaded script does nothing. ASCII only: in a
+# UTF-8 locale, macOS's bash 3.2 reads the bytes of a character like an ellipsis after $name as
+# part of the name (CI checks).
 set -euo pipefail
 
 REPO="Anefu/swan"
@@ -60,7 +62,7 @@ installed_version() {
 download() {
   local version=$1 out=$2 base="https://github.com/$REPO/releases/download/v$1" name
   name=$(basename "$out")
-  say "Downloading Swan $version…"
+  say "Downloading Swan $version..."
   curl -fL --retry 3 --progress-bar -o "$out" "$base/$name" ||
     fail "couldn't download $base/$name. Check your connection, or set https_proxy if you use a proxy."
   curl -fsSL --retry 3 -o "$tmp/SHA256SUMS.txt" "$base/SHA256SUMS.txt" ||
@@ -92,7 +94,7 @@ main() {
     fi
   fi
   if pgrep -f "$dest/Contents/MacOS/Swan" >/dev/null; then
-    fail "Swan is running. Quit it (Swan → Quit Swan), then run this again."
+    fail "Swan is running. Quit it (Swan > Quit Swan), then run this again."
   fi
   if ! { mkdir -p "$dir" 2>/dev/null && [ -w "$dir" ]; }; then
     fail "can't write to $dir. Ask an administrator, or set SWAN_APP_DIR=~/Applications."

@@ -33,8 +33,10 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
-      - name: Install script
-        run: shellcheck install.sh
+      - name: Install script (shellcheck, ASCII only for macOS's bash 3.2)
+        run: |
+          shellcheck install.sh
+          perl -ne 'if (/[^\x00-\x7F]/) { print "install.sh:$.: $_"; $bad = 1 } END { exit $bad }' install.sh
 
   sandbox-image:
     name: Sandbox image
