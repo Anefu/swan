@@ -31,7 +31,7 @@ github/GITHUB_TOKEN: github_pat_…
 ```
 
 Values can also go in `secrets.env` (`GITHUB__GITHUB_TOKEN=…`: the connection in capitals with
-dashes as underscores, then `__` and the name), or be added in Swan settings → Connections (from the persona menu).
+dashes as underscores, then `__` and the name), or be added in Swan settings → Connections (the swan icon at the top right).
 Both files and the `connections` block are watched: the next request uses a new value, with no
 restart.
 

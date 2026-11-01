@@ -54,8 +54,8 @@ The install script avoids this, because files `curl` downloads aren't marked as 
 
 ## Getting started
 
-1. **Add a model.** Open the persona menu (the name at the top left), choose **Swan settings**, and
-   add a key under **Model providers**. For Copilot, see [GitHub Copilot](#github-copilot).
+1. **Add a model.** Click the swan icon at the top right to open **Swan settings** (or press ⌘,),
+   and add a key under **Model providers**. For Copilot, see [GitHub Copilot](#github-copilot).
 2. **Make a persona.** Swan starts with two examples, Demo and GitHub helper. To make your own, open
    the persona menu at the top left and choose **New persona**: give it a name and a model, add the
    folders it may see ("Can read" or "Can change"), and choose what it may do without asking. The

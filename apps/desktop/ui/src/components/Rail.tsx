@@ -1,8 +1,12 @@
 import { inRail, usePendingApprovals, useStore } from "../store";
 import { cls } from "../util";
-import { IconOverview, IconSettings, IconShield } from "./icons";
+import { IconOverview, IconSettings, IconShield, IconSwan } from "./icons";
+import { isMac } from "./ui";
 
-/** Panel buttons at the right of the header: the overview rail and the persona's settings. Clicking the open one closes it. */
+/**
+ * Panel buttons at the right of the header: the overview rail and the persona's settings, then
+ * Swan settings. Clicking the open one closes it.
+ */
 export function Rail() {
   const { state, actions } = useStore();
   const approvals = usePendingApprovals();
@@ -10,6 +14,7 @@ export function Rail() {
   const settingsDirty = Object.values(state.drafts).some((d) => JSON.stringify(d.base) !== JSON.stringify(d.draft) || d.newId);
   const overviewOn = inRail(dock);
   const settingsOn = dock === "settings";
+  const swanOn = dock === "swan";
   const settingsLabel = `Settings${settingsDirty ? " (unsaved changes)" : ""}`;
   return (
     <nav className="header-tools" aria-label="Panels">
@@ -52,6 +57,18 @@ export function Rail() {
       >
         <IconSettings size={18} />
         {settingsDirty && <span className="rail-dot" aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        id="trigger-swan"
+        className={cls("rail-btn", swanOn && "is-on")}
+        aria-pressed={swanOn}
+        aria-label="Swan settings"
+        aria-keyshortcuts={isMac ? "Meta+Comma" : "Control+Comma"}
+        title={`Swan settings (${isMac ? "⌘," : "Ctrl+,"})`}
+        onClick={() => actions.openDock(swanOn ? null : "swan")}
+      >
+        <IconSwan size={18} />
       </button>
     </nav>
   );

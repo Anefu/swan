@@ -36,8 +36,8 @@ const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)
 
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
-  // Swan settings opens from the persona menu, so focus goes back to its trigger; the rail's screens share one button.
-  const trigger = mode === "swan" ? "persona-trigger" : inRail(mode) ? "trigger-overview" : `trigger-${mode}`;
+  // Back to the header button that opened it; the rail's screens share one button.
+  const trigger = inRail(mode) ? "trigger-overview" : `trigger-${mode}`;
   window.setTimeout(() => document.getElementById(trigger)?.focus(), 0);
 }
 
