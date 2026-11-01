@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PermissionPolicy, splitCommand } from "./permissions.js";
+import { commandPrefix, PermissionPolicy, splitCommand } from "./permissions.js";
 import type { ToolDef } from "./tools.js";
 
 const tool = (name: string, primary?: string): ToolDef =>
@@ -89,5 +89,52 @@ describe("command rules", () => {
     expect(rules).toEqual([`bash(=${cmd})`]);
     expect(policy({}, rules).evaluate(bash, { command: cmd }).mode).toBe("allow");
     expect(policy({}, rules).evaluate(bash, { command: cmd + "; rm -rf ~" }).mode).toBe("ask");
+  });
+});
+
+describe("what an approval card offers for a command", () => {
+  it("allows a program with any arguments, keeping the subcommand where there is one", () => {
+    expect(commandPrefix("ls -la src")).toBe("ls");
+    expect(commandPrefix("ls")).toBe("ls");
+    expect(commandPrefix("npm test -- --watch")).toBe("npm test");
+    expect(commandPrefix("git status --short")).toBe("git status");
+    expect(commandPrefix("kubectl get pods -A")).toBe("kubectl get");
+  });
+
+  it("never offers any arguments for what can run any command, or a broad git *", () => {
+    for (const part of ["bash -c 'rm -rf ~'", "sh x.sh", "python3 run.py", "node -e 1", "env X=1 rm f", "sudo ls", "xargs rm", "find . -delete", "awk 1 f", "sed -n 1p f", "npx foo", "make test"])
+      expect(commandPrefix(part), part).toBeNull();
+    for (const part of ["./run.sh", "/usr/bin/ls", "FOO=1 npm test", "git -c core.pager=sh log", "git", "kubectl --context x get pods"])
+      expect(commandPrefix(part), part).toBeNull();
+  });
+
+  it("names the parts of a line no rule covers, and what would cover them", () => {
+    const p = policy({ allow: ["cd *"] });
+    expect(p.evaluate(bash, { command: "cd /workspace/app && npm test && ls -la" })).toEqual({
+      mode: "ask",
+      rule: "default: ask",
+      uncovered: ["npm test", "ls -la"],
+      prefixes: ["npm test", "ls"],
+    });
+    // One command: nothing to point at, but still something to allow.
+    expect(p.evaluate(bash, { command: "ls -la" })).toEqual({ mode: "ask", rule: "default: ask", prefixes: ["ls"] });
+    // Through an ask rule too.
+    expect(policy({ ask: ["bash"] }).evaluate(bash, { command: "git status" })).toMatchObject({ mode: "ask", prefixes: ["git status"] });
+  });
+
+  it("offers no pattern when one uncovered part cannot have one, or the line cannot be checked", () => {
+    const p = policy({ allow: ["cd *"] });
+    expect(p.evaluate(bash, { command: "cd x && python3 run.py" })).toEqual({ mode: "ask", rule: "default: ask", uncovered: ["python3 run.py"] });
+    expect(p.evaluate(bash, { command: "ls $HOME" })).toEqual({ mode: "ask", rule: "default: ask" });
+    expect(policy({ default: "deny" }).evaluate(bash, { command: "ls" })).toEqual({ mode: "deny", rule: "default: deny" });
+  });
+
+  it("allows the program with any arguments, on its own, and nothing else", () => {
+    const rules = PermissionPolicy.prefixRules(["npm test", "ls"]);
+    expect(rules).toEqual(["npm test *", "bash(npm test)", "ls *", "bash(ls)"]);
+    const p = policy({ allow: ["cd *"] }, rules);
+    for (const cmd of ["ls", "ls src", "npm test", "npm test -- --watch", "cd app && npm test && ls -la"]) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("allow");
+    for (const cmd of ["npm install x", "lsof -i", "ls && rm -rf ~", "ls $(rm -rf ~)"]) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("ask");
+    expect(policy({ deny: ["ls *"] }, rules).evaluate(bash, { command: "ls src" }).mode).toBe("deny");
   });
 });

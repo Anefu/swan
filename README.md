@@ -78,7 +78,9 @@ to use one of the persona's skills.
   folders that would expose your whole home folder, system folders or its own data.
 - **Permissions**: per tool, `allow`, `ask` or `deny`, and for commands patterns such as `cd *` or
   `npm test*`. A command that joins several, like `cd app && npm test`, is allowed when every part
-  is. The card's "until stopped" choice lasts for the current run.
+  is. A command's card names the parts no rule covers and offers to allow them with any arguments
+  (`ls *`, `npm test *`) until the agent stops, or always (saved to the persona). Shells and
+  interpreters such as `bash` or `python` are never offered that way.
 - **Credentials**: tokens and keys agents may use, each limited to its websites and to the requests
   the persona's rules allow. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md).
 - **Allowed websites**: each persona lists the hosts its agent may reach. Private and local

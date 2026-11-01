@@ -384,6 +384,18 @@ export class PersonaStore extends TypedEmitter<Events> {
     await this.save(id, doc.toString());
   }
 
+  /** "Always allow" on a command card: add the rules to the persona's permissions.allow. */
+  async addAllowRules(id: string, rules: string[]) {
+    const p = this.personas.get(id);
+    if (!p?.config) throw new Error("persona is invalid");
+    const allow = p.config.permissions.allow;
+    const added = [...new Set(rules)].filter((r) => !allow.includes(r));
+    if (!added.length) return;
+    const doc = YAML.parseDocument(p.yaml);
+    doc.setIn(["permissions", "allow"], doc.createNode([...allow, ...added]));
+    await this.save(id, doc.toString());
+  }
+
   /** "Always allow" on an ask prompt: move the pattern from ask to allow in the rules for that credential. */
   async promoteAskRule(id: string, ref: string, api: string, pattern: string) {
     const p = this.personas.get(id);

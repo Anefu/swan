@@ -150,7 +150,12 @@ or a system directory. Rule precedence: deny > allow > ask > default. A command 
 written `bash(cd *)`) is matched against each part of a command line split at unquoted `&&`, `||`,
 `;`, `|` and `&`: every part must be allowed, and any denied part denies the line. A line with
 substitution (`$`, backticks), grouping, redirection to files, escapes or line breaks never matches
-an allow rule. "Allow … until stopped" in the UI adds session-scoped allow rules, one per part.
+an allow rule. An approval card offers, for the parts no rule covers, the program (or program and
+subcommand, `git status`) with any arguments: "until stopped" adds those rules for the session,
+"Always allow" saves them to the persona. Programs whose arguments can run any command (shells,
+interpreters, `env`, `sudo`, `xargs`, `find` and similar), paths and lines Swan cannot split get
+no such offer; "until stopped" then allows the exact parts, or the exact line. The list is best
+effort: command rules decide what asks, the sandbox and credential rules are the boundary.
 
 ## Agent loop
 

@@ -40,6 +40,36 @@ export function splitCommand(command: string): string[] | null {
   return parts.map((p) => p.trim()).filter(Boolean);
 }
 
+// Programs whose arguments can make them run any other command (shells, interpreters, wrappers and
+// a few with exec options): an approval card never offers "with any arguments" for them. Best
+// effort; the sandbox, not this list, is the boundary.
+const RUNS_ANYTHING = new Set([
+  ...["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "sudo", "su", "doas", "xargs", "exec", "eval", "source", "command"],
+  ...["nohup", "timeout", "nice", "ionice", "time", "watch", "stdbuf", "setsid", "chroot", "unbuffer", "ssh", "scp", "rsync"],
+  ...["python", "python2", "python3", "node", "nodejs", "deno", "bun", "ruby", "perl", "php", "lua", "Rscript", "osascript"],
+  ...["npx", "pnpx", "bunx", "uvx", "pipx", "find", "awk", "gawk", "sed", "tar", "make"],
+]);
+// Programs whose first argument is a subcommand: the pattern keeps it ("git status *", not "git *").
+const SUBCOMMANDS = new Set([
+  ...["git", "npm", "pnpm", "yarn", "cargo", "go", "kubectl", "helm", "docker", "podman", "terraform"],
+  ...["aws", "gh", "gcloud", "az", "pip", "pip3", "uv", "poetry", "brew", "apt", "apt-get", "dotnet", "mvn", "gradle"],
+]);
+
+/** The prefix an approval card can allow with any arguments ("ls", "npm test"), or null. */
+export function commandPrefix(part: string): string | null {
+  const [program, sub] = part.trim().split(/\s+/);
+  if (!program || !/^[A-Za-z0-9_][A-Za-z0-9._+-]*$/.test(program) || RUNS_ANYTHING.has(program)) return null;
+  if (!SUBCOMMANDS.has(program)) return program;
+  return sub && /^[a-z][a-z0-9:-]*$/.test(sub) ? `${program} ${sub}` : null; // never "git *"
+}
+
+export interface Evaluation {
+  mode: PermissionMode;
+  rule: string;
+  uncovered?: string[]; // parts of a command line no allow rule covers
+  prefixes?: string[]; // "npm test": allowing "npm test *" would cover them
+}
+
 interface Rule {
   raw: string;
   name: string;
@@ -116,14 +146,35 @@ export class PermissionPolicy {
     return used;
   }
 
-  evaluate(tool: ToolDef, input: Record<string, unknown> | null): { mode: PermissionMode; rule: string } {
+  evaluate(tool: ToolDef, input: Record<string, unknown> | null): Evaluation {
     const arg = input ? tool.primaryArg?.(input) : undefined;
     const parts = tool.name === "bash" && arg !== undefined ? splitCommand(arg) : null;
     for (const r of this.deny) if (this.hits(r, tool, arg, parts)) return { mode: "deny", rule: `deny: ${r.raw}` };
     const allowed = this.allowedBy(tool, arg, parts);
     if (allowed) return { mode: "allow", rule: `allow: ${allowed.map((r) => r.raw).join(", ")}` };
-    for (const r of this.ask) if (this.hits(r, tool, arg, parts)) return { mode: "ask", rule: `ask: ${r.raw}` };
-    return { mode: this.cfg.default, rule: `default: ${this.cfg.default}` };
+    for (const r of this.ask) if (this.hits(r, tool, arg, parts)) return { mode: "ask", rule: `ask: ${r.raw}`, ...this.commandHelp(parts) };
+    return { mode: this.cfg.default, rule: `default: ${this.cfg.default}`, ...(this.cfg.default === "ask" ? this.commandHelp(parts) : {}) };
+  }
+
+  /**
+   * For an approval card on a command line: the parts no allow rule covers (when there are several
+   * parts), and the prefixes that would cover them with any arguments, offered only when every
+   * uncovered part has one.
+   */
+  private commandHelp(parts: string[] | null): Pick<Evaluation, "uncovered" | "prefixes"> {
+    if (!parts?.length) return {};
+    const rules = this.allow.filter((r) => r.arg !== undefined && !r.exact && wildcardMatch("bash", r.name));
+    const uncovered = parts.filter((p) => !rules.some((r) => PermissionPolicy.argMatches(r, p)));
+    const prefixes = uncovered.map(commandPrefix);
+    return {
+      ...(parts.length > 1 && uncovered.length ? { uncovered } : {}),
+      ...(uncovered.length && prefixes.every((p) => p !== null) ? { prefixes: [...new Set(prefixes as string[])] } : {}),
+    };
+  }
+
+  /** The rules for prefixes: the prefix with any arguments, and on its own ("ls *" does not match "ls"). */
+  static prefixRules(prefixes: string[]): string[] {
+    return prefixes.flatMap((p) => [`${p} *`, `bash(${p})`]);
   }
 
   /** Static view for the tools panel (no input available). */

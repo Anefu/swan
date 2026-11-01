@@ -18,7 +18,7 @@ import { SessionMcp } from "./mcp.js";
 import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./subagents.js";
 import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
-import { PermissionPolicy } from "./permissions.js";
+import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
 import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
@@ -1396,6 +1396,25 @@ export class Session {
     return new PermissionPolicy(cfg?.permissions ?? { default: "ask", allow: [], ask: [], deny: [] }, this.summary.allowances);
   }
 
+  /**
+   * "Allow … until stopped" adds temporary rules: "npm test *" where the card offered it, otherwise
+   * the exact command or the tool. "Always allow" saves the offered patterns to the persona; with
+   * none on offer it stays temporary.
+   */
+  private async rememberApproval(decision: "allow_session" | "allow_always", perm: Evaluation, tool: ToolDef, input: Record<string, unknown>) {
+    const rules = perm.prefixes ? PermissionPolicy.prefixRules(perm.prefixes) : PermissionPolicy.alwaysAllowRules(tool, input);
+    if (decision === "allow_always" && perm.prefixes) {
+      try {
+        await this.deps.personas.addAllowRules(this.personaId, rules);
+        return;
+      } catch (e) {
+        this.notice("error", `Could not save ${perm.prefixes.map((p) => `"${p} *"`).join(", ")} to the persona, so it is allowed until stopped: ${errMsg(e)}`);
+      }
+    }
+    const added = rules.filter((r) => !this.summary.allowances.includes(r));
+    if (added.length) this.setAllowances([...this.summary.allowances, ...added]);
+  }
+
   private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>) {
     const policy = this.policy();
     return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, parentId, tools)));
@@ -1462,6 +1481,8 @@ export class Session {
     if (perm.mode === "ask") {
       item.status = "pending_approval";
       item.approvalReason = perm.rule;
+      if (perm.uncovered) item.uncoveredCommands = perm.uncovered;
+      if (perm.prefixes) item.allowPatterns = perm.prefixes.map((p) => `${p} *`);
       show();
       const decision = await this.waitForApproval(tu.id, signal, {
         sessionId: this.id,
@@ -1473,15 +1494,14 @@ export class Session {
         since: nowIso(),
       });
       this.refreshStatus();
+      item.uncoveredCommands = undefined;
+      item.allowPatterns = undefined;
       if (!decision) return finish("interrupted", { text: "Interrupted by the user before approval.", isError: true });
       if (decision.decision === "deny") {
         const why = decision.reason?.trim();
         return finish("denied", { text: `The user denied this tool call${why ? `: ${why}` : "."}`, isError: true }, { denyReason: why || "denied by user" });
       }
-      if (decision.decision === "allow_always") {
-        const rules = PermissionPolicy.alwaysAllowRules(tool, v.value).filter((r) => !this.summary.allowances.includes(r));
-        if (rules.length) this.setAllowances([...this.summary.allowances, ...rules]);
-      }
+      if (decision.decision !== "allow") await this.rememberApproval(decision.decision, perm, tool, v.value);
       item.status = "running";
       item.approvalReason = undefined;
     }

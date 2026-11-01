@@ -187,6 +187,8 @@ export type ChatItem =
       isError?: boolean;
       durationMs?: number;
       approvalReason?: string; // why it needs approval (matched rule)
+      uncoveredCommands?: string[]; // while pending: parts of a command line no allow rule covers
+      allowPatterns?: string[]; // while pending: "npm test *", what "until stopped" and "always" would allow
       denyReason?: string;
       parentId?: string; // set on calls made by a sub-agent: the id of its `agent` call
       agent?: AgentRun; // on `agent` calls: the sub-agent it started, kept current while it runs

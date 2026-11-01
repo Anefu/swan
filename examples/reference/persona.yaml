@@ -63,7 +63,8 @@ memory:
 # Tool permissions: deny > allow > ask > default. A rule is a tool name or glob (mcp__github__*), a
 # command pattern such as "cd *" or "npm test*" (also written bash(cd *)), or tool(argument glob).
 # A command that joins several (cd app && npm test) is allowed when every part is, and denied when
-# any part is. "Allow … until stopped" in a conversation adds rules for that run only.
+# any part is. A command's card can allow its program with any arguments ("ls *") until stopped,
+# or always, which adds the rule here. "ls *" does not match a bare "ls"; bash(ls) does.
 permissions:
   default: ask
   allow: [read_file, list_dir, glob, grep, load_skill, "cd *", "ls *", "git status*", "git diff*", "npm test*", "mcp__github__get_*", "mcp__github__list_*"]

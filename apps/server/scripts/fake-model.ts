@@ -66,6 +66,12 @@ const SCRIPTS: Record<string, Step[]> = {
   ],
   "finished]": [{ text: "The background agent is done." }],
   slow: [{ tool: "bash", args: { command: "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 1; done" } }, { text: "finished counting" }],
+  // Two lines of the same commands with other arguments: allowing "cd *" and "ls *" on the first card lets the second run.
+  chain: [
+    { tool: "bash", args: { command: "cd /workspace && ls -la" } },
+    { tool: "bash", args: { command: "cd /tmp && ls" } },
+    { text: "Listed both folders." },
+  ],
 };
 
 type Msg = { role: string; content?: string | null; tool_calls?: unknown[] };

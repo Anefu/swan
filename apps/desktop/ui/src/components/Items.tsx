@@ -664,12 +664,16 @@ function ApprovalPrompt({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const handle = useRef<DecideHandle | null>(null);
-  const onKeyDown = useDecisionKeys(handle);
+  const onKeyDown = useDecisionKeys(handle, "allow_session");
   useAutoFocus(ref);
   const path = str(item.input, ["path", "file_path"]);
   const folder = path ? mountFor(path, persona) : null;
   const tool = toolDisplayName(item.name).tool;
   const what = tool === "edit_file" || tool === "write_file" ? `${tool === "edit_file" ? "Edit" : "Write"} ${path ? basename(path) : "file"}` : null;
+  // "npm test *": the commands this line needs, with any arguments (none for shells and interpreters).
+  const patterns = item.allowPatterns ?? [];
+  const listed = patterns.map((p) => `“${p}”`).join(", ");
+  const quoted = patterns.length > 2 ? `these ${patterns.length} commands` : patterns.map((p) => `“${p}”`).join(" and ");
   return (
     <div
       ref={ref}
@@ -683,6 +687,18 @@ function ApprovalPrompt({
       <p className="prompt-q">
         <strong>{what ?? `Allow ${item.name}?`}</strong> <span className="muted">· {consequence(item, persona)}</span>
       </p>
+      {item.uncoveredCommands && (
+        <p className="small muted">
+          No allow rule covers{" "}
+          {item.uncoveredCommands.map((c, i) => (
+            <span key={i}>
+              {i > 0 && ", "}
+              <span className="mono">{c}</span>
+            </span>
+          ))}
+          ; every part of the line needs one.
+        </p>
+      )}
       {showInput && <ToolInput item={item} />}
       <Fold summary="Why approval is required">
         <dl className="facts small">
@@ -698,16 +714,27 @@ function ApprovalPrompt({
           )}
           <dt>Allow until stopped</dt>
           <dd>
-            Adds a temporary rule for {item.name === "bash" ? "this exact command" : <span className="mono">{item.name}</span>}. It ends when
-            the agent is stopped or interrupted, or Swan restarts, and never edits the persona.
+            Adds a temporary rule for{" "}
+            {patterns.length ? `${listed}, with any arguments` : item.name === "bash" ? "this exact command" : <span className="mono">{item.name}</span>}.
+            It ends when the agent is stopped or interrupted, or Swan restarts, and never edits the persona.
           </dd>
+          {patterns.length > 0 && (
+            <>
+              <dt>Always allow</dt>
+              <dd>Adds {listed} to this persona's allow rules.</dd>
+            </>
+          )}
         </dl>
       </Fold>
       <DecisionButtons
         item={item}
         sessionId={sessionId}
         handleRef={handle}
-        labels={{ allow: "Allow once", always: allowScopeLabel(item) }}
+        labels={{
+          allow: "Allow once",
+          session: patterns.length ? `Allow ${quoted} until stopped` : allowScopeLabel(item),
+          ...(patterns.length ? { always: `Always allow ${quoted}` } : {}),
+        }}
       />
       <p className="prompt-keys">
         <Kbd>A</Kbd> allow once · <Kbd>⇧A</Kbd> until stopped · <Kbd>D</Kbd> deny
@@ -797,8 +824,8 @@ function DecisionButtons({
   item: ToolItem;
   sessionId: string;
   handleRef: React.MutableRefObject<DecideHandle | null>;
-  /** `session` adds an "allow_session" button between allow and always. */
-  labels: { allow: string; session?: string; always: string };
+  /** `session` adds an "allow_session" button between allow and always; without `always`, no "allow_always" button. */
+  labels: { allow: string; session?: string; always?: string };
 }) {
   const { actions } = useStore();
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
@@ -869,10 +896,12 @@ function DecisionButtons({
           {labels.session}
         </button>
       )}
-      <button type="button" className="btn sm" disabled={busy !== null} onClick={() => void decide("allow_always")}>
-        {busy === "allow_always" && <Spinner size={10} />}
-        {labels.always}
-      </button>
+      {labels.always && (
+        <button type="button" className="btn sm" disabled={busy !== null} onClick={() => void decide("allow_always")}>
+          {busy === "allow_always" && <Spinner size={10} />}
+          {labels.always}
+        </button>
+      )}
       <button type="button" className="btn sm" disabled={busy !== null} onClick={() => setDenying(true)}>
         Deny
       </button>
