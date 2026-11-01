@@ -632,7 +632,8 @@ textarea::placeholder {
   background: var(--surface);
   font-size: 14px;
 }
-.line-banner > span {
+/* The text takes the room; a spinner is a span too, and stretched it becomes a wide spinning ellipse. */
+.line-banner > span:not(.spinner) {
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
