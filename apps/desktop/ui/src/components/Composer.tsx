@@ -227,28 +227,8 @@ export function Composer({
             ))}
           </ul>
         )}
+        {/* One line when empty; grows with the text. Model and effort are below the box. */}
         <div className="composer-row">
-          <label htmlFor="composer-input" className="sr-only">
-            Message {persona.name}
-          </label>
-          <textarea
-            id="composer-input"
-            ref={taRef}
-            rows={1}
-            value={text}
-            placeholder={`Message ${persona.name}…  (/ for commands)`}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            role="combobox"
-            aria-expanded={menuOpen}
-            aria-controls={menuOpen ? menuId : undefined}
-            aria-activedescendant={menuOpen ? optId(menuIndex) : undefined}
-            aria-autocomplete="list"
-            spellCheck
-          />
-        </div>
-        <div className="composer-meta">
           <button
             type="button"
             className="icon-btn sm attach-btn"
@@ -270,9 +250,25 @@ export function Composer({
               taRef.current?.focus();
             }}
           />
-          <ModelSelectors persona={persona} />
-          <span className="grow" />
-          <DecisionsShortcut />
+          <label htmlFor="composer-input" className="sr-only">
+            Message {persona.name}
+          </label>
+          <textarea
+            id="composer-input"
+            ref={taRef}
+            rows={1}
+            value={text}
+            placeholder={`Message ${persona.name}…  (/ for commands)`}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            role="combobox"
+            aria-expanded={menuOpen}
+            aria-controls={menuOpen ? menuId : undefined}
+            aria-activedescendant={menuOpen ? optId(menuIndex) : undefined}
+            aria-autocomplete="list"
+            spellCheck
+          />
           <SendStopButton
             hasText={!!text.trim() || atts.length > 0}
             canSend={canSend}
@@ -283,6 +279,11 @@ export function Composer({
             onStop={sessionId ? () => void actions.interrupt(sessionId) : undefined}
           />
         </div>
+      </div>
+      <div className="composer-pickers">
+        <DecisionsShortcut className="compact" />
+        <span className="grow" />
+        <ModelSelectors persona={persona} />
       </div>
     </div>
   );

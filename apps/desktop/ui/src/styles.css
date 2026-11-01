@@ -1352,7 +1352,7 @@ button.line:focus-visible .chev,
 .composer-wrap {
   flex: none;
   position: relative;
-  padding-bottom: 16px;
+  padding-bottom: 10px;
 }
 .session-status {
   display: flex;
@@ -1373,9 +1373,18 @@ button.line:focus-visible .chev,
 .composer:focus-within {
   border-color: var(--accent);
 }
+/* Attach, the text and Send on one line; the buttons stay on the last line as the text grows. */
 .composer-row {
   display: flex;
-  padding: 8px 14px 0;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+}
+.composer-row .attach-btn {
+  margin-bottom: 5px;
+}
+.composer-row .round-btn {
+  margin-bottom: 3px;
 }
 .composer textarea {
   flex: 1 1 auto;
@@ -1394,21 +1403,22 @@ button.line:focus-visible .chev,
   font-family: var(--mono);
   font-size: 15px;
 }
-.composer-meta {
+/* Below the box: a waiting decision on the left, model and effort on the right. */
+.composer-pickers {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px 8px 10px;
+  gap: 4px;
+  padding-top: 6px;
 }
-.composer-meta .mini-select select {
+.composer-pickers .mini-select select {
   height: 28px;
   background-color: transparent;
   color: var(--ink-2);
   font-size: 13px;
 }
-.composer-meta .mini-select select:hover,
-.composer-meta .mini-select select:focus-visible {
+.composer-pickers .mini-select select:hover,
+.composer-pickers .mini-select select:focus-visible {
   background-color: var(--raised);
   color: var(--ink);
 }
