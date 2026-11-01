@@ -65,7 +65,7 @@ jobs:
       - name: Checksums
         working-directory: apps/desktop/release
         run: shasum -a 256 Swan-*.dmg | tee SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swan-macos
           path: |
