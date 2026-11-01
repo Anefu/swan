@@ -50,7 +50,7 @@ body,
 }
 
 /* The page itself never scrolls or bounces (macOS rubber-banding moved the composer); the
-   conversation and panes scroll inside it. Only the start-up screens can overflow #root. */
+   conversation and panes scroll inside it. Only the server gate can overflow #root. */
 html,
 body {
   overflow: hidden;
@@ -693,10 +693,14 @@ textarea::placeholder {
 
 /* ---------- Layout ---------- */
 
+/* Clipped, not hidden: nothing can scroll the shell, not even scrollIntoView or focus. When the
+   banners and composer outgrow a short window, the conversation gives way instead of the page
+   scrolling the header and composer out of view. */
 .app {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: clip;
 }
 
 /* Title bar: same background as the conversation, no rule under it. It is also the window's title
@@ -1377,7 +1381,7 @@ button.line:focus-visible .chev,
   flex: 1 1 auto;
   min-width: 0;
   min-height: 36px;
-  max-height: 260px;
+  max-height: min(260px, 30vh); /* a short window keeps room for the conversation */
   padding: 9px 0;
   background: transparent;
   border: none;
@@ -1511,6 +1515,7 @@ button.line:focus-visible .chev,
 
 .first-run {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   align-items: flex-start;

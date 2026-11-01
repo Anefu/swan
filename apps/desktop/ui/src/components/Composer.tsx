@@ -15,6 +15,13 @@ const SWAN_COMMANDS: SlashCommand[] = [
 
 const commandCache = new Map<string, SlashCommand[]>();
 
+/** Grows the message box with its text, up to its CSS max-height; past that it scrolls. */
+function fitHeight(ta: HTMLTextAreaElement | null) {
+  if (!ta) return;
+  ta.style.height = "auto";
+  ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
+}
+
 function useCommands(persona: PersonaSummary): SlashCommand[] {
   const { state } = useStore();
   const [cmds, setCmds] = useState<SlashCommand[] | null>(() => commandCache.get(persona.id) ?? null);
@@ -82,13 +89,20 @@ export function Composer({
     if (slashQuery === null) setMenuDismissed(false);
   }, [slashQuery]);
 
-  // Auto-grow
-  useLayoutEffect(() => {
+  // Auto-grow, and again when the width changes (window or side panel), since the text re-wraps.
+  useLayoutEffect(() => fitHeight(taRef.current), [text]);
+  useEffect(() => {
     const ta = taRef.current;
     if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
-  }, [text]);
+    let width = ta.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (ta.clientWidth === width) return;
+      width = ta.clientWidth;
+      fitHeight(ta);
+    });
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, []);
 
   const atts = state.attachments[persona.id] ?? [];
   const uploading = atts.some((a) => a.status === "uploading");
