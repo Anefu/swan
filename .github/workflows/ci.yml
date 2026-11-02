@@ -20,7 +20,7 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # nothing here starts Electron
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build with a throwaway CA
         run: |
           mkdir -p /tmp/ctx/swan/ca
@@ -66,7 +66,7 @@ jobs:
     outputs:
       desktop: ${{ steps.diff.outputs.desktop }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
@@ -91,7 +91,7 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # electron-builder fetches its own copy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
