@@ -125,6 +125,7 @@ export const IconSettings = make(
 export const IconSwan = make(
   <path transform="translate(-4 -3)" d="M9 21c3 3 11 3 14-2-3 1-6 0-7-3 0-3 2-5 1-8-1-2-4-2-5 0 2 0 3 1 2 3-1 2-3 4-2 7" />,
 );
+export const IconUpload = make(<path d="M12 15V3M7 8l5-5 5 5M5 21h14" />);
 export const IconSliders = make(<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />);
 export const IconDoc = make(<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6" />);
 export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);

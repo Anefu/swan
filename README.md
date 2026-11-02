@@ -99,6 +99,11 @@ to use one of the persona's skills.
   restart it by themselves between turns; the conversation carries on.
 - **Sub-agents**: the agent can hand parts of a task to focused helpers that work in parallel or in
   the background, with the same sandbox and rules.
+- **Sharing a persona**: **Export…** at the bottom of a persona's settings saves a
+  `.swan-persona.yaml` file with its settings, the connections it uses and, if you choose, its skills;
+  never secret values. **Import persona…** in the persona menu shows what the persona may reach before
+  anything is saved: you pick its name, point its folders at yours, and choose whether to add sign-in
+  tools that run on your Mac. Connections and skills you already have are kept.
 
 A complete persona, `config.yaml` and `secrets.yaml` using every setting:
 [examples/reference/](examples/reference/).

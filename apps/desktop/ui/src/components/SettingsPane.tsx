@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ConnectionStatus, CredentialRule, FolderMode, ModelOption, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi, SubagentsConfig } from "@ph/shared";
-import { api } from "../api";
+import { api, personaExportUrl } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
 import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
@@ -1013,7 +1013,12 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           </Field>
           <p className="hint">Memory is private to this persona. Review it in Memory &amp; Usage.</p>
         </Section>
-        {!isNew && persona && !state.settingsSection && <DeletePersona persona={persona} />}
+        {!isNew && persona && !state.settingsSection && (
+          <div className="row gap wrap">
+            <ExportPersona persona={persona} />
+            <DeletePersona persona={persona} />
+          </div>
+        )}
       </div>
 
       <div className="pane-foot" aria-live="polite">
@@ -1046,6 +1051,51 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         {!dirty && !entry.result && <span className="muted small">All changes saved.</span>}
       </div>
     </>
+  );
+}
+
+/** A file to share the persona: its settings, the connections it uses (never values) and, if chosen, its skills. */
+function ExportPersona({ persona }: { persona: PersonaSummary }) {
+  const [open, setOpen] = useState(false);
+  const [skills, setSkills] = useState<string[]>(persona.skills);
+  if (!open)
+    return (
+      <div>
+        <button type="button" className="btn sm" onClick={() => setOpen(true)}>
+          Export…
+        </button>
+      </div>
+    );
+  return (
+    <div className="inline-form" role="group" aria-label={`Export ${persona.name}`}>
+      <p className="small">
+        A file to share {persona.name}: its settings and the connections it uses, without any secret values. Check its instructions and
+        environment variables before sharing.
+      </p>
+      {persona.skills.length > 0 && (
+        <div role="group" aria-label="Include skills">
+          <p className="small muted">Include skills</p>
+          {persona.skills.map((name) => (
+            <label key={name} className="check-row">
+              <input
+                type="checkbox"
+                checked={skills.includes(name)}
+                onChange={(e) => setSkills((s) => (e.target.checked ? [...s, name] : s.filter((x) => x !== name)))}
+              />
+              <span className="mono">{name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="row gap end">
+        <a className="btn sm primary" href={personaExportUrl(persona.id, skills)} download={`${persona.id}.swan-persona.yaml`} onClick={() => setOpen(false)}>
+          Download
+        </a>
+        <button type="button" className="btn sm" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

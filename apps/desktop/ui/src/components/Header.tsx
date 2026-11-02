@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
-import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch } from "./icons";
+import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch, IconUpload } from "./icons";
 import { Rail } from "./Rail";
 import { Kbd, MOD } from "./ui";
 
@@ -36,9 +36,11 @@ function PersonaMenu() {
     if (!q) return state.personas;
     return state.personas.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q));
   }, [state.personas, query]);
-  // After the personas: "New persona".
+  // After the personas: "New persona", then "Import persona…".
   const newIndex = filtered.length;
-  const count = filtered.length + 1;
+  const importIndex = filtered.length + 1;
+  const count = filtered.length + 2;
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const close = (refocus = true) => {
     setOpen(false);
@@ -83,6 +85,11 @@ function PersonaMenu() {
     if (i === newIndex) {
       close(false);
       actions.openSettings({ isNew: true });
+      return;
+    }
+    if (i === importIndex) {
+      close(false);
+      fileRef.current?.click();
       return;
     }
     const p = filtered[i];
@@ -133,6 +140,18 @@ function PersonaMenu() {
         <span>{persona?.name ?? "Choose persona"}</span>
         <IconChevronDown size={14} />
       </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".yaml,.yml"
+        hidden
+        aria-label="Persona file to import"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void actions.startImport(file);
+        }}
+      />
       {open && (
         <div ref={popRef} className="popover persona-pop">
           {showSearch && (
@@ -199,6 +218,19 @@ function PersonaMenu() {
                 <IconPersonaAdd size={16} />
               </span>
               <span className="persona-opt-main">New persona</span>
+            </li>
+            <li
+              id={`${listId}-${importIndex}`}
+              role="option"
+              aria-selected={false}
+              className={cls("persona-opt new", active === importIndex && "is-active")}
+              onMouseEnter={() => setActive(importIndex)}
+              onClick={() => choose(importIndex)}
+            >
+              <span className="persona-check">
+                <IconUpload size={16} />
+              </span>
+              <span className="persona-opt-main">Import persona…</span>
             </li>
           </ul>
           <div className="pop-hint">

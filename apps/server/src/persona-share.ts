@@ -109,6 +109,7 @@ function parseFile(text: string): ShareFile {
   } catch (e) {
     throw new Error(`not a Swan persona file: ${errMsg(e).split("\n")[0]}`);
   }
+  if (!raw || typeof raw !== "object" || !("swanPersona" in raw)) throw new Error("not a Swan persona file. Export one from a persona's Settings → Export…");
   const r = ShareFileSchema.safeParse(raw);
   if (!r.success) throw new Error(`not a Swan persona file: ${r.error.issues[0]?.path.join(".") ?? ""} ${r.error.issues[0]?.message ?? ""}`.trim());
   for (const name of Object.keys(r.data.skills)) {

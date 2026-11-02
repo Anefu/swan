@@ -11,6 +11,9 @@ import type {
   ModelOption,
   PendingApproval,
   PersonaConfigView,
+  PersonaImportChoices,
+  PersonaImportPreview,
+  PersonaImportResult,
   ProviderAllowance,
   SaveResult,
   SlashCommand,
@@ -155,6 +158,8 @@ export const api = {
   savePersonaSource: (id: string, yaml: string) =>
     request<PersonaSummary>("PUT", `/api/personas/${enc(id)}/source`, { yaml }),
   deletePersona: (id: string) => request<Ok>("DELETE", `/api/personas/${enc(id)}`),
+  previewImport: (text: string) => request<PersonaImportPreview>("POST", "/api/personas/import/preview", { text }),
+  importPersona: (text: string, choices: PersonaImportChoices) => request<PersonaImportResult>("POST", "/api/personas/import", { text, choices }),
   personaTools: (id: string) => request<ToolSummary[]>("GET", `/api/personas/${enc(id)}/tools`),
   files: (id: string, path: string) =>
     request<FileList>("GET", `/api/personas/${enc(id)}/files?path=${enc(path)}`),
@@ -275,4 +280,9 @@ export function uploadAttachment(
 /** Inline URL for an attachment's bytes (images and PDFs open inline; others download). */
 export function attachmentFileUrl(sessionId: string, attachmentId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/file?token=${encodeURIComponent(apiToken)}`;
+}
+
+/** The share file for a persona, as a download (an <a href> cannot send the token header). */
+export function personaExportUrl(id: string, skills: string[]): string {
+  return `/api/personas/${encodeURIComponent(id)}/export?skills=${encodeURIComponent(skills.join(","))}&token=${encodeURIComponent(apiToken)}`;
 }

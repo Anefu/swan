@@ -1864,6 +1864,9 @@ button.line:focus-visible .chev,
 .inline-form p {
   margin: 0;
 }
+.row.wrap > .inline-form {
+  flex-basis: 100%;
+}
 
 /* Connections */
 .device {

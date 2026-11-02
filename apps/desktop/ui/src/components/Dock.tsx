@@ -7,6 +7,7 @@ import { OverviewPane } from "./OverviewPane";
 import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
 import { SwanSettingsPane } from "./SwanSettings";
+import { ImportPane } from "./ImportPane";
 
 export const DOCK_MIN = 320;
 const DOCK_LABEL: Record<DockMode, string> = {
@@ -17,6 +18,7 @@ const DOCK_LABEL: Record<DockMode, string> = {
   usage: "Usage",
   network: "Network activity",
   attachments: "Attachments",
+  import: "Import persona",
 };
 export const DOCK_MAX = 560;
 
@@ -37,7 +39,7 @@ const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
   // Back to the header button that opened it; the rail's screens share one button.
-  const trigger = inRail(mode) ? "trigger-overview" : `trigger-${mode}`;
+  const trigger = mode === "import" ? "persona-trigger" : inRail(mode) ? "trigger-overview" : `trigger-${mode}`;
   window.setTimeout(() => document.getElementById(trigger)?.focus(), 0);
 }
 
@@ -114,6 +116,8 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
           <SettingsPane />
         ) : mode === "swan" ? (
           <SwanSettingsPane onClose={close} />
+        ) : mode === "import" ? (
+          <ImportPane onClose={() => closeDockAndRestoreFocus("import", actions.closeImport)} />
         ) : mode === "memory" || mode === "usage" ? (
           <MemoryUsagePane key={mode} mode={mode} onBack={back} />
         ) : mode === "network" ? (

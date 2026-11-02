@@ -32,7 +32,7 @@ export type ToastKind = "info" | "success" | "warn" | "error";
  * "overview" is the rail of cards; memory, usage, network and attachments open from it and lead back to it.
  * "settings" is the selected persona's settings; "swan" is Swan's own (providers, connections, sandbox).
  */
-export type DockMode = "overview" | "settings" | "swan" | "memory" | "usage" | "network" | "attachments";
+export type DockMode = "overview" | "settings" | "swan" | "memory" | "usage" | "network" | "attachments" | "import";
 export const RAIL_MODES: readonly DockMode[] = ["overview", "memory", "usage", "network", "attachments"];
 export const inRail = (mode: DockMode | null): boolean => !!mode && RAIL_MODES.includes(mode);
 /** The rail and the screens it opens share one width, so moving between them never jumps. */
@@ -158,6 +158,8 @@ export interface State {
   focusApproval: { sessionId: string; toolUseId: string; seq: number } | null;
   focusItem: { sessionId: string; itemId: string; seq: number } | null;
   personaMenuSeq: number;
+  /** A persona file chosen for import; the import pane previews it. */
+  importFile: { name: string; text: string } | null;
   usageRev: Record<string, number>;
   memoryRev: Record<string, number>;
   toasts: Toast[];
@@ -172,7 +174,7 @@ const MAX_EGRESS = 2000;
 export const DOCK_DEFAULT = 380;
 const DEFAULT_UI: UiPrefs = {
   dock: null,
-  widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT },
+  widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT, import: DOCK_DEFAULT },
 };
 
 /** Saved prefs hold every width, chosen or not; 400 and 440 were earlier defaults, so they move to the new one. */
@@ -217,6 +219,7 @@ function initState(): State {
     focusApproval: null,
     focusItem: null,
     personaMenuSeq: 0,
+    importFile: null,
     usageRev: {},
     memoryRev: {},
     toasts: [],
@@ -257,6 +260,7 @@ type Action =
   | { type: "dock"; dock: DockMode | null }
   | { type: "dock.width"; mode: DockMode; width: number }
   | { type: "settings.new"; isNew: boolean }
+  | { type: "import.file"; file: { name: string; text: string } | null }
   | { type: "settings.section"; section: string | null }
   | { type: "settings.focus"; focus: SettingsFocus | null }
   | { type: "draft.set"; key: string; draft: SettingsDraft | null }
@@ -446,6 +450,8 @@ function reducer(state: State, a: Action): State {
       return { ...state, ui: { ...state.ui, widths: { ...state.ui.widths, [a.mode]: a.width } } };
     case "settings.new":
       return { ...state, settingsNew: a.isNew };
+    case "import.file":
+      return { ...state, importFile: a.file };
     case "settings.section":
       return { ...state, settingsSection: a.section };
     case "settings.focus":
@@ -543,6 +549,9 @@ export interface Actions {
   setSettingsSection(section: string | null): void;
   /** Swan's own settings: providers, connections and the sandbox. */
   openSwanSettings(): void;
+  /** Read a persona file and open the import pane on it. */
+  startImport(file: File): Promise<void>;
+  closeImport(): void;
   /** Open this persona's Connections settings with `rule` added to the draft. */
   addRuleInSettings(personaId: string, connection: string, rule: CredentialRule): void;
   clearSettingsFocus(): void;
@@ -753,6 +762,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       setSettingsSection: (section) => dispatch({ type: "settings.section", section }),
       openSwanSettings: () => dispatch({ type: "dock", dock: "swan" }),
+      startImport: async (file) => {
+        if (file.size > 20 * 1024 * 1024) return toast("error", `${file.name} is larger than 20 MB; a persona file is much smaller.`, "Import");
+        dispatch({ type: "import.file", file: { name: file.name, text: await file.text() } });
+        dispatch({ type: "dock", dock: "import" });
+      },
+      closeImport: () => {
+        dispatch({ type: "import.file", file: null });
+        dispatch({ type: "dock", dock: null });
+      },
       addRuleInSettings: (personaId, connection, rule) => {
         const s = stateRef.current;
         if (personaId !== s.selectedPersonaId) {
