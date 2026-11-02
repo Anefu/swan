@@ -27,4 +27,7 @@ RUN sh /tmp/swan-tools.sh && rm -f /tmp/swan-tools.sh
 
 USER 1000
 WORKDIR /workspace
+# An image's own entrypoint (a setup script, a CLI) would receive Swan's command as arguments and
+# usually end, taking the container with it: Swan runs its command directly.
+ENTRYPOINT []
 CMD ["sleep", "infinity"]

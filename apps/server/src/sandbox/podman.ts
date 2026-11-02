@@ -355,6 +355,16 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     for (const s of spec.skills) args.push("-v", `${s.hostPath}:/skills/${s.name}:ro`);
     args.push(spec.image ?? this.imageTag, "sleep", "infinity");
     await this.ok(args, "container start", 60_000);
+    // A container that ends at once (an image built for another architecture, or one Swan cannot run)
+    // would only show up later as failing commands: say so now, with what it printed.
+    await new Promise((r) => setTimeout(r, 500));
+    const state = await this.run(["inspect", name, "--format", "{{.State.Running}}|{{.State.ExitCode}}"]);
+    if (state.code === 0 && state.stdout.trim().startsWith("false")) {
+      const logs = await this.run(["logs", "--tail", "15", name]);
+      await this.run(["rm", "-f", name]);
+      const out = `${logs.stdout}${logs.stderr}`.trim().slice(-1500);
+      throw new Error(`the sandbox container stopped right away (exit code ${state.stdout.trim().split("|")[1]})${out ? `:\n${out}` : "."} Check that ${spec.image ?? this.imageTag} runs on this Mac (arm64).`);
+    }
     return name;
   }
 
