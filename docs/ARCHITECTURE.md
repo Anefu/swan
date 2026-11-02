@@ -4,6 +4,87 @@ A local, single-user agent harness for macOS: an agent loop (Claude or any OpenA
 with a desktop app, where every tool call runs in a Podman sandbox that can only see approved folders and can
 only reach the network through a credential-injecting egress proxy. Agents never see secret values.
 
+## At a glance
+
+The server runs the agent loop on your Mac. The model only proposes tool calls; the server checks
+them against the persona's permissions (asking you where they say so) and runs them in the
+session's container with `podman exec`. The container's only way out is the relay to the egress
+proxy, which applies the allowlists and the credential rules.
+
+```mermaid
+flowchart TB
+  subgraph ext["Internet and company network"]
+    models["Model providers<br/>Claude, OpenAI, Copilot"]
+    httpmcp["HTTP MCP servers"]
+    hosts["Allowed hosts<br/>APIs, internal hosts"]
+  end
+  subgraph mac["Your Mac: holds the secrets"]
+    app["Swan app<br/>window and UI"]
+    home[("~/.swan<br/>config, secrets")]
+    subgraph server["Swan server, 127.0.0.1 only"]
+      loop["Agent loop<br/>permissions, approvals"]
+      mcpc["MCP client<br/>HTTP servers"]
+      conns["Connections<br/>keys, tokens, sign-in tools"]
+      proxy["Egress proxy<br/>checks, injects credentials"]
+    end
+  end
+  subgraph vm["Podman VM: no route out, no DNS"]
+    relay["Relay<br/>forwards to the proxy"]
+    subgraph box["Session container, one per persona: uid 1000, no capabilities"]
+      tools["Tools<br/>bash, files"]
+      stdio["stdio MCP servers<br/>placeholders only"]
+      folders["Your folders<br/>read-only or read-write"]
+    end
+  end
+  app -->|"API and WebSocket, with a token"| loop
+  loop -->|"real API keys"| models
+  mcpc -->|"real header values"| httpmcp
+  loop -->|"podman exec"| tools
+  loop -->|"podman exec -i"| stdio
+  tools -->|"HTTPS_PROXY"| relay
+  stdio --> relay
+  relay --> proxy
+  proxy -->|"allowed hosts only, credentials per the rules"| hosts
+  conns -.-> proxy
+  conns -.-> mcpc
+```
+
+One request from the sandbox, from the tool that sends it to the response it gets back:
+
+```mermaid
+flowchart TD
+  send["A tool in the sandbox sends a request<br/>with a placeholder, through HTTPS_PROXY"] --> relay["Relay to the egress proxy<br/>the session is known by its proxy login"]
+  relay --> checks{"Host and address checks<br/>allowlist, internal hosts, private addresses"}
+  checks -->|"unknown host"| hostcard["Card: allow or deny the host"]
+  checks -->|"refused"| blocked["Blocked, 403<br/>shown in the Network panel"]
+  checks -->|"allowed"| bound{"Host bound to one of<br/>the persona's credentials?"}
+  bound -->|"no"| tunnel["Tunnelled as is, not decrypted"]
+  bound -->|"yes"| foreign{"Carries a credential<br/>not from Swan?"}
+  foreign -->|"yes"| refused["Refused, 403<br/>and a notice in the conversation"]
+  foreign -->|"no"| rules{"The persona's rules<br/>for that credential"}
+  rules -->|"deny or no rule"| kept["Placeholder kept<br/>upstream rejects it"]
+  rules -->|"ask"| credcard["Card: allow once, until stopped or always"]
+  rules -->|"allow"| inject["Real value injected<br/>AWS requests re-signed"]
+  credcard -->|"allowed"| inject
+  tunnel --> upstream["Upstream, directly or through your company proxy"]
+  inject --> upstream
+  upstream --> back["Response, with any echoed secret<br/>turned back into its placeholder"]
+```
+
+MCP servers are configured the same way in a persona, but run in different places:
+
+```mermaid
+flowchart LR
+  subgraph stdio["stdio MCP server: command"]
+    direction TB
+    s1["Runs in the session container<br/>its environment holds placeholders"] --> s2["Egress proxy<br/>applies the rules, injects real values"] --> s3["Service API"]
+  end
+  subgraph http["HTTP MCP server: url"]
+    direction TB
+    h1["Swan server on your Mac<br/>sends real header values"] --> h2["MCP server at the persona's URL"]
+  end
+```
+
 ## Trust boundaries
 
 ```
