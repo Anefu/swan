@@ -1294,7 +1294,7 @@ function FolderEditor({
           </select>
         )}
       </Field>
-      <p className="hint">Changes apply at the next container start.</p>
+      <p className="hint">After saving, the sandbox restarts between turns to apply it.</p>
       <div className="row gap">
         <button type="button" className="btn sm" onClick={onDone}>
           Done
@@ -1628,7 +1628,7 @@ function SaveSummary({ result }: { result: NonNullable<SettingsDraft["result"]> 
       <p>
         <strong>Saved.</strong>
         {result.appliedNow.length > 0 && ` Applied now: ${result.appliedNow.join(", ")}.`}
-        {result.nextStart.length > 0 && ` At the next safe start: ${result.nextStart.join(", ")}.`}
+        {result.nextStart.length > 0 && ` Applied later: ${result.nextStart.join(", ")}.`}
       </p>
       {(result.notes ?? []).map((n, i) => (
         <p key={i} className="muted">

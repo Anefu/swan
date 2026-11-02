@@ -173,6 +173,11 @@ effort: command rules decide what asks, the sandbox and credential rules are the
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
 - Sessions persist to `~/.swan/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
+- A container keeps what it was started with: folders, skills, MCP servers, `env`, `sandbox` and
+  the credentials the rules name. When a persona edit changes one of those, the session removes the
+  container once nothing uses it (no turn, approval, `/dream` or sub-agent), says so in the
+  conversation, and the next message starts a new one. Permissions, hosts and rule patterns apply
+  to the running container at once. The conversation and "until stopped" rules are kept.
 
 ## Copilot provider
 
@@ -201,7 +206,11 @@ proxy through a process-wide dispatcher and trust the extra roots; the Copilot r
 connection wrappers get the same settings as `HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS`. The
 sandbox image is built from `mirrors.baseImage` with the proxy as predefined build arguments (not
 kept in the image; a loopback proxy becomes `host.containers.internal`), a generated setup script
-points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. The egress proxy chains
+points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. A last
+root step installs `sandboxTools` (Debian packages, then an install script), in a layer of its own
+so changing it rebuilds only from there; mirrors, certificates and tools are part of the image tag,
+so a change builds a new image. The build's network use is the user's own config, not an agent's:
+nothing in the sandbox can edit `config.yaml`. The egress proxy chains
 agents' traffic to the upstream proxy after its own checks (step 3 of the credential flow): blind
 tunnels and plain HTTP as well as the TLS connections it makes for credential hosts.
 

@@ -365,12 +365,12 @@ export class PersonaStore extends TypedEmitter<Events> {
     const nextStart: string[] = [];
     if (!before || !eq(before.permissions, v.permissions)) appliedNow.push("permissions");
     if (!before || !eq(before.network.allow, v.networkAllow) || !eq(before.network.internal, internal)) appliedNow.push("network allowlist");
-    if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (newly named credentials from the next container start)");
+    if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (a newly named credential restarts the sandbox between turns)");
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
     if (!before || !eq(before.subagents, v.subagents)) appliedNow.push("sub-agents (from the next delegation)");
     if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
-      nextStart.push("folders, skills and MCP servers (next container start)");
+      nextStart.push("folders, skills and MCP servers (the sandbox restarts between turns)");
     return { persona: this.summary(saved), appliedNow, nextStart };
   }
 

@@ -181,6 +181,9 @@ export class Session {
   private liveTools = new Map<string, ToolDef>();
   private workdir = "/workspace";
   private starting: Promise<void> | null = null;
+  private startedWith: Record<string, string> | null = null; // what the running container took at its start
+  private restartFor: string[] | null = null; // of those, what has changed since: restart when nothing uses it
+  private restarting: Promise<void> | null = null;
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean }[] = [];
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
@@ -473,10 +476,53 @@ export class Session {
 
   // ---------- lifecycle ----------
 
-  private ensureStarted(): Promise<void> {
-    if (this.container) return Promise.resolve();
+  private async ensureStarted(): Promise<void> {
+    if (this.restarting) await this.restarting;
+    if (this.container) return;
     this.starting ??= this.start().finally(() => (this.starting = null));
     return this.starting;
+  }
+
+  /** What a container takes only when it starts, under the names the restart notice uses. */
+  private containerSettings(): Record<string, string> | null {
+    const persona = this.deps.personas.get(this.personaId);
+    const cfg = persona?.config;
+    if (!persona || !cfg) return null;
+    const credentials = Object.entries(cfg.connections).flatMap(([conn, c]) => c.rules.map((r) => `${conn}/${r.credential}`));
+    const settings = {
+      folders: persona.folders,
+      skills: cfg.skills,
+      "MCP servers": cfg.mcpServers,
+      "environment variables": cfg.env,
+      "sandbox settings": cfg.sandbox,
+      credentials: [...new Set(credentials)].sort(),
+    };
+    return Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, JSON.stringify(v)]));
+  }
+
+  /** A persona edit: rules apply at once; settings the container took at its start restart it, between turns. */
+  async onPersonaChanged() {
+    this.refreshPolicy();
+    const now = this.containerSettings();
+    if (!this.container || !this.startedWith || !now) return;
+    const changed = Object.keys(now).filter((k) => now[k] !== this.startedWith![k]);
+    this.restartFor = changed.length ? changed : null;
+    if (!this.loopRunning) await this.restartIfDue();
+  }
+
+  /**
+   * Restart the container for changed settings once nothing uses it: no turn, approval, /dream or
+   * sub-agent. The next turn starts it again; the conversation and "until stopped" rules stay.
+   */
+  private async restartIfDue() {
+    const changed = this.restartFor;
+    if (!changed || !this.container || this.restarting || this.approvals.size || this.dreaming) return;
+    if ([...this.agents.values()].some((a) => a.sub.active)) return;
+    if (this.deps.personas.get(this.personaId)?.errors.length) return; // waits until the persona can start
+    this.restarting = this.teardown().finally(() => (this.restarting = null));
+    await this.restarting;
+    const what = changed.length > 1 ? `${changed.slice(0, -1).join(", ")} and ${changed.at(-1)}` : changed[0];
+    this.notice("info", `The sandbox restarts with the next message to apply the changed ${what}. Anything outside your folders, like installed packages or programs it was running, starts fresh.`);
   }
 
   private renderPlaceholders = (template: string) => this.creds.render(template);
@@ -562,10 +608,13 @@ export class Session {
     for (const p of prepared.problems) this.notice("warn", p);
     // Turns go ahead; requests that need the connection fail until the user signs in.
     for (const conn of prepared.needSignIn) void this.creds.signIn(conn);
+    this.startedWith = this.containerSettings();
     this.setStatus("idle");
   }
 
   private async teardown() {
+    this.startedWith = null;
+    this.restartFor = null;
     this.stopAgents();
     this.deps.providers.releaseSession(this.id);
     await this.mcp?.close().catch(() => {});
@@ -927,6 +976,7 @@ export class Session {
     this.loopRunning = true;
     try {
       try {
+        await this.restartIfDue(); // a change that waited for the last turn, or for a sub-agent
         await this.ensureStarted();
       } catch (e) {
         this.queue = [];
@@ -955,6 +1005,7 @@ export class Session {
       this.loopRunning = false;
       this.abort = null;
       this.touch();
+      await this.restartIfDue();
       await this.persist();
     }
   }
@@ -1651,7 +1702,7 @@ export class SessionManager {
   }
 
   onPersonasChanged() {
-    for (const s of this.sessions.values()) s.refreshPolicy();
+    for (const s of this.sessions.values()) void s.onPersonaChanged();
   }
 
   async shutdown() {
