@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
@@ -10,6 +11,12 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // Swan's home was ~/.persona-harness; the default one moves to ~/.swan on first start (home.ts).
 export const HOME_FROM_ENV = !!process.env.PH_HOME;
 export const PH_HOME = path.resolve(expandHome(process.env.PH_HOME ?? "~/.swan"));
+
+// Under Vitest only a temporary folder will do: a test that reached the user's real data (run from a
+// package folder, where the root setup that sets PH_HOME does not apply) once overwrote it.
+if (process.env.VITEST && !PH_HOME.startsWith(path.resolve(os.tmpdir()))) {
+  throw new Error(`tests must not use ${PH_HOME}: run them with the repository's Vitest setup (pnpm test, or vitest from a package with its config), which gives each test a temporary PH_HOME`);
+}
 export const LEGACY_HOME = path.resolve(expandHome("~/.persona-harness"));
 
 // The desktop app ships the Containerfile and examples outside the repository layout.

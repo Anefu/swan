@@ -73,6 +73,7 @@ When you touch the proxy, secrets, sandbox or API, add or update a test that pro
 
 - Vitest. Tests sit next to the code as `*.test.ts` (`apps/server/src`, `apps/desktop/main`, `packages/*/src`, `tools/*/src`). `pnpm --filter @ph/desktop smoke-server` starts the bundled server the way the app does (after `pnpm build`).
 - Tests must not need the internet, Podman, a real `PH_HOME` or API keys. Use temporary directories, ephemeral ports and the stubs in this repository.
+- Run tests with `pnpm test`, or `vitest` from a package folder (each has a config with the shared setup); either gives every test a temporary `PH_HOME`. Under Vitest, `settings.ts` refuses any other `PH_HOME`: a single test file once ran against the real `~/.swan` and overwrote its config and secrets.
 - AWS and Kubernetes behaviour is tested against `tools/aws-stub` (with the official AWS SDK as the client, so signatures are checked against a real implementation). `apps/server/src/proxy/credentials.test.ts` drives the real proxy end to end against the stub; its `resolve` hook is the only way to point the proxy at a local address, and it exists for tests only.
 - Run `pnpm typecheck && pnpm test` before committing. CI runs the same plus the build and the server smoke test, and packages the app on macOS when `apps/desktop/` changes.
 
