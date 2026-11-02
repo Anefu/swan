@@ -49,6 +49,9 @@ network:
   # On the company network: also allowed, and may resolve to private addresses (10.x, 172.16-31.x,
   # 192.168.x). Only you add these, here or in Settings; an "Allow" card never does.
   internal: [jira.example.com]
+  # Hosts bound to this persona's credentials refuse requests carrying any other credential (a
+  # token the agent found or was given). List a host here only if it needs one; never from a card.
+  otherCredentials: []
 
 subagents:
   agents:

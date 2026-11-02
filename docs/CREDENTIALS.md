@@ -54,6 +54,14 @@ Rule forms: `kubernetes` `<verb> <resource>[/<sub>] [in <namespace>]`; `aws` `se
 request no rule matches goes out with the placeholder (so it fails upstream) and the conversation
 shows a "Blocked …" notice with **Add rule…**. An ask rule pauses the request on an approval card.
 
+Only this persona's credentials reach a credential's hosts. A request there that carries any other
+credential (a token or AWS key the agent found or was given, in `Authorization`, an AWS signature or
+presigned URL, a header like `X-Api-Key`, or a query token) is refused, and the conversation says
+so once per host: an agent given someone else's token could otherwise send your data to their
+account. Requests without credentials still go through. If a host needs another credential, such
+as a registry token kept in a repository, list it under Settings → Allowed hosts → Other credentials
+allowed (`network.otherCredentials`).
+
 ## Sign-in tools (command connections)
 
 A command connection runs a small wrapper around your own sign-in tool (an SSO helper, a cloud CLI,

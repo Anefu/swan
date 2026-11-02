@@ -192,6 +192,7 @@ export class Session {
   private approvals = new Map<string, { resolve: (d: ApprovalBody) => void; info: PendingApproval }>();
   private netPending = new Map<string, Promise<boolean>>(); // host -> decision in flight
   private netDenied = new Set<string>(); // until stopped
+  private foreignNoticed = new Set<string>(); // hosts already named in a notice this run
   private persistSoon = debounce(() => void this.persist(), 400);
   readonly creds: SessionCredentials;
 
@@ -462,6 +463,16 @@ export class Session {
     return this.creds.requestUse(ref, v);
   }
 
+  /** The proxy refused a request that carried a credential not from Swan: say so once per host per run. */
+  foreignCredentialBlocked(host: string, field: string) {
+    if (this.foreignNoticed.has(host)) return;
+    this.foreignNoticed.add(host);
+    this.notice(
+      "warn",
+      `Blocked a request to ${host} that used a credential not from Swan (${field}). Swan sends only this persona's credentials there. If you didn't expect the agent to use other credentials, check what it read recently.`,
+    );
+  }
+
   credentialBlocked(ref: string, v: Verdict) {
     this.creds.blockedRequest(ref, v);
   }
@@ -536,6 +547,7 @@ export class Session {
       // Hosts allowed "until stopped" ride along with the persona's own allowlist.
       allowHosts: [...(cfg?.network.allow ?? []), ...this.summary.allowances.filter((a) => a.startsWith("net:")).map((a) => a.slice(4))],
       internalHosts: cfg?.network.internal ?? [], // only from Settings, never from an "Allow" card
+      otherCredentials: cfg?.network.otherCredentials ?? [], // the same
       ...this.creds.proxyFields(),
     };
   }
@@ -951,6 +963,7 @@ export class Session {
     this.queue = [];
     // Temporary allowances expire on Stop and Interrupt.
     this.summary = { ...this.summary, allowances: [], queued: 0 };
+    this.foreignNoticed.clear();
     this.touch();
   }
 
@@ -1636,6 +1649,7 @@ export class SessionManager {
     deps.proxy.asker = async (ps, host, port) => this.sessions.get(ps.sessionId)?.requestNetwork(host, port) ?? false;
     deps.proxy.credentialAsker = async (ps, ref, v) => this.sessions.get(ps.sessionId)?.requestCredentialUse(ref, v) ?? false;
     deps.proxy.onDenied = (ps, ref, v) => this.sessions.get(ps.sessionId)?.credentialBlocked(ref, v);
+    deps.proxy.onForeignCredential = (ps, host, field) => this.sessions.get(ps.sessionId)?.foreignCredentialBlocked(host, field);
     deps.connections.on("changed", (refs) => {
       for (const s of this.sessions.values()) void s.onCredentialsChanged(refs);
     });

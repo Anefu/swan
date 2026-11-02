@@ -58,6 +58,7 @@ export const PersonaSchema = z.strictObject({
       allow: z.array(z.string()).default([]),
       // On the company network: also allowed, and may resolve to private addresses (10/8, 172.16/12, 192.168/16, fc00::/7).
       internal: z.array(z.string()).default([]),
+      otherCredentials: z.array(z.string()).default([]), // credential hosts that may get credentials not from Swan
     })
     .prefault({}),
   subagents: z
@@ -261,7 +262,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       if (isHttpMcp(srv)) for (const [k, v] of Object.entries(srv.headers)) checkRefs(`mcpServers.${name}.headers.${k}`, v);
       else for (const [k, v] of Object.entries(srv.env)) checkRefs(`mcpServers.${name}.env.${k}`, v);
     }
-    for (const list of ["allow", "internal"] as const)
+    for (const list of ["allow", "internal", "otherCredentials"] as const)
       for (const h of cfg.network[list]) {
         const m = /^([^:]+)(?::(\d{1,5}))?$/.exec(h);
         if (!m || h.includes("/") || h === "*" || (m[2] && (Number(m[2]) < 1 || Number(m[2]) > 65535)))
@@ -329,6 +330,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       folders: c.folders.map((f) => ({ path: f.path, ...(f.mount ? { mount: f.mount } : {}), mode: f.mode })),
       networkAllow: c.network.allow,
       networkInternal: c.network.internal,
+      networkOtherCredentials: c.network.otherCredentials,
       connections: c.connections,
       permissions: c.permissions,
       skills: c.skills,
@@ -351,6 +353,8 @@ export class PersonaStore extends TypedEmitter<Events> {
     doc.setIn(["network", "allow"], doc.createNode(v.networkAllow));
     const internal = v.networkInternal ?? [];
     if (internal.length || doc.hasIn(["network", "internal"])) doc.setIn(["network", "internal"], doc.createNode(internal));
+    const other = v.networkOtherCredentials ?? [];
+    if (other.length || doc.hasIn(["network", "otherCredentials"])) doc.setIn(["network", "otherCredentials"], doc.createNode(other));
     doc.delete("credentials");
     if (Object.keys(v.connections).length || doc.has("connections")) doc.set("connections", doc.createNode(v.connections));
     doc.set("permissions", doc.createNode(v.permissions));
@@ -364,7 +368,7 @@ export class PersonaStore extends TypedEmitter<Events> {
     const appliedNow: string[] = [];
     const nextStart: string[] = [];
     if (!before || !eq(before.permissions, v.permissions)) appliedNow.push("permissions");
-    if (!before || !eq(before.network.allow, v.networkAllow) || !eq(before.network.internal, internal)) appliedNow.push("network allowlist");
+    if (!before || !eq(before.network.allow, v.networkAllow) || !eq(before.network.internal, internal) || !eq(before.network.otherCredentials, other)) appliedNow.push("network allowlist");
     if (!before || !eq(before.connections, v.connections)) appliedNow.push("credential rules (a newly named credential restarts the sandbox between turns)");
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
@@ -470,6 +474,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       missingCredentials: credentials.filter((c) => !this.connections.usable(c)),
       networkAllow: cfg?.network.allow ?? [],
       networkInternal: cfg?.network.internal ?? [],
+      networkOtherCredentials: cfg?.network.otherCredentials ?? [],
       errors: p.errors,
     };
   }

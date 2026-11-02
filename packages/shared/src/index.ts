@@ -33,6 +33,7 @@ export interface PersonaSummary {
   missingCredentials: string[]; // refs with no usable value right now (missing, expired, needs sign-in)
   networkAllow: string[]; // host patterns reachable from the sandbox
   networkInternal: string[]; // also reachable, and may resolve to private (company) addresses
+  networkOtherCredentials: string[]; // credential hosts that may also get credentials not from Swan
   errors: string[]; // validation problems; a persona with errors cannot start sessions
 }
 
@@ -481,6 +482,7 @@ export interface PersonaConfigView {
   folders: { path: string; mount?: string; mode: FolderMode }[];
   networkAllow: string[]; // hostnames, *.domain, or host:port (always tunnelled)
   networkInternal: string[]; // the same forms, on the company network (private addresses allowed)
+  networkOtherCredentials: string[]; // credential hosts where requests may carry credentials not from Swan
   connections: Record<string, PersonaConnection>;
   permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
   skills: string[];

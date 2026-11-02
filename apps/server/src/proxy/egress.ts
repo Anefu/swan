@@ -28,6 +28,7 @@ export interface ProxySession {
   placeholders: Map<string, { ref: string; field?: string }>; // placeholder -> credential (aws: and field)
   rules: Map<string, Rule[]>; // connection -> the persona's rules for it
   sessionAllowed: Set<string>; // `${ref} ${ruleKey}`: ask rules allowed until stopped
+  otherCredentials?: string[]; // credential hosts that may also receive credentials not from Swan
 }
 
 const ALLOWED_PORTS = new Set([80, 443]);
@@ -209,6 +210,42 @@ function splitHostPort(s: string, defPort: number): { host: string; port: number
 
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
+// Where requests carry credentials, besides Authorization and AWS signatures. On a host bound to the
+// session's credentials, a value here that holds none of the session's placeholders is someone
+// else's credential: an agent told to use an attacker's token could send data to their account.
+const CREDENTIAL_HEADERS = ["x-api-key", "private-token", "x-auth-token", "x-amz-security-token"];
+const CREDENTIAL_QUERY = new Set(["access_token", "token", "api_key", "x-amz-security-token"]);
+
+/** The field of a request that carries a credential not from this session, or null. Never its value. */
+export function foreignCredential(
+  req: { url?: string; headers: http.IncomingHttpHeaders },
+  host: string,
+  placeholders: string[],
+  awsKeyIds: Set<string>,
+  injectHeaders: string[],
+): string | null {
+  const ours = (v: string) => placeholders.some((p) => v.includes(p));
+  const rawPath = req.url ?? "/";
+  const aws = describeAuth({ url: `https://${host}${rawPath}`, headers: req.headers });
+  if (aws) {
+    if (!awsKeyIds.has(aws.accessKeyId)) return aws.presigned ? "X-Amz-Credential" : "Authorization";
+  } else {
+    const auth = first(req.headers.authorization)?.trim();
+    if (auth) {
+      const basic = /^basic\s+/i.exec(auth);
+      const decoded = basic ? Buffer.from(auth.slice(basic[0].length), "base64").toString("utf8") : "";
+      if (!ours(auth) && !ours(decoded)) return "Authorization";
+    }
+  }
+  for (const h of new Set([...CREDENTIAL_HEADERS, ...injectHeaders.map((x) => x.toLowerCase())])) {
+    const v = h === "authorization" ? undefined : first(req.headers[h])?.trim();
+    if (v && !ours(v)) return h;
+  }
+  for (const [k, v] of new URL(rawPath, `https://${host}`).searchParams)
+    if (CREDENTIAL_QUERY.has(k.toLowerCase()) && v && !ours(v)) return `${k} in the query`;
+  return null;
+}
+
 /** Streams a body through, rewriting real secret values back to placeholders. */
 class Redactor extends Transform {
   private pending: Buffer = Buffer.alloc(0);
@@ -291,6 +328,8 @@ export class EgressProxy extends TypedEmitter<Events> {
   credentialAsker: ((s: ProxySession, ref: string, v: Verdict) => Promise<boolean>) | null = null;
   /** A request went out without its credential because of a rule (or no rule). */
   onDenied: ((s: ProxySession, ref: string, v: Verdict) => void) | null = null;
+  /** A request to a credential host carried a credential not from Swan, and was refused. */
+  onForeignCredential: ((s: ProxySession, host: string, field: string) => void) | null = null;
 
   constructor(
     private connections: ConnectionManager,
@@ -517,6 +556,20 @@ export class EgressProxy extends TypedEmitter<Events> {
     const usableRefs = new Set(creds.map((c) => c.ref));
     const plan: CredentialPlan = { permitted: new Set(), denied: [], aws: null, refuse: null, stale: [] };
     const rawPath = req.url ?? "/";
+
+    if (!s.otherCredentials?.some((p) => hostMatches(ctx.host, p))) {
+      const awsKeyIds = new Set([...s.placeholders].filter(([, v]) => v.field === "accessKeyId").map(([ph]) => ph));
+      const injected = creds.flatMap((c) => (c.inject ? [c.inject.header] : []));
+      const field = foreignCredential(req, ctx.host, [...s.placeholders.keys()], awsKeyIds, injected);
+      if (field) {
+        plan.refuse = {
+          status: 403,
+          message: `Swan did not forward this request: it carries a credential that is not from Swan (${field}). Use the persona's credentials; to allow others for this host, list it under network.otherCredentials.`,
+        };
+        this.onForeignCredential?.(s, ctx.host, field);
+        return plan;
+      }
+    }
     const texts = [rawPath, ...Object.entries(req.headers).flatMap(([k, v]) => (k === "proxy-authorization" || v === undefined ? [] : Array.isArray(v) ? v : [v]))];
     const auth = first(req.headers.authorization);
     if (auth && /^basic /i.test(auth)) texts.push(Buffer.from(auth.slice(6).trim(), "base64").toString("utf8"));

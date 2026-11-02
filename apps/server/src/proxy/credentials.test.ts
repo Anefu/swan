@@ -212,6 +212,62 @@ describe("proxy with a command connection", () => {
   });
 });
 
+describe("credentials not from Swan", () => {
+  // An agent told to use an attacker's token could send data to the attacker's account on a host
+  // the persona can reach. On credential hosts, only this session's placeholders authenticate.
+  const FOREIGN = "FOREIGN-token-0123456789abcdef";
+  const foreignKeys = { accessKeyId: "AKIAFOREIGNEXAMPLE00", secretAccessKey: "foreign-secret-key-000000000000000000000" };
+  const refusedFor = async (r: { status: number; body: string }, field: string) => {
+    expect(r.status).toBe(403);
+    expect(r.body).toContain(`it carries a credential that is not from Swan (${field})`);
+  };
+
+  it("refuses AWS requests signed or presigned with someone else's keys", async () => {
+    const target = `${AWS_URL}/?Action=GetCallerIdentity&Version=2011-06-15`;
+    const signed = sign({ method: "GET", url: target, headers: { host: "api.aws.test" } }, foreignKeys, { service: "sts", region: "us-east-1" });
+    await refusedFor(await request(target, { headers: signed }), "Authorization");
+    const url = presign("PUT", `${AWS_URL}/attacker-bucket/loot.txt`, foreignKeys, { service: "s3", region: "us-east-1", expiresIn: 60 });
+    await refusedFor(await request(url, { method: "PUT", body: "data" }), "X-Amz-Credential");
+  });
+
+  it("refuses tokens, Basic auth, credential headers and query tokens that are not placeholders", async () => {
+    const pods = `${CLUSTER_URL}/api/v1/namespaces/payments/pods`;
+    await refusedFor(await request(pods, { headers: { authorization: `Bearer ${FOREIGN}` } }), "Authorization");
+    await refusedFor(await request(pods, { headers: { authorization: `Basic ${Buffer.from(`me:${FOREIGN}`).toString("base64")}` } }), "Authorization");
+    await refusedFor(await request(pods, { headers: { "x-api-key": FOREIGN } }), "x-api-key");
+    await refusedFor(await request(`${pods}?access_token=${FOREIGN}`), "access_token in the query");
+  });
+
+  it("forwards anonymous requests and this session's placeholders, and never records the value", async () => {
+    const pods = `${CLUSTER_URL}/api/v1/namespaces/payments/pods`;
+    const anonymous = await request(pods);
+    expect(anonymous.body).not.toContain("not from Swan");
+    const mine = await request(pods, { headers: { authorization: `Bearer ${ph("stub/eks")}` } });
+    expect(mine.status).toBe(200);
+    expect(JSON.stringify(proxy.events())).not.toContain(FOREIGN);
+    expect(proxy.events("s1").find((e) => e.reason?.includes("not from Swan"))).toMatchObject({ decision: "blocked", status: 403 });
+  });
+
+  it("tells the session once per refusal, and lets hosts listed in otherCredentials through", async () => {
+    const told: string[] = [];
+    proxy.onForeignCredential = (_s, host, field) => told.push(`${host} ${field}`);
+    try {
+      await request(`${CLUSTER_URL}/version`, { headers: { authorization: `Bearer ${FOREIGN}` } });
+      expect(told).toEqual(["swan-dev.k8s.aws.test Authorization"]);
+      session.otherCredentials = ["*.k8s.aws.test"];
+      const allowed = await request(`${CLUSTER_URL}/version`, { headers: { authorization: `Bearer ${FOREIGN}` } });
+      expect(allowed.body).not.toContain("not from Swan");
+      expect(told).toHaveLength(1);
+      // Only the listed host: AWS still refuses.
+      const signed = sign({ method: "GET", url: `${AWS_URL}/`, headers: { host: "api.aws.test" } }, foreignKeys, { service: "sts", region: "us-east-1" });
+      await refusedFor(await request(`${AWS_URL}/`, { headers: signed }), "Authorization");
+    } finally {
+      session.otherCredentials = undefined;
+      proxy.onForeignCredential = null;
+    }
+  });
+});
+
 describe("proxy chained through a company proxy", () => {
   let company: CompanyProxy;
   let chained: EgressProxy;

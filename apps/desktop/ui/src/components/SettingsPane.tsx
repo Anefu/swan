@@ -78,7 +78,7 @@ function HostRows({
   errors,
   update,
 }: {
-  list: "networkAllow" | "networkInternal";
+  list: "networkAllow" | "networkInternal" | "networkOtherCredentials";
   errorKey: string;
   label: string;
   placeholder: string;
@@ -125,6 +125,7 @@ function blankConfig(): PersonaConfigView {
     folders: [],
     networkAllow: [],
     networkInternal: [],
+    networkOtherCredentials: [],
     connections: {},
     permissions: { default: "ask", allow: ["read_file", "list_dir", "glob", "grep", "load_skill"], ask: ["bash", "write_file", "edit_file"], deny: [] },
     skills: [],
@@ -140,7 +141,7 @@ function subagentDefaults(): SubagentsConfig {
 
 /** A server from before sub-agents sends no `subagents`; edit the defaults instead. */
 function withDefaults(v: PersonaConfigView): PersonaConfigView {
-  return { ...v, subagents: v.subagents ?? subagentDefaults(), networkInternal: v.networkInternal ?? [] };
+  return { ...v, subagents: v.subagents ?? subagentDefaults(), networkInternal: v.networkInternal ?? [], networkOtherCredentials: v.networkOtherCredentials ?? [] };
 }
 
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -153,6 +154,7 @@ function cleaned(v: PersonaConfigView): PersonaConfigView {
   x.name = x.name.trim();
   x.networkAllow = x.networkAllow.map((h) => h.trim()).filter(Boolean);
   x.networkInternal = x.networkInternal.map((h) => h.trim()).filter(Boolean);
+  x.networkOtherCredentials = (x.networkOtherCredentials ?? []).map((h) => h.trim()).filter(Boolean);
   for (const k of ["allow", "ask", "deny"] as const) x.permissions[k] = x.permissions[k].map((r) => r.trim()).filter(Boolean);
   x.folders = x.folders.map((f) => ({ ...f, path: f.path.trim(), ...(f.mount ? { mount: f.mount.trim() } : {}) }));
   x.subagents.agents = x.subagents.agents.map((a) => ({ name: a.name.trim(), model: a.model.trim() }));
@@ -187,8 +189,8 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
     if (!f.path.trim()) e[`folder${i}`] = "Enter a folder path on this Mac.";
     else if (f.mount && !/^\/workspace\/[^/]+$/.test(f.mount)) e[`folder${i}`] = "Mount must look like /workspace/<name>.";
   });
-  for (const [list, key] of [["networkAllow", "host"], ["networkInternal", "internal"]] as const)
-    d[list].forEach((h, i) => {
+  for (const [list, key] of [["networkAllow", "host"], ["networkInternal", "internal"], ["networkOtherCredentials", "other"]] as const)
+    (d[list] ?? []).forEach((h, i) => {
       if (!h.trim()) e[`${key}${i}`] = "Enter a host or remove the row.";
       else if (!HOST_RE.test(h.trim())) e[`${key}${i}`] = "Use a hostname, *.domain or host:port.";
     });
@@ -513,7 +515,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
           skills: d.skills,
           mcpServers: d.mcpServers,
           connections: d.connections,
-          network: { allow: d.networkAllow.map((h) => h.trim()), ...(d.networkInternal.length ? { internal: d.networkInternal.map((h) => h.trim()) } : {}) },
+          network: { allow: d.networkAllow.map((h) => h.trim()), ...(d.networkInternal.length ? { internal: d.networkInternal.map((h) => h.trim()) } : {}), ...(d.networkOtherCredentials?.length ? { otherCredentials: d.networkOtherCredentials.map((h) => h.trim()) } : {}) },
           permissions: d.permissions,
         });
         const created = await actions.createPersona(newId, yaml);
@@ -653,13 +655,14 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               ? [
                   d.networkAllow.length && listSummary(d.networkAllow, "host"),
                   d.networkInternal.length && `${d.networkInternal.length} internal`,
+                  d.networkOtherCredentials?.length && `${d.networkOtherCredentials.length} other credentials`,
                   netAllowances.length && `${netAllowances.length} until stopped`,
                 ]
                   .filter(Boolean)
                   .join(" · ")
               : "None"
           }
-          invalid={d.networkAllow.some((_, i) => errors[`host${i}`]) || d.networkInternal.some((_, i) => errors[`internal${i}`])}
+          invalid={d.networkAllow.some((_, i) => errors[`host${i}`]) || d.networkInternal.some((_, i) => errors[`internal${i}`]) || (d.networkOtherCredentials ?? []).some((_, i) => errors[`other${i}`])}
         >
           <p className="hint">
             Hostnames or <span className="mono">*.domain</span>. <span className="mono">host:port</span> is always tunnelled and never
@@ -679,6 +682,22 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               label="Internal host"
               placeholder="jira.corp.example.com"
               hosts={d.networkInternal}
+              errors={errors}
+              update={update}
+            />
+          </div>
+          <div className="approved-hosts">
+            <h4>Other credentials allowed</h4>
+            <p className="hint">
+              On hosts that get this persona's credentials, Swan refuses requests carrying any other credential, such as a token
+              the agent found or was given. List a host here only if it needs one, like a registry token kept in a repository.
+            </p>
+            <HostRows
+              list="networkOtherCredentials"
+              errorKey="other"
+              label="Host"
+              placeholder="registry.corp.example.com"
+              hosts={d.networkOtherCredentials ?? []}
               errors={errors}
               update={update}
             />

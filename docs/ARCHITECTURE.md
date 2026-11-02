@@ -79,7 +79,14 @@ What runs where:
      rule forwards the placeholder unchanged and adds `X-Swan-Denied` to the response. Upstream TLS
      is verified (against the credential's `ca` when it has one), and real values in the response
      are rewritten back to placeholders;
-   - otherwise → plain CONNECT tunnel (no interception).
+     Before the rules, a request that carries a credential not from this session (an `Authorization`
+     value, AWS signature or presigned key, `X-Api-Key`-style header, an `inject` header or a query
+     token without one of the session's placeholders) is **refused** (403): an agent given someone
+     else's token could otherwise write to their account on a host the persona can reach. The event
+     and a once-per-host notice name the field, never the value; `network.otherCredentials` lists
+     hosts exempt from this. Anonymous requests pass;
+   - otherwise → plain CONNECT tunnel (no interception). Swan cannot see inside these, so keep
+     hosts that are only on the allowlist exact.
 4. A placeholder sent to any host not bound to that credential stays a useless placeholder.
 5. Rotation = edit the file, or the wrapper's renewal. The proxy reads values per request; renewal
    runs `renew` before the earliest expiry (and after a 401/403 from a bound host, at most once a

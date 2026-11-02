@@ -21,6 +21,11 @@ describe("persona network settings", () => {
     ]);
   });
 
+  it("checks otherCredentials like the other host lists", () => {
+    expect(networkErrors(`name: P\nnetwork:\n  otherCredentials: [registry.corp.example.com]\n`)).toEqual([]);
+    expect(networkErrors(`name: P\nnetwork:\n  otherCredentials: ["*"]\n`)).toEqual(['network.otherCredentials entry "*" must be a hostname, *.domain or host:port']);
+  });
+
   it("saves internal hosts from Settings, and leaves the key out while there are none", async () => {
     await store.save("net-test", "name: Net test\nnetwork:\n  allow: [example.com]\n", { create: true });
     const view = store.configView("net-test");
