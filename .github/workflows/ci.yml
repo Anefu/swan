@@ -104,7 +104,7 @@ jobs:
           SWAN_SMOKE_TEST=1 PH_HOME="$RUNNER_TEMP/swan-home" SWAN_SMOKE_SCREENSHOT="$RUNNER_TEMP/swan.png" \
             apps/desktop/release/mac-arm64/Swan.app/Contents/MacOS/Swan
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-smoke
           path: |
