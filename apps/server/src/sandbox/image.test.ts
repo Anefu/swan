@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsSchema } from "../settings.js";
-import { buildArgs, buildFiles, buildKey, setupScript, toolsScript } from "./image.js";
+import { ADOPT_SCRIPT, adoptFiles, adoptKey, buildArgs, buildFiles, buildKey, setupScript, toolsScript } from "./image.js";
 
 const mirrors = (m: object = {}) => SettingsSchema.parse({ mirrors: m }).mirrors;
 const tools = (t: object = {}) => SettingsSchema.parse({ sandboxTools: t }).sandboxTools;
@@ -115,8 +115,9 @@ describe("sandbox tools", () => {
     const script = toolsScript(tools({ packages: ["postgresql-client", "jq=1.6-2.1"], install: KUBECTL }));
     const lines = script.split("\n");
     expect(lines.slice(2, 4)).toEqual(["set -eu", "cd /tmp"]);
-    expect(lines).toContain("apt-get install -y --no-install-recommends postgresql-client jq=1.6-2.1");
-    expect(lines.indexOf("rm -rf /var/lib/apt/lists/*")).toBeLessThan(lines.findIndex((l) => l.startsWith("curl")));
+    expect(lines).toContain("  apt-get install -y --no-install-recommends postgresql-client jq=1.6-2.1");
+    expect(lines).toContain("elif command -v apk >/dev/null 2>&1; then apk add --no-cache postgresql-client jq=1.6-2.1");
+    expect(lines.indexOf("  rm -rf /var/lib/apt/lists/*")).toBeLessThan(lines.findIndex((l) => l.startsWith("curl")));
     expect(script.endsWith("chmod +x /usr/local/bin/kubectl\n")).toBe(true);
     execFileSync("sh", ["-n"], { input: script }); // valid shell
   });
@@ -147,5 +148,24 @@ describe("mirror settings", () => {
       expect(() => mirrors({ pypi: bad })).toThrow();
     expect(() => mirrors({ baseImage: "node:22; rm -rf /" })).toThrow();
     expect(() => mirrors({ apt: { "http://deb.debian.org/debian": "https://x.example.com/`id`" } })).toThrow();
+  });
+});
+
+describe("a persona's own image", () => {
+  it("is valid shell that checks for what the sandbox needs and adds Swan's certificates", () => {
+    execFileSync("sh", ["-n"], { input: ADOPT_SCRIPT });
+    expect(ADOPT_SCRIPT).toContain("for c in bash sleep cat awk mkdir chown");
+    expect(ADOPT_SCRIPT).toContain("cat /tmp/swan/harness-ca.crt /tmp/swan/extra-ca.pem >> \"$bundle\"");
+    const files = adoptFiles([CERT], tools({ packages: ["jq"] }));
+    expect(Object.keys(files).sort()).toEqual(["swan-tools.sh", "swan/adopt.sh", "swan/extra-ca.pem"]);
+    expect(files["swan/extra-ca.pem"]).toContain("MIIBfake");
+  });
+
+  it("builds again when the image, Swan's layer or the tools change", () => {
+    const key = (base: string, t = NONE, cf = "FROM x") => adoptKey(cf, base, adoptFiles([], t));
+    expect(key("reg.example.com/dev:1")).toBe(key("reg.example.com/dev:1"));
+    expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:2"));
+    expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:1", tools({ packages: ["jq"] })));
+    expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:1", NONE, "FROM y"));
   });
 });

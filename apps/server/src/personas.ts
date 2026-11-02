@@ -87,7 +87,8 @@ export const PersonaSchema = z.strictObject({
     .prefault({}),
   sandbox: z
     .strictObject({
-      image: z.string().optional(),
+      // An image of your own; Swan adds its layer (certificates, uid 1000 user) before running it.
+      image: z.string().regex(/^[a-z0-9][a-z0-9._\-/:@]*$/i, "expected an image reference such as registry.example.com/team/dev-tools:2026.10").optional(),
       cpus: z.number().positive().default(2),
       memory: z.string().default("2g"),
       pidsLimit: z.number().int().positive().default(512),

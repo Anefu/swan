@@ -93,7 +93,8 @@ to use one of the persona's skills.
   at a URL are called from your Mac with the real credentials.
 - **Tools in the sandbox**: git, curl, Python, Node and more are there; add others such as kubectl
   or the AWS CLI under `sandboxTools` in `config.yaml`
-  ([how](docs/DESKTOP.md#tools-in-the-sandbox)).
+  ([how](docs/DESKTOP.md#tools-in-the-sandbox)), or give a persona an image of your own
+  ([how](docs/DESKTOP.md#a-personas-own-image)).
 - **Settings that need a fresh sandbox** (folders, skills, MCP servers, environment variables)
   restart it by themselves between turns; the conversation carries on.
 - **Sub-agents**: the agent can hand parts of a task to focused helpers that work in parallel or in

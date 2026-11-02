@@ -96,6 +96,25 @@ sandboxTools:
 - Everything in it ends up in the image: no tokens or passwords. Agents use these tools like any
   other program, through the egress proxy with the persona's credentials and rules.
 
+### A persona's own image
+
+A persona can run in an image of your own instead, such as your team's dev-tools image:
+
+```yaml
+# ~/.swan/personas/platform.yaml
+sandbox:
+  image: registry.corp.example.com/platform/dev-tools:2026.10   # pin a tag or a digest
+```
+
+Swan pulls it (through `proxy`) and builds a thin layer on top, once per image and again when it
+changes: Swan's certificate and `caFiles` (in the system store and a bundle that `SSL_CERT_FILE`,
+`AWS_CA_BUNDLE` and similar point to), root certificates if the image has none, a uid 1000 user
+with a home (the image's own if it has one), `/workspace`, and then `sandboxTools` with the image's
+package manager (apt, apk or dnf). Nothing else changes. The image needs `bash` and the usual
+coreutils; Swan says what is missing if not. Build for `arm64` (Apple silicon), or the sandbox runs
+emulated. The sandbox's limits are the same as with Swan's image: they come from how Swan runs the
+container, not from the image. The relay always runs Swan's own image.
+
 ## Build and run from a checkout
 
 ```bash

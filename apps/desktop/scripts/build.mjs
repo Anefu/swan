@@ -41,7 +41,7 @@ copyPackage("@github/copilot-sdk", path.join(repo, "apps", "server"), path.join(
 
 await build({ root: path.join(desktop, "ui"), logLevel: "warn", build: { outDir: path.join(out, "ui"), emptyOutDir: true } });
 fs.mkdirSync(path.join(out, "sandbox"));
-fs.copyFileSync(path.join(repo, "sandbox", "Containerfile"), path.join(out, "sandbox", "Containerfile"));
+for (const f of ["Containerfile", "Containerfile.base"]) fs.copyFileSync(path.join(repo, "sandbox", f), path.join(out, "sandbox", f));
 fs.cpSync(path.join(repo, "examples"), path.join(out, "examples"), { recursive: true });
 for (const f of ["LICENSE", "NOTICE"]) fs.copyFileSync(path.join(repo, f), path.join(out, f)); // Apache 2.0: ship both
 

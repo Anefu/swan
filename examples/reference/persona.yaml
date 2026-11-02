@@ -79,3 +79,4 @@ sandbox:
   memory: 4g
   pidsLimit: 512
   workdir: /workspace/payments   # where bash starts
+  # image: registry.example.com/team/dev-tools:2026.10   # an image of your own; Swan adds its layer (docs/DESKTOP.md)

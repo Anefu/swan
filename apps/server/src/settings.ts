@@ -34,6 +34,7 @@ export const paths = {
   extraCa: path.join(PH_HOME, "ca", "extra-roots.pem"), // caFiles combined, for programs Swan starts
   serverLock: path.join(PH_HOME, "server.json"), // the server running for this home
   containerfile: path.join(RESOURCES ?? REPO_ROOT, "sandbox/Containerfile"),
+  containerfileBase: path.join(RESOURCES ?? REPO_ROOT, "sandbox/Containerfile.base"), // over an image of your own
   examples: path.join(RESOURCES ?? REPO_ROOT, "examples"),
 };
 

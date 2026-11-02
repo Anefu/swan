@@ -5,7 +5,7 @@ import path from "node:path";
 import type { FolderMount, RuntimeStatus } from "@ph/shared";
 import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
-import { buildArgs, buildFiles, buildKey } from "./image.js";
+import { adoptFiles, adoptKey, buildArgs, buildFiles, buildKey } from "./image.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
 
 export interface RunResult {
@@ -47,6 +47,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   private rt: Settings["runtime"];
 
   private buildKey: string | null = null; // set by ensureImage when mirrors or extra CAs are configured
+  private adopting = new Map<string, Promise<string>>(); // persona images being built, by tag
 
   constructor(
     private settings: Settings,
@@ -218,14 +219,49 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     this.buildKey = buildKey(containerfile, mirrors, files, tools);
     if (!force && (await this.run(["image", "exists", this.imageTag])).code === 0) return;
     this.update({ busy: "building sandbox image (first run takes a few minutes)", imageReady: false });
-    const ctx = path.join(paths.build, "sandbox");
+    log.info("runtime", `building ${this.imageTag}${mirrors.baseImage ? ` from ${mirrors.baseImage}` : ""}`);
+    await this.build(this.imageTag, containerfile, files, buildArgs(mirrors, this.settings.proxy), "sandbox");
+    log.info("runtime", "sandbox image ready");
+  }
+
+  /**
+   * The image a session runs: Swan's, or a persona's own (sandbox.image) with Swan's layer on top
+   * (Containerfile.base), built on first use and again when the image reference, the layer or
+   * sandboxTools change. The relay always runs Swan's image.
+   */
+  async sessionImage(base?: string): Promise<string> {
+    if (!base) return this.imageTag;
+    const containerfile = await fs.readFile(paths.containerfileBase, "utf8");
+    const files = adoptFiles(this.extraCas, this.settings.sandboxTools);
+    const tag = `${this.rt.image}-own:ca-${this.ca.fingerprint}-${adoptKey(containerfile, base, files)}`;
+    let p = this.adopting.get(tag);
+    if (!p) {
+      p = (async () => {
+        if ((await this.run(["image", "exists", tag])).code === 0) return tag;
+        this.update({ busy: `building the sandbox from ${base}` });
+        try {
+          log.info("runtime", `building ${tag} from ${base}`);
+          await this.build(tag, containerfile, files, buildArgs({ ...this.settings.mirrors, baseImage: base }, this.settings.proxy), `own-${tag.slice(-12)}`);
+          log.info("runtime", `${tag} ready`);
+          return tag;
+        } finally {
+          this.update({ busy: null });
+        }
+      })().finally(() => this.adopting.delete(tag));
+      this.adopting.set(tag, p);
+    }
+    return p;
+  }
+
+  /** podman build in a fresh context under PH_HOME/build/<dir>; on failure, the cause first and where the full log is. */
+  private async build(tag: string, containerfile: string, files: Record<string, string>, args: string[], dir: string) {
+    const ctx = path.join(paths.build, dir);
     await fs.rm(ctx, { recursive: true, force: true });
     await fs.mkdir(path.join(ctx, "swan", "ca"), { recursive: true });
     await fs.writeFile(path.join(ctx, "Containerfile"), containerfile);
     await fs.writeFile(path.join(ctx, "harness-ca.crt"), this.ca.certPem);
     for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(ctx, name), content);
-    log.info("runtime", `building ${this.imageTag}${mirrors.baseImage ? ` from ${mirrors.baseImage}` : ""}`);
-    const r = await this.run(["build", ...buildArgs(mirrors, this.settings.proxy), "-t", this.imageTag, "-f", path.join(ctx, "Containerfile"), ctx], {
+    const r = await this.run(["build", ...args, "-t", tag, "-f", path.join(ctx, "Containerfile"), ctx], {
       timeoutMs: 20 * 60_000,
       onStdout: (s) => {
         const line = s.trim().split("\n").pop();
@@ -233,7 +269,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
       },
     });
     // The whole output stays in a file; the error carries the end of it.
-    const logFile = path.join(paths.build, "sandbox-build.log");
+    const logFile = path.join(paths.build, `${dir}-build.log`);
     await fs.writeFile(logFile, `${r.stdout}\n${r.stderr}`, { mode: 0o600 }).catch(() => {});
     if (r.code !== 0) {
       // The cause first: the failing command's own output (apt's "Failed to fetch…") is on stdout. Podman's
@@ -242,7 +278,6 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
       const summary = r.stderr.trim().replace(/STEP "(?:[^"\\]|\\.)*"/g, "a step").slice(-400);
       throw new Error(`image build failed:\n${tail}\n\n${summary}\nFull output: ${logFile.replace(os.homedir(), "~")}`);
     }
-    log.info("runtime", "sandbox image ready");
   }
 
   async rebuild(): Promise<void> {

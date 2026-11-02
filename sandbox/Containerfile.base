@@ -1,0 +1,30 @@
+# Swan's layer over a sandbox image of your own (config.yaml sandboxImage, or a persona's
+# sandbox.image). It adds only what the sandbox needs: Swan's certificate and caFiles, a uid 1000
+# user with a home, /workspace and /skills, and the certificate variables; then sandboxTools.
+# swan/adopt.sh checks for bash, coreutils and awk first and says what is missing.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+COPY harness-ca.crt /tmp/swan/harness-ca.crt
+COPY swan/ /tmp/swan/
+RUN sh /tmp/swan/adopt.sh && rm -rf /tmp/swan
+
+# The image's own roots, Swan's certificate and caFiles, for tools that read a bundle from these.
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/swan/ca-bundle.pem \
+    SSL_CERT_FILE=/usr/local/share/swan/ca-bundle.pem \
+    REQUESTS_CA_BUNDLE=/usr/local/share/swan/ca-bundle.pem \
+    CURL_CA_BUNDLE=/usr/local/share/swan/ca-bundle.pem \
+    PIP_CERT=/usr/local/share/swan/ca-bundle.pem \
+    GIT_SSL_CAINFO=/usr/local/share/swan/ca-bundle.pem \
+    AWS_CA_BUNDLE=/usr/local/share/swan/ca-bundle.pem \
+    UV_NATIVE_TLS=1 \
+    NODE_USE_ENV_PROXY=1
+
+# sandboxTools, with the image's own package manager.
+COPY swan-tools.sh /tmp/swan-tools.sh
+RUN sh /tmp/swan-tools.sh && rm -f /tmp/swan-tools.sh
+
+USER 1000
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

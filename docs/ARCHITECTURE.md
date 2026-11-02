@@ -217,7 +217,11 @@ points apt, pip, uv and npm at any mirrors, and the extra roots join the image's
 root step installs `sandboxTools` (Debian packages, then an install script), in a layer of its own
 so changing it rebuilds only from there; mirrors, certificates and tools are part of the image tag,
 so a change builds a new image. The build's network use is the user's own config, not an agent's:
-nothing in the sandbox can edit `config.yaml`. The egress proxy chains
+nothing in the sandbox can edit `config.yaml`. A persona's `sandbox.image` is used as a base for a
+thin layer (`sandbox/Containerfile.base`: Swan's certificate and `caFiles`, root certificates if
+missing, a uid 1000 user, `/workspace`, `sandboxTools`), built on first use under its own tag; the
+relay keeps Swan's image. The container's limits come from how it is run, so an image cannot
+loosen them. The egress proxy chains
 agents' traffic to the upstream proxy after its own checks (step 3 of the credential flow): blind
 tunnels and plain HTTP as well as the TLS connections it makes for credential hosts.
 

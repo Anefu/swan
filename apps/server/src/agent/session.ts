@@ -583,10 +583,13 @@ export class Session {
     });
 
     try {
+      if (cfg.sandbox.image) this.setStatus("starting", `preparing the sandbox from ${cfg.sandbox.image}`);
+      const image = await runtime.sessionImage(cfg.sandbox.image);
+      this.setStatus("starting", "starting sandbox container");
       this.container = await runtime.startSession({
         sessionId: this.id,
         personaId: persona.id,
-        image: cfg.sandbox.image,
+        image,
         folders: persona.folders,
         skills: skillMounts,
         env,
