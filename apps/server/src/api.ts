@@ -5,7 +5,7 @@ import path from "node:path";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, ServerEvent } from "@ph/shared";
+import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, PersonaImportChoices, ServerEvent } from "@ph/shared";
 import type { AttachmentStore } from "./attachments.js";
 import type { ConnectionManager } from "./connections/manager.js";
 import { dismissMigrationNote, readMigrationNote } from "./connections/migrate.js";
@@ -22,7 +22,8 @@ import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { builtinTools, skillTool } from "./agent/tools.js";
 import { PermissionPolicy } from "./agent/permissions.js";
-import { log } from "./util.js";
+import { errMsg, log } from "./util.js";
+import { exportPersona, importPersona, previewImport } from "./persona-share.js";
 
 export interface ApiDeps {
   settings: Settings;
@@ -157,6 +158,31 @@ export async function startApi(d: ApiDeps, hub: Hub) {
   app.put("/api/personas/:id/source", async (req: FastifyRequest<{ Params: { id: string }; Body: { yaml: string } }>) => {
     persona(req.params.id);
     return d.personas.summary(await d.personas.save(req.params.id, req.body?.yaml ?? ""));
+  });
+  // Sharing: a file with no secret values; importing is previewed, and saves only with the user's choices.
+  app.get("/api/personas/:id/export", async (req: FastifyRequest<{ Params: { id: string }; Querystring: { skills?: string } }>, reply) => {
+    persona(req.params.id);
+    const skills = (req.query.skills ?? "").split(",").filter(Boolean);
+    const text = await exportPersona(d, req.params.id, skills).catch((e) => {
+      throw new HttpError(400, errMsg(e));
+    });
+    return reply
+      .header("content-type", "application/octet-stream")
+      .header("content-disposition", `attachment; filename="${req.params.id}.swan-persona.yaml"`)
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "default-src 'none'; sandbox")
+      .send(text);
+  });
+  app.post("/api/personas/import/preview", async (req: FastifyRequest<{ Body: { text?: string } }>) =>
+    previewImport(d, req.body?.text ?? "").catch((e) => {
+      throw new HttpError(400, errMsg(e));
+    }),
+  );
+  app.post("/api/personas/import", async (req: FastifyRequest<{ Body: { text?: string; choices?: PersonaImportChoices } }>) => {
+    if (!req.body?.choices) throw new HttpError(400, "choices are required");
+    return importPersona(d, req.body.text ?? "", req.body.choices).catch((e) => {
+      throw new HttpError(400, errMsg(e));
+    });
   });
   // What belongs to the persona goes with it (its conversation stops first); its folders are the user's.
   app.delete("/api/personas/:id", async (req: P) => {

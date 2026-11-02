@@ -579,3 +579,46 @@ export type LauncherMessage =
   | { type: "ready"; url: string; port: number; proxyPort: number; home: string; version: string }
   | { type: "home-in-use"; home: string; url: string | null; pid: number | null }
   | { type: "fatal"; message: string };
+
+// ---------- sharing personas ----------
+
+// GET  /api/personas/:id/export?skills=a,b&token=…  -> the share file (YAML), as a download
+// POST /api/personas/import/preview {text}          -> PersonaImportPreview (saves nothing)
+// POST /api/personas/import {text, choices}         -> PersonaImportResult
+
+/** What importing a persona file would add, for the review screen. */
+export interface PersonaImportPreview {
+  id: string; // free id suggested from the file's
+  name: string;
+  description: string;
+  folders: { path: string; mount?: string; mode: FolderMode }[]; // the exporter's paths: map each to one here, or none
+  access: {
+    networkAllow: string[];
+    networkInternal: string[];
+    otherCredentials: string[];
+    permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
+    allowsAllCommands: boolean;
+    credentialRules: { connection: string; credential: string; api: string; allow: string[]; ask: string[]; deny: string[] }[];
+    mcpServers: { name: string; kind: "stdio" | "http"; target: string }[];
+    image: string | null;
+    envNames: string[];
+  };
+  connections: { name: string; type: "static" | "command"; status: "new" | "same" | "different"; hosts: string[]; command?: string[] }[];
+  skills: { name: string; files: number; exists: boolean }[];
+  skillsNotIncluded: string[]; // the persona uses them, the file does not carry them, and this Mac lacks them
+  needs: { values: string[]; commands: string[]; sandboxTools: boolean };
+}
+
+export interface PersonaImportChoices {
+  id: string;
+  name: string;
+  folders: (string | null)[]; // a path on this Mac for each of the preview's folders, or null to leave it out
+  commandConnections: string[]; // new sign-in tools the user agreed to run on this Mac
+  skills: string[]; // skills from the file to add
+}
+
+export interface PersonaImportResult {
+  persona: PersonaSummary;
+  connectionsAdded: string[];
+  skillsAdded: string[];
+}

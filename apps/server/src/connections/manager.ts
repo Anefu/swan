@@ -596,6 +596,29 @@ export class ConnectionManager extends TypedEmitter<Events> {
     await this.loadConfig();
   }
 
+  /** Import: add connections that do not exist yet, each checked like config.yaml itself; existing ones are never touched. */
+  async addConnections(entries: Record<string, unknown>): Promise<string[]> {
+    const added = Object.keys(entries).filter((name) => !this.config[name]);
+    if (!added.length) return [];
+    for (const name of added) {
+      const r = ConnectionsSchema.safeParse({ [name]: entries[name] });
+      if (!r.success) throw new Error(`connection "${name}" in the file is not valid: ${r.error.issues[0]?.message ?? "invalid"}`);
+    }
+    await this.editConfig((doc) => {
+      for (const name of added) {
+        doc.setIn(["connections", name], doc.createNode(entries[name]));
+      }
+    });
+    if (this.configError) throw new Error(this.configError);
+    return added;
+  }
+
+  /** Export: a connection as config.yaml writes it, so a teammate can add it; never values, which live in secrets. */
+  async rawConfigOf(name: string): Promise<unknown> {
+    const raw = ((YAML.parse(await fs.readFile(paths.config, "utf8")) ?? {}) as { connections?: Record<string, unknown> }).connections ?? {};
+    return raw[name];
+  }
+
   async upsertStatic(conn: string, name: string, u: CredentialUpsert): Promise<void> {
     if (!CONNECTION_NAME.test(conn)) throw new Error("connection names are lowercase letters, digits and dashes (up to 32)");
     if (!CREDENTIAL_NAME.test(name)) throw new Error("credential names are letters, digits, _ and - (up to 64)");
