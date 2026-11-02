@@ -66,6 +66,36 @@ one. This Mac, link-local and cloud metadata addresses, `100.64.0.0/10` (Tailsca
 Swan's and Podman's own networks stay unreachable even for listed hosts. Credentials work on
 internal hosts as on any other host.
 
+## Tools in the sandbox
+
+The sandbox has git, curl, jq, Python, Node, ripgrep and a few more. Add your own for every persona
+under `sandboxTools` in `~/.swan/config.yaml`, then restart Swan; it rebuilds the image (the first
+build after a change takes a few minutes, later steps come from the cache):
+
+```yaml
+sandboxTools:
+  packages: [postgresql-client]   # Debian packages
+  install: |                      # runs as root in /tmp while the image builds
+    # kubectl, checked against its published checksum (or pin a version: v=v1.31.2)
+    v=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+    arch=$(dpkg --print-architecture)
+    curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl"
+    curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl.sha256"
+    echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+    install -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl kubectl.sha256
+    # AWS CLI v2
+    curl -fsSLo awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
+    unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
+```
+
+- The script runs with `sh -eu`: the build stops at the first failing command and shows its output
+  under Swan settings → Sandbox (the full log is `~/.swan/build/sandbox-build.log`).
+- It downloads through `proxy`, with `mirrors` and `caFiles` applied, like the rest of the build.
+  Behind a company proxy, the download hosts (here `dl.k8s.io`, `awscli.amazonaws.com`) must be
+  reachable through it, or use your Artifactory's copies instead.
+- Everything in it ends up in the image: no tokens or passwords. Agents use these tools like any
+  other program, through the egress proxy with the persona's credentials and rules.
+
 ## Build and run from a checkout
 
 ```bash

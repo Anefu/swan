@@ -213,8 +213,9 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   async ensureImage(force = false): Promise<void> {
     const containerfile = await fs.readFile(paths.containerfile, "utf8");
     const mirrors = this.settings.mirrors;
-    const files = buildFiles(mirrors, this.extraCas);
-    this.buildKey = buildKey(containerfile, mirrors, files);
+    const tools = this.settings.sandboxTools;
+    const files = buildFiles(mirrors, this.extraCas, tools);
+    this.buildKey = buildKey(containerfile, mirrors, files, tools);
     if (!force && (await this.run(["image", "exists", this.imageTag])).code === 0) return;
     this.update({ busy: "building sandbox image (first run takes a few minutes)", imageReady: false });
     const ctx = path.join(paths.build, "sandbox");

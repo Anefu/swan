@@ -31,6 +31,15 @@ mirrors:
   # pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
   # npm: https://artifactory.example.com/artifactory/api/npm/npm-remote/
 
+# Extra tools in the sandbox image, for every persona (docs/DESKTOP.md#tools-in-the-sandbox).
+# Changing them rebuilds the image after a restart. No secrets here: they would end up in the image.
+sandboxTools:
+  packages: [postgresql-client]   # Debian packages
+  install: |                      # runs as root in /tmp while the image builds, with sh -eu
+    arch=$(dpkg --print-architecture)
+    curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.31.2/bin/linux/$arch/kubectl"
+    chmod +x /usr/local/bin/kubectl
+
 # Podman names. Change all four only to run a second Swan beside this one.
 runtime:
   network: ph-internal
@@ -57,4 +66,4 @@ connections:
   #   type: command
   #   command: [~/bin/corp-swan, --role, ReadOnly]
   #   hosts: ["*.amazonaws.com"]
-  #   renewBefore: 5m
+  #   renewBefore: 5m   # ask the wrapper to renew this long before the values expire (90s, 5m, 2h)

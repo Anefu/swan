@@ -50,6 +50,7 @@ jobs:
           cp sandbox/Containerfile /tmp/ctx/Containerfile
           # What Swan writes with no mirrors or extra CAs configured.
           printf '#!/bin/sh\nset -eu\n' > /tmp/ctx/swan/setup.sh
+          printf '#!/bin/sh\nset -eu\n' > /tmp/ctx/swan-tools.sh
           : > /tmp/ctx/swan/extra-ca.pem
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=ci" -keyout /tmp/ctx/ca.key -out /tmp/ctx/harness-ca.crt
           podman build -t ph-sandbox-ci /tmp/ctx
