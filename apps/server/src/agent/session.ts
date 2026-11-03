@@ -739,6 +739,9 @@ export class Session {
     if (!e || !e.messages.length) return null;
     const m = this.currentModel();
     if (e.model.provider !== m.provider || e.model.id !== m.id) return `model changed to ${m.id}`;
+    // Tools added since this context began (a new skill, MCP server or Swan version) reach the model only in a fresh one.
+    const added = [...this.liveTools.keys()].filter((n) => !e.frozen.tools.some((t) => t.name === n));
+    if (added.length) return `new tools: ${added.slice(0, 5).join(", ")}${added.length > 5 ? "…" : ""}`;
     // A fresh epoch must do some work before it can roll over again, or an oversized carry-over thrashes.
     if (e.messages.filter((x) => x.role === "assistant").length < 2) return null;
     const used = e.contextTokens ?? Math.ceil(JSON.stringify(e.messages).length / 4);
