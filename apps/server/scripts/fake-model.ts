@@ -51,6 +51,20 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "agent", args: { description: "Check hidden files", prompt: "subtask-ask: check the hidden files under /workspace/demo", background: true } },
     { text: "A background agent is checking hidden files; I'll answer it when it asks." },
   ],
+  // Profiling (scripts/profile.ts): the parent starts N background agents that each print ~200 KB and stay alive.
+  ...Object.fromEntries(
+    [1, 4, 8].map((n) => [
+      `fanout-${n}x`,
+      [
+        ...Array.from({ length: n }, (_, i) => ({ tool: "agent", args: { description: `Worker ${i + 1}`, prompt: "subtask-work: produce output and wait", background: true } })),
+        { text: `Started ${n} background agents.` },
+      ],
+    ]),
+  ),
+  "subtask-work": [
+    { tool: "bash", args: { command: "head -c 150000 /dev/urandom | base64 -w 0 | head -c 200000; echo; sleep 100" } },
+    { text: "Report: done." },
+  ],
   "subtask-count": [
     { tool: "bash", args: { command: "ls -1 /workspace/demo | wc -l" } },
     { text: "Report: /workspace/demo has the entries listed above." },
