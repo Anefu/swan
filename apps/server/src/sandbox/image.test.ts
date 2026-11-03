@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsSchema } from "../settings.js";
-import { ADOPT_SCRIPT, adoptFiles, adoptKey, buildArgs, buildFiles, buildKey, setupScript, toolsScript } from "./image.js";
+import { ADOPT_SCRIPT, adoptFiles, adoptKey, buildArgs, buildFiles, buildKey, proxyEnv, setupScript, toolsScript } from "./image.js";
 
 const mirrors = (m: object = {}) => SettingsSchema.parse({ mirrors: m }).mirrors;
 const tools = (t: object = {}) => SettingsSchema.parse({ sandboxTools: t }).sandboxTools;
@@ -183,5 +183,14 @@ describe("an image build that can't reach Debian", () => {
     expect(hint).not.toContain("http://deb.debian.org/debian:");
     expect(aptHint(out, mirrors({ apt: { "http://deb.debian.org/debian": "https://a/x", "http://deb.debian.org/debian-security": "https://a/y" } }))).toBe("");
     expect(aptHint("some other failure", mirrors())).toBe("");
+  });
+});
+
+describe("the Podman machine behind a company proxy", () => {
+  it("gets the proxy, with a loopback proxy reached as the host", () => {
+    const env = proxyEnv(SettingsSchema.parse({ proxy: { url: "http://127.0.0.1:3128", noProxy: [".corp.example.com"] } }).proxy);
+    expect(env.HTTPS_PROXY).toBe("http://host.containers.internal:3128");
+    expect(env.NO_PROXY).toContain(".corp.example.com");
+    expect(proxyEnv(undefined)).toEqual({});
   });
 });

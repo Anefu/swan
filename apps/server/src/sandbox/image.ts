@@ -86,11 +86,20 @@ export function buildFiles(m: Mirrors, extraCas: string[], tools: Tools): Record
  * Proxy variables are predefined build arguments, so RUN steps see them but the image does not keep
  * them. A proxy on this Mac's loopback is reached from Podman's VM as host.containers.internal.
  */
+/** The company proxy as Podman's machine and builds reach it: a proxy on this Mac's loopback is the host to them. */
+export function proxyEnv(proxy: Settings["proxy"]): Record<string, string> {
+  if (!proxy) return {};
+  const url = proxy.url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i, "$1host.containers.internal");
+  const noProxy = noProxyList(proxy).join(",");
+  return { HTTP_PROXY: url, HTTPS_PROXY: url, http_proxy: url, https_proxy: url, NO_PROXY: noProxy, no_proxy: noProxy };
+}
+
 export function buildArgs(m: Mirrors, proxy?: Settings["proxy"]): string[] {
   const args = m.baseImage ? ["--build-arg", `BASE_IMAGE=${m.baseImage}`] : [];
   if (!proxy) return args;
-  const url = proxy.url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i, "$1host.containers.internal");
-  const noProxy = noProxyList(proxy).join(",");
+  const env = proxyEnv(proxy);
+  const url = env.HTTP_PROXY!;
+  const noProxy = env.NO_PROXY!;
   // Only this proxy: Podman would otherwise also pass in the proxy variables of Swan's own (the shell's) environment.
   args.push("--http-proxy=false");
   for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) args.push("--build-arg", `${k}=${url}`);

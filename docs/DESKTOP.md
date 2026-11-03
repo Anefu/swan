@@ -44,6 +44,9 @@ mirrors:
   (Debian packages, PyPI) and agents' traffic go through it; `noProxy` hosts (and always localhost)
   are reached directly. A proxy on this Mac's loopback (`127.0.0.1`) also works for the build. A
   proxy that needs a username and password is not supported.
+  The Podman machine pulls the base image itself: Swan gives it the proxy when it sets the machine
+  up or starts it. A machine that was already running keeps its old settings; stop it once
+  (`podman machine stop`) and let Swan start it again.
 - `caFiles`: extra root certificates (PEM), for a proxy that inspects HTTPS or mirrors with an
   internal certificate. Swan trusts them, and so does everything inside the sandbox.
 - `mirrors`: the sandbox image is built from `baseImage`. If the registry needs a login, run

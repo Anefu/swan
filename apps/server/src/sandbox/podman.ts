@@ -5,7 +5,7 @@ import path from "node:path";
 import type { FolderMount, RuntimeStatus } from "@ph/shared";
 import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
-import { adoptFiles, adoptKey, buildArgs, buildFiles, buildKey } from "./image.js";
+import { adoptFiles, adoptKey, buildArgs, proxyEnv, buildFiles, buildKey } from "./image.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
 
 export interface RunResult {
@@ -18,6 +18,7 @@ export interface RunResult {
 
 interface RunOpts {
   input?: string;
+  env?: Record<string, string>; // added to the environment
   timeoutMs?: number;
   signal?: AbortSignal;
   maxOutput?: number;
@@ -83,7 +84,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   run(args: string[], opts: RunOpts = {}): Promise<RunResult> {
     const max = opts.maxOutput ?? 2_000_000;
     return new Promise((resolve) => {
-      const child = spawn(this.rt.binary, args, { stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(this.rt.binary, args, { stdio: ["pipe", "pipe", "pipe"], ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) });
       let stdout = "";
       let stderr = "";
       let truncated = false;
@@ -158,7 +159,8 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
         }
         log.info("runtime", "podman machine not reachable, trying `podman machine start`");
         this.update({ busy: "starting podman machine" });
-        await this.run(["machine", "start"], { timeoutMs: 180_000 });
+        // Podman hands the proxy variables to the machine when it starts it: base images are pulled there.
+        await this.run(["machine", "start"], { timeoutMs: 180_000, env: proxyEnv(this.settings.proxy) });
         info = await this.run(["info", "--format", "{{.Host.OS}}"], { timeoutMs: 30_000 });
         if (info.code !== 0) throw new Error(`podman is installed but not usable: ${info.stderr.trim()}`);
       }
@@ -187,7 +189,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     this.initializing ??= (async () => {
       if (!(await this.hasMachine())) {
         this.update({ busy: "setting up Podman (a one-time download of about 1 GB)", errors: [] });
-        const r = await this.run(["machine", "init"], { timeoutMs: 20 * 60_000 });
+        const r = await this.run(["machine", "init"], { timeoutMs: 20 * 60_000, env: proxyEnv(this.settings.proxy) });
         if (r.code !== 0) {
           const msg = `podman machine init failed: ${(r.stderr || r.stdout).trim().slice(-800)}`;
           log.error("runtime", msg);
