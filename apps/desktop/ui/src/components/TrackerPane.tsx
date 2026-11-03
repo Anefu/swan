@@ -6,7 +6,7 @@ import { errorMessage, relTime, useNow } from "../util";
 import { PaneHead } from "./Cards";
 import { IconPlus, IconWarning } from "./icons";
 import { useLoad } from "./MemoryUsagePane";
-import { Empty, Spinner } from "./ui";
+import { Empty, Fold, Spinner } from "./ui";
 
 const GROUPS: { status: TrackStatus; label: string }[] = [
   { status: "in_progress", label: "In progress" },
@@ -205,10 +205,26 @@ export function TriggersPane({ onBack }: { onBack: () => void }) {
             </p>
             <ul className="plain-list">
               {data.triggers.map((t) => (
-                <li key={t.name}>
+                <li key={t.name} className="conn-card">
                   <div className="row gap">
-                    <span className="small muted">{t.type}</span>
-                    <span className="grow mono">{t.name}</span>
+                    <span className="grow">
+                      <span className="mono strong">{t.name}</span> <span className="muted small">· {t.summary}</span>
+                    </span>
+                    {t.lastError ? (
+                      <span className="small tone-attention">
+                        <IconWarning size={12} /> {t.failures > 0 ? "failing" : "note"}
+                      </span>
+                    ) : (
+                      t.nextRun && !data.paused && <span className="small muted">next {new Date(t.nextRun).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    )}
+                  </div>
+                  <Fold summary="Details" defaultOpen={test?.name === t.name}>
+                  <div className="row gap">
+                    <span className="grow small muted">
+                      {t.type}
+                      {t.lastRun && ` · last ${relTime(t.lastRun, now)}`}
+                      {t.firedToday > 0 && ` · ${t.firedToday} today`}
+                    </span>
                     {t.type === "watcher" && (
                       <button type="button" className="link-btn" disabled={busy === t.name} onClick={() => void doTest(t.name)}>
                         Test
@@ -218,12 +234,6 @@ export function TriggersPane({ onBack }: { onBack: () => void }) {
                       {t.type === "watcher" ? "Check now" : "Run now"}
                     </button>
                   </div>
-                  <p className="small muted">
-                    {t.summary}
-                    {t.lastRun && ` · last ${relTime(t.lastRun, now)}`}
-                    {t.nextRun && !data.paused && ` · next ${new Date(t.nextRun).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
-                    {t.firedToday > 0 && ` · ${t.firedToday} today`}
-                  </p>
                   {t.lastError && (
                     <p className="small tone-attention">
                       <IconWarning size={12} /> {t.lastError}
@@ -254,6 +264,7 @@ export function TriggersPane({ onBack }: { onBack: () => void }) {
                       )}
                     </div>
                   )}
+                  </Fold>
                 </li>
               ))}
             </ul>
