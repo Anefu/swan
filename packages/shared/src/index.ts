@@ -491,6 +491,36 @@ export interface PersonaConfigView {
   mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON
   memory: { autoBrief: boolean; briefTokens: number };
   subagents: SubagentsConfig;
+  schedules?: ScheduleView[]; // absent from servers before 0.2.1
+  watchers?: WatcherView[];
+  unattended?: UnattendedView;
+}
+
+export interface ScheduleView {
+  name: string;
+  at?: string; // "09:00", with optional days
+  days?: string[]; // mon..sun
+  every?: string; // "1h"; either at or every
+  prompt: string;
+}
+
+export interface WatcherView {
+  name: string;
+  every: string;
+  get?: string; // either get or run
+  run?: string[];
+  forEach?: { tracker: { kind?: string; status?: TrackStatus[] } };
+  items?: string;
+  id?: string;
+  changed?: string;
+  skip?: Record<string, string | number | boolean>;
+  prompt: string;
+}
+
+export interface UnattendedView {
+  allow: string[];
+  credentials: Record<string, string[]>;
+  maxTurnsPerDay: number;
 }
 
 export interface SubagentsConfig {

@@ -387,6 +387,9 @@ export class PersonaStore extends TypedEmitter<Events> {
       mcpServers: c.mcpServers as Record<string, unknown>,
       memory: c.memory,
       subagents: c.subagents,
+      schedules: c.schedules,
+      watchers: c.watchers,
+      unattended: c.unattended,
     };
   }
 
@@ -413,6 +416,13 @@ export class PersonaStore extends TypedEmitter<Events> {
     doc.set("memory", doc.createNode(v.memory));
     const sub = v.subagents;
     if (sub.agents.length || sub.maxBackground !== 4 || sub.maxTurns !== 200 || doc.has("subagents")) doc.set("subagents", doc.createNode(sub));
+    // Older apps send none of these: leave the YAML as it is.
+    for (const k of ["schedules", "watchers"] as const) {
+      const list = v[k];
+      if (list && (list.length || doc.has(k))) doc.set(k, doc.createNode(list));
+    }
+    const un = v.unattended;
+    if (un && (un.allow.length || Object.keys(un.credentials).length || un.maxTurnsPerDay !== 30 || doc.has("unattended"))) doc.set("unattended", doc.createNode(un));
     const saved = await this.save(id, doc.toString());
     const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const appliedNow: string[] = [];
@@ -423,6 +433,8 @@ export class PersonaStore extends TypedEmitter<Events> {
     if (!before || before.name !== v.name || before.description !== v.description) appliedNow.push("name and description");
     if (!before || before.instructions !== v.instructions || !eq(before.memory, v.memory)) nextStart.push("instructions and memory brief (next context)");
     if (!before || !eq(before.subagents, v.subagents)) appliedNow.push("sub-agents (from the next delegation)");
+    if (v.schedules && (!before || !eq(before.schedules, v.schedules) || !eq(before.watchers, v.watchers) || !eq(before.unattended, v.unattended)))
+      appliedNow.push("schedules, watchers and unattended runs");
     if (!before || !eq(before.folders, v.folders) || !eq(before.skills, v.skills) || !eq(before.mcpServers, v.mcpServers))
       nextStart.push("folders, skills and MCP servers (the sandbox restarts between turns)");
     return { persona: this.summary(saved), appliedNow, nextStart };

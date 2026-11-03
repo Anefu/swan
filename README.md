@@ -112,7 +112,8 @@ to use one of the persona's skills.
 
 ### Schedules and watchers
 
-Add them to a persona's YAML. A watcher checks an API every so often from the persona's sandbox,
+Add them in a persona's Settings under **Schedules and watchers** (with GitLab, GitHub and Jira
+starting points), or in its YAML. A watcher checks an API every so often from the persona's sandbox,
 so its requests use the persona's allowed hosts and credentials like the agent's own; it remembers
 what it has seen (the first check only records), and starts one turn for everything new.
 

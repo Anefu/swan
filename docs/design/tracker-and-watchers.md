@@ -1,6 +1,6 @@
 # Design: tracker, watchers, schedules and unattended runs
 
-Status: built in 0.2.0, except: the Settings editors for triggers and unattended runs (use the YAML), presets in the UI (examples in the README), "Allow once and continue" on refused actions, and `conversation:` on triggers (waits for several conversations per persona).
+Status: built in 0.2.0, except: "Allow once and continue" on refused actions, and `conversation:` on triggers (waits for several conversations per persona).
 
 Three pieces that work together:
 

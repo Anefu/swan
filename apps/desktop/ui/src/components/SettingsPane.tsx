@@ -7,6 +7,7 @@ import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
 import { toYaml } from "../yaml";
 import { Card, CardHead, focusPaneHead, PaneHead } from "./Cards";
 import { IconPlus, IconTrash } from "./icons";
+import { TriggersEditor } from "./TriggersEditor";
 import { Empty, Spinner } from "./ui";
 
 /** Section titles, for the head of a section opened from the list. */
@@ -17,6 +18,7 @@ const SECTION_TITLE: Record<string, string> = {
   connections: "Connections",
   permissions: "Permissions",
   subagents: "Sub-agents",
+  triggers: "Schedules and watchers",
   tools: "MCP servers and skills",
   memory: "Memory brief",
 };
@@ -132,6 +134,9 @@ function blankConfig(): PersonaConfigView {
     mcpServers: {},
     memory: { autoBrief: true, briefTokens: 2000 },
     subagents: subagentDefaults(),
+    schedules: [],
+    watchers: [],
+    unattended: { allow: [], credentials: {}, maxTurnsPerDay: 30 },
   };
 }
 
@@ -158,6 +163,8 @@ function cleaned(v: PersonaConfigView): PersonaConfigView {
   for (const k of ["allow", "ask", "deny"] as const) x.permissions[k] = x.permissions[k].map((r) => r.trim()).filter(Boolean);
   x.folders = x.folders.map((f) => ({ ...f, path: f.path.trim(), ...(f.mount ? { mount: f.mount.trim() } : {}) }));
   x.subagents.agents = x.subagents.agents.map((a) => ({ name: a.name.trim(), model: a.model.trim() }));
+  if (x.unattended) x.unattended.allow = x.unattended.allow.map((r) => r.trim()).filter(Boolean);
+  for (const t of [...(x.schedules ?? []), ...(x.watchers ?? [])]) t.name = t.name.trim();
   for (const pc of Object.values(x.connections))
     pc.rules = pc.rules.map((r) => ({
       ...r,
@@ -933,6 +940,16 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
             The agent picks a sub-agent, its context and turns for each task, within these limits. Sub-agents can't start sub-agents.
           </p>
         </Section>
+
+        {d.schedules && (
+          <Section
+            id="triggers"
+            title="Schedules and watchers"
+            summary={`${plural(d.schedules.length, "schedule")}, ${plural(d.watchers?.length ?? 0, "watcher")}`}
+          >
+            <TriggersEditor d={d} update={update} />
+          </Section>
+        )}
 
         <Section
           id="tools"
