@@ -675,9 +675,11 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
             Hostnames or <span className="mono">*.domain</span>. <span className="mono">host:port</span> is always tunnelled and never
             gets credentials. Applies to the next request.
           </p>
+          <Fold summary={`Public hosts · ${d.networkAllow.length}`} defaultOpen={d.networkAllow.some((_, i) => !!errors[`host${i}`])}>
           <HostRows list="networkAllow" errorKey="host" label="Host" placeholder="api.github.com" hosts={d.networkAllow} errors={errors} update={update} />
+          </Fold>
           <div className="approved-hosts">
-            <h4>On your company network</h4>
+            <Fold summary={`On your company network · ${d.networkInternal.length}`} defaultOpen={d.networkInternal.some((_, i) => !!errors[`internal${i}`])}>
             <p className="hint">
               Hosts that resolve to private addresses (<span className="mono">10.x</span>, <span className="mono">172.16–31.x</span>,{" "}
               <span className="mono">192.168.x</span>), such as an internal Jira. They are allowed too. This Mac, link-local and{" "}
@@ -692,9 +694,10 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               errors={errors}
               update={update}
             />
+            </Fold>
           </div>
           <div className="approved-hosts">
-            <h4>Other credentials allowed</h4>
+            <Fold summary={`Other credentials allowed · ${(d.networkOtherCredentials ?? []).length}`} defaultOpen={(d.networkOtherCredentials ?? []).some((_, i) => !!errors[`other${i}`])}>
             <p className="hint">
               On hosts that get this persona's credentials, Swan refuses requests carrying any other credential, such as a token
               the agent found or was given. List a host here only if it needs one, like a registry token kept in a repository.
@@ -708,10 +711,11 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               errors={errors}
               update={update}
             />
+            </Fold>
           </div>
           {netAllowances.length > 0 && session && (
             <div className="approved-hosts">
-              <h4>Approved in the conversation</h4>
+              <Fold summary={`Approved in the conversation · ${netAllowances.length}`}>
               <p className="hint">Allowed until the agent is stopped. Keep saves the host to this persona now.</p>
               <ul className="plain-list">
                 {netAllowances.map((rule) => {
@@ -742,6 +746,7 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
                   );
                 })}
               </ul>
+              </Fold>
             </div>
           )}
         </Section>
