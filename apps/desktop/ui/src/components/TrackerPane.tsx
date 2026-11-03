@@ -23,7 +23,8 @@ export function TrackerPane({ onBack }: { onBack: () => void }) {
   const rev = state.trackerRev[id] ?? 0;
   const { data, error } = useLoad(() => api.tracker(id), [id, rev]);
   const [adding, setAdding] = useState(false);
-  const [showClosed, setShowClosed] = useState<Record<string, boolean>>({});
+  // Open work shows by default; done and dropped fold away. Every group can be folded.
+  const [shown, setShown] = useState<Record<string, boolean>>({ in_progress: true, waiting: true });
   const now = useNow();
 
   const act = (p: Promise<unknown>) => p.catch((e) => actions.reportError(e, "Could not change the tracker"));
@@ -50,19 +51,16 @@ export function TrackerPane({ onBack }: { onBack: () => void }) {
         {GROUPS.map((g) => {
           const list = items.filter((i) => i.status === g.status);
           if (!list.length) return null;
-          const closed = g.status === "done" || g.status === "dropped";
-          const open = !closed || showClosed[g.status];
+          const open = !!shown[g.status];
           return (
             <section key={g.status} className="swan-section">
               <div className="row">
                 <h3 className="grow">
                   {g.label} <span className="muted">{list.length}</span>
                 </h3>
-                {closed && (
-                  <button type="button" className="link-btn" aria-expanded={!!open} onClick={() => setShowClosed((s) => ({ ...s, [g.status]: !s[g.status] }))}>
-                    {open ? "Hide" : "Show"}
-                  </button>
-                )}
+                <button type="button" className="link-btn" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} ${g.label.toLowerCase()} items`} onClick={() => setShown((s) => ({ ...s, [g.status]: !s[g.status] }))}>
+                  {open ? "Hide" : "Show"}
+                </button>
               </div>
               {open && (
                 <ul className="plain-list">
