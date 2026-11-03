@@ -17,22 +17,43 @@ import { attachmentFileUrl } from "../api";
 import { attachmentPreviews, modelLabel, useStore } from "../store";
 import { basename, cls, EFFORT_LABEL, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
 import { DeviceCodePanel } from "./DeviceCode";
-import { IconChevronRight, IconFile } from "./icons";
+import { IconChevronRight, IconFile, IconRepeat } from "./icons";
 import { Markdown } from "./Markdown";
 import { CopyButton, Fold, Kbd, Spinner } from "./ui";
 
 // ---------- Messages ----------
 
+/** A turn a schedule or watcher started: a line like a tool call, its prompt behind it. */
+function TriggerLine({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="line-item" id={`item-${item.id}`}>
+      <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="glyph" aria-hidden="true">
+          <IconRepeat size={12} />
+        </span>
+        <span className="line-muted">Started by {item.trigger} · unattended</span>
+        <IconChevronRight className="chev" size={14} />
+      </button>
+      {open && <div className="line-detail thinking-text">{item.text}</div>}
+    </div>
+  );
+}
+
 export function UserMessage({ item, sessionId }: { item: Extract<ChatItem, { kind: "user" }>; sessionId?: string }) {
+  if (item.trigger) return <TriggerLine item={item} />;
+  return <SentMessage item={item} sessionId={sessionId} />;
+}
+
+function SentMessage({ item, sessionId }: { item: Extract<ChatItem, { kind: "user" }>; sessionId?: string }) {
   const atts = item.attachments ?? [];
   const [preview, setPreview] = useState<{ url: string; name: string; trigger: HTMLElement | null } | null>(null);
   // If the server cannot serve an image, fall back to this session's local copy, then to a file chip.
   const [broken, setBroken] = useState<Set<string>>(() => new Set());
   return (
     <div className="msg-user" id={`item-${item.id}`}>
-      <span className="sr-only">{item.trigger ? `Started by ${item.trigger}:` : "You said:"}</span>
+      <span className="sr-only">You said:</span>
       <div className="user-col">
-        {item.trigger && <p className="small muted">Started by {item.trigger} · unattended</p>}
         {atts.length > 0 && (
           <ul className="att-row" aria-label="Attachments">
             {atts.map((a) => {
