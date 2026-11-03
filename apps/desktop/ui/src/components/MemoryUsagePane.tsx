@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Checkpoint, MemoryChange, MemoryRecord, MemoryType, PersonaSummary, ProviderAllowance, UsageReport, UsageTotals } from "@ph/shared";
 import { api } from "../api";
 import { DEFAULT_MEMORY_PANE, useSelectedPersona, useStore, type MemoryPaneState } from "../store";
 import { clockTime, cls, errorMessage, fmtNumber, fmtTokens, fmtUsd, fullTime, isMissingEndpoint, relTime, useNow } from "../util";
 import { PaneHead } from "./Cards";
 import { IconChevronRight, IconExternal, IconLock, IconPin, IconPlus, IconRefresh, IconSearch } from "./icons";
-import { Empty, Segmented, Spinner } from "./ui";
+import { Empty, Fold, Segmented, Spinner } from "./ui";
 
 /** Scroll offsets per persona and view, kept for the session. */
 const scrolls = new Map<string, number>();
@@ -486,17 +486,26 @@ function CurrentWork({ persona }: { persona: PersonaSummary }) {
         Swan saves a checkpoint of the task when the context rolls over: objective, constraints, progress and the next action.
       </Empty>
     );
-  const list = (title: string, items: string[], tone?: string) =>
+  // Each part folds; what to act on starts open.
+  const list = (title: string, items: string[], tone?: string, open = false) =>
     items.length > 0 && (
       <section className="cp-section">
-        <h4>{title}</h4>
-        <ul className={cls("cp-list", tone)}>
-          {items.map((x, i) => (
-            <li key={i}>{x}</li>
-          ))}
-        </ul>
+        <Fold summary={`${title} · ${items.length}`} defaultOpen={open}>
+          <ul className={cls("cp-list", tone)}>
+            {items.map((x, i) => (
+              <li key={i}>{x}</li>
+            ))}
+          </ul>
+        </Fold>
       </section>
     );
+  const text = (title: string, body: ReactNode, open: boolean) => (
+    <section className="cp-section">
+      <Fold summary={title} defaultOpen={open}>
+        {body}
+      </Fold>
+    </section>
+  );
   return (
     <div className="checkpoint">
       <div className="row gap">
@@ -505,23 +514,14 @@ function CurrentWork({ persona }: { persona: PersonaSummary }) {
           Checkpoint saved · {clockTime(data.createdAt).slice(0, 5)} · context {data.epoch}
         </span>
       </div>
-      <section className="cp-section">
-        <h4>Objective</h4>
-        <p>{data.objective || "Not recorded"}</p>
-      </section>
+      {text("Objective", <p>{data.objective || "Not recorded"}</p>, true)}
       {list("Constraints", data.constraints)}
       {list("Decisions", data.decisions)}
       {list("Completed", data.completed, "done")}
       {list("Failures", data.failures)}
-      {list("Open questions", data.openQuestions, "attention")}
-      <section className="cp-section">
-        <h4>Next action</h4>
-        <p>{data.nextAction || "Not recorded"}</p>
-      </section>
-      <section className="cp-section">
-        <h4>Sources</h4>
-        <SourceLinks persona={persona} sources={data.sources} />
-      </section>
+      {list("Open questions", data.openQuestions, "attention", true)}
+      {text("Next action", <p>{data.nextAction || "Not recorded"}</p>, true)}
+      {text(`Sources · ${data.sources.length}`, <SourceLinks persona={persona} sources={data.sources} />, false)}
     </div>
   );
 }
