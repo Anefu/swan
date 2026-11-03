@@ -8,7 +8,7 @@ FROM ${BASE_IMAGE}
 USER root
 COPY harness-ca.crt /tmp/swan/harness-ca.crt
 COPY swan/ /tmp/swan/
-RUN sh /tmp/swan/adopt.sh && rm -rf /tmp/swan
+RUN sh /tmp/swan/setup.sh && sh /tmp/swan/adopt.sh && rm -rf /tmp/swan
 
 # The image's own roots, Swan's certificate and caFiles, for tools that read a bundle from these.
 ENV NODE_EXTRA_CA_CERTS=/usr/local/share/swan/ca-bundle.pem \

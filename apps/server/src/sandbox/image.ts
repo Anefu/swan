@@ -23,11 +23,14 @@ export function setupScript(m: Mirrors, extraCaCount: number): string {
   }
   if (apt.length || extraCaCount) {
     // The base image has no CA bundle yet: give apt Node's bundled roots plus the extra ones until ca-certificates is installed.
+    // Only where there is apt: a persona's own image may be Alpine or Fedora.
     lines.push(
+      "if [ -d /etc/apt/apt.conf.d ]; then",
       "mkdir -p /usr/local/share/swan",
       `if command -v node >/dev/null 2>&1; then node -e 'process.stdout.write(require("tls").rootCertificates.join("\\n") + "\\n")' > /usr/local/share/swan/bootstrap-ca.pem; fi`,
       "cat /tmp/swan/extra-ca.pem >> /usr/local/share/swan/bootstrap-ca.pem",
       `echo 'Acquire::https::CAInfo "/usr/local/share/swan/bootstrap-ca.pem";' > /etc/apt/apt.conf.d/90swan-bootstrap-ca`,
+      "fi",
     );
   }
   if (extraCaCount) lines.push("mkdir -p /usr/local/share/ca-certificates", "cp /tmp/swan/ca/*.crt /usr/local/share/ca-certificates/");
@@ -158,8 +161,9 @@ if command -v git >/dev/null 2>&1; then git config --system safe.directory '*'; 
 `;
 
 /** The build context for Swan's layer over a persona's own image. */
-export function adoptFiles(extraCas: string[], tools: Tools): Record<string, string> {
+export function adoptFiles(extraCas: string[], tools: Tools, mirrors: Mirrors): Record<string, string> {
   return {
+    "swan/setup.sh": setupScript(mirrors, 0), // the package mirrors; adopt.sh adds the certificates
     "swan/adopt.sh": ADOPT_SCRIPT,
     "swan/extra-ca.pem": extraCas.length ? extraCas.join("\n") + "\n" : "",
     "swan-tools.sh": toolsScript(tools),

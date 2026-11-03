@@ -156,16 +156,32 @@ describe("a persona's own image", () => {
     execFileSync("sh", ["-n"], { input: ADOPT_SCRIPT });
     expect(ADOPT_SCRIPT).toContain("for c in bash sleep cat awk mkdir chown");
     expect(ADOPT_SCRIPT).toContain("cat /tmp/swan/harness-ca.crt /tmp/swan/extra-ca.pem >> \"$bundle\"");
-    const files = adoptFiles([CERT], tools({ packages: ["jq"] }));
-    expect(Object.keys(files).sort()).toEqual(["swan-tools.sh", "swan/adopt.sh", "swan/extra-ca.pem"]);
+    const files = adoptFiles([CERT], tools({ packages: ["jq"] }), mirrors({ apt: { "http://deb.debian.org/debian": "https://art.example.com/debian" } }));
+    expect(Object.keys(files).sort()).toEqual(["swan-tools.sh", "swan/adopt.sh", "swan/extra-ca.pem", "swan/setup.sh"]);
     expect(files["swan/extra-ca.pem"]).toContain("MIIBfake");
+    // The same mirrors as Swan's image, guarded for images without apt.
+    execFileSync("sh", ["-n"], { input: files["swan/setup.sh"] });
+    expect(files["swan/setup.sh"]).toContain("https:\\/\\/art.example.com\\/debian");
+    expect(files["swan/setup.sh"]).toContain("if [ -d /etc/apt/apt.conf.d ]; then");
   });
 
   it("builds again when the image, Swan's layer or the tools change", () => {
-    const key = (base: string, t = NONE, cf = "FROM x") => adoptKey(cf, base, adoptFiles([], t));
+    const key = (base: string, t = NONE, cf = "FROM x") => adoptKey(cf, base, adoptFiles([], t, mirrors()));
     expect(key("reg.example.com/dev:1")).toBe(key("reg.example.com/dev:1"));
     expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:2"));
     expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:1", tools({ packages: ["jq"] })));
     expect(key("reg.example.com/dev:1")).not.toBe(key("reg.example.com/dev:1", NONE, "FROM y"));
+  });
+});
+
+describe("an image build that can't reach Debian", () => {
+  it("names the sources that still need a mirror", async () => {
+    const { aptHint } = await import("./podman.js");
+    const out = "Err:1 http://deb.debian.org/debian bookworm InRelease\n  Could not resolve 'deb.debian.org'\nErr:2 http://deb.debian.org/debian-security bookworm-security InRelease";
+    const hint = aptHint(out, mirrors({ apt: { "http://deb.debian.org/debian": "https://art.example.com/debian" } }));
+    expect(hint).toContain("couldn't reach http://deb.debian.org/debian-security.");
+    expect(hint).not.toContain("http://deb.debian.org/debian:");
+    expect(aptHint(out, mirrors({ apt: { "http://deb.debian.org/debian": "https://a/x", "http://deb.debian.org/debian-security": "https://a/y" } }))).toBe("");
+    expect(aptHint("some other failure", mirrors())).toBe("");
   });
 });

@@ -51,6 +51,10 @@ mirrors:
   to its mirror (`http://deb.debian.org/debian: https://…/debian-remote`), and `pypi` and `npm` set
   the index and registry for pip, uv and npm, in the build and inside the sandbox. Changing any of
   these builds a new image on the next start.
+  Images based on Debian fetch from two sources, and each needs its mirror once only mirrors are
+  reachable: `http://deb.debian.org/debian` and `http://deb.debian.org/debian-security`. If the
+  build can't reach one, its error names the source and the line to add. A persona's own image
+  uses the same `apt`, `pypi` and `npm` mirrors.
 
 A complete `config.yaml`, `secrets.yaml` and persona for this setup: [examples/reference/](../examples/reference/).
 

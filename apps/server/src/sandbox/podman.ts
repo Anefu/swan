@@ -232,7 +232,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   async sessionImage(base?: string): Promise<string> {
     if (!base) return this.imageTag;
     const containerfile = await fs.readFile(paths.containerfileBase, "utf8");
-    const files = adoptFiles(this.extraCas, this.settings.sandboxTools);
+    const files = adoptFiles(this.extraCas, this.settings.sandboxTools, this.settings.mirrors);
     const tag = `${this.rt.image}-own:ca-${this.ca.fingerprint}-${adoptKey(containerfile, base, files)}`;
     let p = this.adopting.get(tag);
     if (!p) {
@@ -276,7 +276,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
       // summary on stderr repeats the whole RUN command; drop that.
       const tail = r.stdout.trim().split("\n").slice(-15).join("\n").slice(-1500);
       const summary = r.stderr.trim().replace(/STEP "(?:[^"\\]|\\.)*"/g, "a step").slice(-400);
-      throw new Error(`image build failed:\n${tail}\n\n${summary}\nFull output: ${logFile.replace(os.homedir(), "~")}`);
+      throw new Error(`image build failed:\n${tail}\n\n${summary}\n${aptHint(`${r.stdout}\n${r.stderr}`, this.settings.mirrors)}Full output: ${logFile.replace(os.homedir(), "~")}`);
     }
   }
 
@@ -425,3 +425,14 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     }
   }
 }
+
+/** When the build could not reach Debian or Ubuntu's servers, say which sources still need a mirror. */
+export function aptHint(output: string, mirrors: Settings["mirrors"]): string {
+  if (!/Failed to fetch|Could not resolve|Unable to connect|Temporary failure resolving|Connection failed/i.test(output)) return "";
+  const missing = [...new Set(output.match(/https?:\/\/(?:deb\.debian\.org\/debian(?:-security)?|security\.debian\.org(?:\/debian-security)?|(?:[a-z]+\.)?archive\.ubuntu\.com\/ubuntu|security\.ubuntu\.com\/ubuntu)/g) ?? [])].filter(
+    (u) => !Object.keys(mirrors.apt).some((k) => k.replace(/\/$/, "") === u),
+  );
+  if (!missing.length) return "";
+  return `The build couldn't reach ${missing.join(" and ")}. If your network only reaches internal mirrors, map each to its mirror in config.yaml:\nmirrors:\n  apt:\n${missing.map((u) => `    ${u}: https://mirror.example.com/${u.includes("security") ? "debian-security" : u.includes("ubuntu") ? "ubuntu" : "debian"}-remote`).join("\n")}\n`;
+}
+
