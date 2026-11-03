@@ -30,8 +30,9 @@ export function UserMessage({ item, sessionId }: { item: Extract<ChatItem, { kin
   const [broken, setBroken] = useState<Set<string>>(() => new Set());
   return (
     <div className="msg-user" id={`item-${item.id}`}>
-      <span className="sr-only">You said:</span>
+      <span className="sr-only">{item.trigger ? `Started by ${item.trigger}:` : "You said:"}</span>
       <div className="user-col">
+        {item.trigger && <p className="small muted">Started by {item.trigger} · unattended</p>}
         {atts.length > 0 && (
           <ul className="att-row" aria-label="Attachments">
             {atts.map((a) => {

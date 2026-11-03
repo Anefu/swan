@@ -4,6 +4,7 @@ import path from "node:path";
 import chokidar from "chokidar";
 import YAML from "yaml";
 import { z } from "zod";
+import { TRACK_STATUSES } from "./tracker.js";
 import type { Effort, FolderMount, McpServerSummary, PersonaConfigView, PersonaSummary, SaveResult } from "@ph/shared";
 import { PersonaConnectionsSchema, credentialRefs } from "./connections/config.js";
 import type { ConnectionManager } from "./connections/manager.js";
@@ -26,6 +27,18 @@ const McpHttp = z.strictObject({
   headers: z.record(z.string(), z.string()).default({}),
   enabled: z.boolean().default(true),
 });
+
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+const TriggerName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,40}$/, "expected lowercase letters, digits and dashes");
+/** "90s", "5m", "2h", "1d": at least a minute. */
+export const Interval = z
+  .string()
+  .regex(/^\d+[smhd]$/, "expected an interval such as 5m or 1h")
+  .refine((v) => intervalMs(v) >= 60_000, "at least 1m");
+export function intervalMs(v: string): number {
+  const n = Number(v.slice(0, -1));
+  return n * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[v.slice(-1) as "s"];
+}
 
 export const PersonaSchema = z.strictObject({
   name: z.string().min(1),
@@ -93,6 +106,42 @@ export const PersonaSchema = z.strictObject({
       memory: z.string().default("2g"),
       pidsLimit: z.number().int().positive().default(512),
       workdir: z.string().optional(),
+    })
+    .prefault({}),
+  // Turns started without you: on a schedule, or when a watcher finds something new.
+  schedules: z
+    .array(
+      z.strictObject({
+        name: TriggerName,
+        at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected a time such as 09:00").optional(),
+        days: z.array(z.enum(DAYS)).optional(),
+        every: Interval.optional(),
+        prompt: z.string().min(1),
+      }).refine((s) => !!s.at !== !!s.every, "give either at (with optional days) or every"),
+    )
+    .default([]),
+  watchers: z
+    .array(
+      z.strictObject({
+        name: TriggerName,
+        every: Interval,
+        get: z.string().min(1).optional(), // a URL template, fetched from the sandbox through the proxy
+        run: z.array(z.string().min(1)).min(1).optional(), // a command in the sandbox that prints JSON lines
+        forEach: z.strictObject({ tracker: z.strictObject({ kind: z.string().optional(), status: z.array(z.enum(TRACK_STATUSES)).default(["in_progress", "waiting"]) }) }).optional(),
+        items: z.string().default(""), // path to the list in the JSON response; "" for the top level
+        id: z.string().default("id"),
+        changed: z.string().optional(),
+        skip: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        prompt: z.string().min(1),
+      }).refine((w) => !!w.get !== !!w.run, "give either get or run"),
+    )
+    .default([]),
+  // What a triggered turn may do. Anything that would ask is refused unless listed here.
+  unattended: z
+    .strictObject({
+      allow: z.array(z.string()).default([]), // permission rules, as in permissions.allow
+      credentials: z.record(z.string(), z.array(z.string())).default({}), // "conn/CRED": the ask rules allowed
+      maxTurnsPerDay: z.number().int().min(0).max(1000).default(30),
     })
     .prefault({}),
 });

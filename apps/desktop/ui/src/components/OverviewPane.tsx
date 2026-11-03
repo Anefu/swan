@@ -56,6 +56,8 @@ export function OverviewPane() {
         <ContextCard persona={persona} />
         <AgentsCard persona={persona} />
         <ConnectionsCard persona={persona} />
+        <TrackerCard persona={persona} />
+        <TriggersCard persona={persona} />
         <MemoryCard persona={persona} />
         <AttachmentsCard persona={persona} />
         <NetworkCard persona={persona} />
@@ -215,6 +217,47 @@ function ConnectionsCard({ persona }: { persona: PersonaSummary }) {
           );
         })}
       </div>
+    </Card>
+  );
+}
+
+function TrackerCard({ persona }: { persona: PersonaSummary }) {
+  const { state } = useStore();
+  const open = useOpen();
+  const rev = state.trackerRev[persona.id] ?? 0;
+  const data = useCardData(`tracker:${persona.id}`, () => api.tracker(persona.id), [persona.id, rev]);
+  const n = (s: string) => (data ?? []).filter((i) => i.status === s).length;
+  const parts = [n("in_progress") && `${n("in_progress")} in progress`, n("waiting") && `${n("waiting")} waiting`].filter(Boolean);
+  return (
+    <Card line>
+      <CardHead id="ov-tracker" title="Tracker" summary={data ? parts.join(", ") || "Nothing open" : ""} onOpen={() => open("tracker")} />
+    </Card>
+  );
+}
+
+function TriggersCard({ persona }: { persona: PersonaSummary }) {
+  const { state } = useStore();
+  const open = useOpen();
+  const rev = state.triggersRev[persona.id] ?? 0;
+  const data = useCardData(`triggers:${persona.id}`, () => api.triggers(persona.id), [persona.id, rev]);
+  if (!data?.triggers.length) return null;
+  const w = data.triggers.filter((t) => t.type === "watcher").length;
+  const s = data.triggers.length - w;
+  const failing = data.triggers.some((t) => t.failures > 0);
+  const summary = [w && plural(w, "watcher"), s && plural(s, "schedule")].filter(Boolean).join(", ");
+  return (
+    <Card line>
+      <CardHead
+        id="ov-triggers"
+        title="Triggers"
+        onOpen={() => open("triggers")}
+        summary={
+          <span>
+            {data.paused ? "Paused" : summary}
+            {failing && <span className="tone-attention"> · failing</span>}
+          </span>
+        }
+      />
     </Card>
   );
 }

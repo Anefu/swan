@@ -172,7 +172,7 @@ export type ToolCallStatus =
   | "interrupted";
 
 export type ChatItem =
-  | { kind: "user"; id: string; ts: string; text: string; attachments?: AttachmentMeta[] }
+  | { kind: "user"; id: string; ts: string; text: string; attachments?: AttachmentMeta[]; trigger?: string } // trigger: the watcher or schedule that sent it
   | { kind: "assistant_text"; id: string; ts: string; text: string; streaming?: boolean }
   | { kind: "thinking"; id: string; ts: string; text: string; streaming?: boolean }
   | {
@@ -396,7 +396,9 @@ export type ServerEvent =
   | { type: "providers.updated"; providers: ProviderStatus[] } // a model-provider key changed
   | { type: "secrets.status"; error: string | null } // secrets.yaml / secrets.env cannot be read (null: fine again)
   | { type: "usage.updated"; personaId: string }
-  | { type: "memory.updated"; personaId: string };
+  | { type: "memory.updated"; personaId: string }
+  | { type: "tracker.updated"; personaId: string }
+  | { type: "triggers.updated"; personaId: string };
 
 // ---------- Attachments ----------
 // POST /api/sessions/:id/attachments {name, mediaType, data (base64)} -> AttachmentMeta  (max 20 MB)
@@ -621,4 +623,45 @@ export interface PersonaImportResult {
   persona: PersonaSummary;
   connectionsAdded: string[];
   skillsAdded: string[];
+}
+
+// ---------- Tracker and triggers ----------
+
+export type TrackStatus = "in_progress" | "waiting" | "done" | "dropped";
+
+export interface TrackerItem {
+  url: string; // identifies the item
+  title: string;
+  kind: string; // mr, ticket, doc, deploy, or anything
+  status: TrackStatus;
+  note?: string;
+  created: string;
+  updated: string;
+  itemId?: string; // the conversation item where it was registered
+  history: { at: string; status: TrackStatus; by: "agent" | "user" }[];
+}
+
+export interface TriggerStatus {
+  name: string;
+  type: "schedule" | "watcher";
+  summary: string; // "Weekdays at 09:00", "Every 5 min · watching 2 MRs"
+  lastRun: string | null;
+  nextRun: string | null;
+  lastError: string | null;
+  failures: number;
+  firedToday: number;
+}
+
+export interface TriggersInfo {
+  paused: boolean;
+  triggers: TriggerStatus[];
+  turnsToday: number;
+  maxTurnsPerDay: number;
+}
+
+export interface WatcherTestResult {
+  checked: number; // requests made (one per tracked item for forEach)
+  items: number; // items found in the responses
+  matching: { label: string; text: string }[]; // what a real run would send (first 10)
+  errors: string[];
 }

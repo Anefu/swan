@@ -8,6 +8,7 @@ import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
 import { SwanSettingsPane } from "./SwanSettings";
 import { ImportPane } from "./ImportPane";
+import { TrackerPane, TriggersPane } from "./TrackerPane";
 
 export const DOCK_MIN = 320;
 const DOCK_LABEL: Record<DockMode, string> = {
@@ -19,6 +20,8 @@ const DOCK_LABEL: Record<DockMode, string> = {
   network: "Network activity",
   attachments: "Attachments",
   import: "Import persona",
+  tracker: "Tracker",
+  triggers: "Triggers",
 };
 export const DOCK_MAX = 560;
 
@@ -118,6 +121,10 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
           <SwanSettingsPane onClose={close} />
         ) : mode === "import" ? (
           <ImportPane onClose={() => closeDockAndRestoreFocus("import", actions.closeImport)} />
+        ) : mode === "tracker" ? (
+          <TrackerPane onBack={back} />
+        ) : mode === "triggers" ? (
+          <TriggersPane onBack={back} />
         ) : mode === "memory" || mode === "usage" ? (
           <MemoryUsagePane key={mode} mode={mode} onBack={back} />
         ) : mode === "network" ? (

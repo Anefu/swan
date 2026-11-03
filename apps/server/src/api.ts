@@ -5,7 +5,7 @@ import path from "node:path";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, PersonaImportChoices, ServerEvent } from "@ph/shared";
+import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, PersonaImportChoices, ServerEvent, TrackStatus } from "@ph/shared";
 import type { AttachmentStore } from "./attachments.js";
 import type { ConnectionManager } from "./connections/manager.js";
 import { dismissMigrationNote, readMigrationNote } from "./connections/migrate.js";
@@ -21,6 +21,8 @@ import type { SecretStore } from "./secrets.js";
 import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { builtinTools, skillTool } from "./agent/tools.js";
+import { TRACK_STATUSES, type TrackerStore } from "./tracker.js";
+import type { TriggerManager } from "./triggers.js";
 import { PermissionPolicy } from "./agent/permissions.js";
 import { errMsg, log } from "./util.js";
 import { exportPersona, importPersona, previewImport } from "./persona-share.js";
@@ -40,6 +42,8 @@ export interface ApiDeps {
   usage: UsageLedger;
   catalog: ModelCatalog;
   attachments: AttachmentStore;
+  tracker: TrackerStore;
+  triggers: TriggerManager;
 }
 
 class HttpError extends Error {
@@ -189,8 +193,51 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     persona(req.params.id);
     for (const s of d.sessions.list(req.params.id)) await d.sessions.remove(s.id);
     await d.memory.removePersona(req.params.id);
+    await d.tracker.removePersona(req.params.id);
     await d.personas.remove(req.params.id);
     return { ok: true };
+  });
+  app.get("/api/personas/:id/tracker", async (req: P) => {
+    persona(req.params.id);
+    return d.tracker.list(req.params.id);
+  });
+  app.post("/api/personas/:id/tracker", async (req: FastifyRequest<{ Params: { id: string }; Body: { url?: string; title?: string; kind?: string; status?: TrackStatus; note?: string } }>) => {
+    persona(req.params.id);
+    const b = req.body ?? {};
+    if (b.status && !TRACK_STATUSES.includes(b.status)) throw new HttpError(400, "unknown status");
+    try {
+      new URL(b.url ?? "");
+    } catch {
+      throw new HttpError(400, "enter the item's full URL, starting with https://");
+    }
+    return (await d.tracker.track(req.params.id, { url: b.url!, title: b.title, kind: b.kind, status: b.status, note: b.note }, "user")).item;
+  });
+  app.delete("/api/personas/:id/tracker", async (req: FastifyRequest<{ Params: { id: string }; Querystring: { url?: string } }>) => {
+    persona(req.params.id);
+    return { removed: await d.tracker.remove(req.params.id, req.query.url ?? "") };
+  });
+  app.get("/api/personas/:id/triggers", async (req: P) => {
+    persona(req.params.id);
+    return d.triggers.info(req.params.id);
+  });
+  app.post("/api/personas/:id/triggers/pause", async (req: FastifyRequest<{ Params: { id: string }; Body: { paused?: boolean } }>) => {
+    persona(req.params.id);
+    await d.triggers.setPaused(req.params.id, !!req.body?.paused);
+    return d.triggers.info(req.params.id);
+  });
+  app.post("/api/personas/:id/triggers/:name/:action", async (req: FastifyRequest<{ Params: { id: string; name: string; action: string } }>) => {
+    persona(req.params.id);
+    const { id, name, action } = req.params;
+    try {
+      if (action === "test") return await d.triggers.test(id, name);
+      if (action === "run") {
+        await d.triggers.runNow(id, name);
+        return d.triggers.info(id);
+      }
+    } catch (e) {
+      throw new HttpError(400, errMsg(e));
+    }
+    throw new HttpError(404, `unknown action ${action}`);
   });
   app.get("/api/personas/:id/tools", async (req: P) => {
     const cfg = persona(req.params.id).config;

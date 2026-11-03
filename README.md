@@ -105,6 +105,53 @@ to use one of the persona's skills.
   anything is saved: you pick its name, point its folders at yours, and choose whether to add sign-in
   tools that run on your Mac. Connections and skills you already have are kept.
 
+- **Tracker**: the merge requests, tickets, docs and deploys the agent creates or follows, with
+  their status (in progress, waiting, done, dropped). Open it from the Overview; you can add items
+  and change their status too.
+- **Schedules and watchers**: turns that start without you. See below.
+
+### Schedules and watchers
+
+Add them to a persona's YAML. A watcher checks an API every so often from the persona's sandbox,
+so its requests use the persona's allowed hosts and credentials like the agent's own; it remembers
+what it has seen (the first check only records), and starts one turn for everything new.
+
+```yaml
+schedules:
+  - name: morning
+    at: "09:00"                # or every: 1h
+    days: [mon, tue, wed, thu, fri]
+    prompt: Check the tracker, update each open item, and summarise what needs me today.
+
+watchers:
+  - name: assigned-tickets
+    every: 5m
+    get: https://jira.example.com/rest/api/3/search?jql=assignee%3DcurrentUser()&fields=summary
+    items: issues              # where the list is in the response ("" for the top level)
+    id: key                    # what identifies an item
+    prompt: "Assigned to you: {{item.key}} {{item.fields.summary}}. Track it and say how you'd approach it."
+
+  - name: mr-comments          # every MR in the tracker that is in progress or waiting
+    every: 2m
+    forEach: { tracker: { kind: mr } }
+    get: "{{gitlabApi tracker.url}}/notes?sort=desc&per_page=50"   # githubApi for GitHub PRs
+    skip: { system: true }
+    prompt: "New comment on {{tracker.title}} from {{item.author.username}}: {{item.body}}"
+
+unattended:                    # what a triggered turn may do; anything else that would ask is refused
+  allow: [read, "bash(git *)"]
+  credentials:
+    gitlab/GITLAB_TOKEN: ["POST /api/v4/projects/*/merge_requests/*/notes"]   # ask rules allowed unattended
+  maxTurnsPerDay: 30
+```
+
+`changed: fields.updated` makes an edited item count as new again; `run: [script, args]` instead of
+`get` runs a command in the sandbox that prints one JSON object per line. Triggered turns never
+reach new hosts, and text from watched items is treated as data, not instructions. The Triggers
+screen in the Overview shows each one's last and next run and errors, with Test, Run now and a
+switch to pause them. A schedule missed while Swan was closed runs once on start if it was missed
+by less than two hours.
+
 A complete persona, `config.yaml` and `secrets.yaml` using every setting:
 [examples/reference/](examples/reference/).
 

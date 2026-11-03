@@ -9,6 +9,8 @@ import { HomeInUseError, HomeLock, choosePort, moveLegacyHome } from "./home.js"
 import { applyNetwork, loadExtraCas } from "./network.js";
 import { migrateConnections } from "./connections/migrate.js";
 import { ModelCatalog } from "./catalog.js";
+import { TrackerStore } from "./tracker.js";
+import { TriggerManager } from "./triggers.js";
 import { MemoryStore } from "./memory.js";
 import { PersonaStore } from "./personas.js";
 import { UsageLedger } from "./usage.js";
@@ -82,6 +84,7 @@ async function main() {
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
   const memory = new MemoryStore();
+  const tracker = new TrackerStore();
   const usage = new UsageLedger();
   await usage.load();
   const catalog = new ModelCatalog(settings, secrets, providers);
@@ -89,12 +92,15 @@ async function main() {
   // eslint-disable-next-line prefer-const
   let sessions: SessionManager;
   sessions = new SessionManager({
-    settings, runtime, proxy, connections, personas, skills, providers, memory, usage, attachments, catalog,
+    settings, runtime, proxy, connections, personas, skills, providers, memory, tracker, usage, attachments, catalog,
     broadcast: hub.broadcast,
     onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
   });
   memory.on("changed", (personaId) => hub.broadcast({ type: "memory.updated", personaId }));
   await sessions.loadAll();
+  tracker.on("changed", (personaId) => hub.broadcast({ type: "tracker.updated", personaId }));
+  const triggers = new TriggerManager({ personas, tracker, target: (id) => sessions.conversation(id) });
+  triggers.on("changed", (personaId) => hub.broadcast({ type: "triggers.updated", personaId }));
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
   secrets.on("status", (error) => hub.broadcast({ type: "secrets.status", error }));
@@ -120,12 +126,13 @@ async function main() {
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
   settings.port = await choosePort(settings.port, portFallback);
-  const { port } = await startApi({ settings, token, secrets, connections, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments }, hub);
+  const { port } = await startApi({ settings, token, secrets, connections, personas, skills, runtime, proxy, providers, sessions, memory, usage, catalog, attachments, tracker, triggers }, hub);
   await lock.update({ port, proxyPort: settings.proxyPort });
   log.info("main", `harness home: ${paths.home}`);
   void tellLauncher({ type: "ready", url: `http://127.0.0.1:${port}/`, port, proxyPort: settings.proxyPort, home: paths.home, version: VERSION });
 
   void runtime.init().then(() => runtime.removeOrphans());
+  triggers.start();
 
   let stopping = false;
   const shutdown = async () => {
