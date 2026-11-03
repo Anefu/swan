@@ -7,7 +7,7 @@ import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, u
 import { PaneHead } from "./Cards";
 import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
 import { IconPlus, IconWarning } from "./icons";
-import { Spinner } from "./ui";
+import { Fold, Spinner } from "./ui";
 
 /** Swan's own settings, shared by every persona: model providers, connections and the sandbox. */
 export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
@@ -325,17 +325,19 @@ function ConnectionRow({ c }: { c: ConnectionStatus }) {
       </div>
       {metaText && <div className="small muted">{metaText.charAt(0).toUpperCase() + metaText.slice(1)}</div>}
       {c.message && <p className="hint">{c.message}</p>}
-      {c.credentials.length > 0 && (
-        <ul className="plain-list">
-          {c.credentials.map((cr) => (
-            <CredentialRow key={cr.name} conn={c} c={cr} />
-          ))}
-        </ul>
-      )}
-      {c.type === "command" && c.credentials.length === 0 && c.state !== "ready" && (
-        <p className="small muted">Credentials appear here after a sign-in.</p>
-      )}
-      {c.type === "command" && <CommandControls c={c} />}
+      <Fold summary={c.credentials.length ? `${c.credentials.length} ${c.credentials.length === 1 ? "credential" : "credentials"}` : "Details"}>
+        {c.credentials.length > 0 && (
+          <ul className="plain-list">
+            {c.credentials.map((cr) => (
+              <CredentialRow key={cr.name} conn={c} c={cr} />
+            ))}
+          </ul>
+        )}
+        {c.type === "command" && c.credentials.length === 0 && c.state !== "ready" && (
+          <p className="small muted">Credentials appear here after a sign-in.</p>
+        )}
+        {c.type === "command" && <CommandControls c={c} />}
+      </Fold>
     </li>
   );
 }
@@ -470,7 +472,8 @@ const HEADER_RE = /^[A-Za-z0-9-]+$/;
 function AddCredential({ onDone }: { onDone: () => void }) {
   const { state, actions } = useStore();
   const statics = state.connections.filter((c) => c.type === "static");
-  const [conn, setConn] = useState(statics.length === 1 ? statics[0].name : "");
+  const [conn, setConn] = useState("");
+  const [connTouched, setConnTouched] = useState(false); // until then, follow the credential name: GITLAB_TOKEN -> gitlab
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [hosts, setHosts] = useState("");
@@ -524,7 +527,7 @@ function AddCredential({ onDone }: { onDone: () => void }) {
     >
       <div className="row gap wrap">
         <label className="field grow">
-          <span className="field-label">Connection</span>
+          <span className="field-label">Connection (the scope: gitlab for gitlab/GITLAB_TOKEN)</span>
           <input
             className="input mono"
             value={conn}
@@ -533,7 +536,10 @@ function AddCredential({ onDone }: { onDone: () => void }) {
             list={listId}
             spellCheck={false}
             aria-invalid={!!connError}
-            onChange={(e) => setConn(e.target.value.toLowerCase().replace(/[\s_]+/g, "-"))}
+            onChange={(e) => {
+              setConnTouched(true);
+              setConn(e.target.value.toLowerCase().replace(/[\s_]+/g, "-"));
+            }}
           />
           <datalist id={listId}>
             {statics.map((c) => (
@@ -549,7 +555,11 @@ function AddCredential({ onDone }: { onDone: () => void }) {
             placeholder="GITHUB_TOKEN"
             spellCheck={false}
             aria-invalid={!!nameError}
-            onChange={(e) => setName(e.target.value.replace(/\s+/g, "_"))}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\s+/g, "_");
+              setName(v);
+              if (!connTouched) setConn((v.split(/[_-]/)[0] ?? "").toLowerCase().replace(/[^a-z0-9-]/g, ""));
+            }}
           />
         </label>
       </div>

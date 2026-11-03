@@ -95,7 +95,7 @@ export function CardHead({
     >
       <span className="rcard-title">{title}</span>
       {folds && open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-      {summary !== undefined && <span className="rcard-sum">{summary}</span>}
+      {summary !== undefined && <span className="rcard-sum">{typeof summary === "string" ? <span>{summary}</span> : summary}</span>}
     </button>
   );
 }

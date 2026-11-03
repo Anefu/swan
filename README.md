@@ -112,7 +112,8 @@ to use one of the persona's skills.
 
 ### Schedules and watchers
 
-Add them in a persona's Settings under **Schedules and watchers** (with GitLab, GitHub and Jira
+Ask the agent ("remind me at 17:00 to…"; it has `schedule` and `watch` tools), or add them in a
+persona's Settings under **Schedules and watchers** (with GitLab, GitHub and Jira
 starting points), or in its YAML. A watcher checks an API every so often from the persona's sandbox,
 so its requests use the persona's allowed hosts and credentials like the agent's own; it remembers
 what it has seen (the first check only records), and starts one turn for everything new.
@@ -120,7 +121,7 @@ what it has seen (the first check only records), and starts one turn for everyth
 ```yaml
 schedules:
   - name: morning
-    at: "09:00"                # or every: 1h
+    at: "09:00"                # or every: 1h, or once: "2026-11-03 17:00" for a reminder
     days: [mon, tue, wed, thu, fri]
     prompt: Check the tracker, update each open item, and summarise what needs me today.
 

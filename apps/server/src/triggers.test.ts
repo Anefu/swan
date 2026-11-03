@@ -77,3 +77,20 @@ describe("watchers", () => {
     expect((await m.info("w")).triggers[0]!.lastRun).toBeNull();
   });
 });
+
+describe("reminders", () => {
+  it("run once when due, late if need be, and never again", async () => {
+    for (const d of ["triggers", "tracker"]) await fs.rm(path.join(paths.home, d), { recursive: true, force: true });
+    const cfg = PersonaSchema.parse({ name: "R", schedules: [{ name: "call", once: "2026-01-05 17:00", prompt: "Remind the user to call Sam." }] });
+    const personas = { get: () => ({ id: "r", config: cfg }), list: () => [{ id: "r", config: cfg }] } as unknown as PersonaStore;
+    const fired: string[] = [];
+    const target: TriggerTarget = { trigger: (_l, p) => fired.push(p), pollExec: async () => ({ code: 0, stdout: "", stderr: "" }) };
+    const m = new TriggerManager({ personas, tracker: new TrackerStore(), target: () => target });
+    const tick = () => (m as unknown as { tick(): Promise<void> }).tick();
+    await tick();
+    await tick();
+    expect(fired).toEqual(["Remind the user to call Sam."]);
+    expect((await m.info("r")).triggers[0]).toMatchObject({ nextRun: null });
+    expect(() => PersonaSchema.parse({ name: "R", schedules: [{ name: "x", once: "5pm", prompt: "p" }] })).toThrow(/local date and time/);
+  });
+});

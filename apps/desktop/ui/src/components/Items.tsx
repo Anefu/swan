@@ -700,6 +700,7 @@ function ApprovalPrompt({
           ; every part of the line needs one.
         </p>
       )}
+      {item.reason && <p className="small">Why: {item.reason}</p>}
       {showInput && <ToolInput item={item} />}
       <Fold summary="Why approval is required">
         <dl className="facts small">
@@ -765,6 +766,7 @@ function NetworkPrompt({ item, sessionId }: { item: ToolItem; sessionId: string 
         Allow network access to <strong className="mono">{item.inputPreview || host}</strong>?{" "}
         <span className="muted">The request is paused; it is {item.approvalReason ?? "not on the allowlist"}.</span>
       </p>
+      {item.reason && <p className="small">{item.reason}</p>}
       <DecisionButtons
         item={item}
         sessionId={sessionId}

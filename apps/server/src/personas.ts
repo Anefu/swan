@@ -116,8 +116,9 @@ export const PersonaSchema = z.strictObject({
         at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected a time such as 09:00").optional(),
         days: z.array(z.enum(DAYS)).optional(),
         every: Interval.optional(),
+        once: z.string().regex(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/, "expected a local date and time such as 2026-11-03 17:00").optional(), // a reminder
         prompt: z.string().min(1),
-      }).refine((s) => !!s.at !== !!s.every, "give either at (with optional days) or every"),
+      }).refine((s) => [s.at, s.every, s.once].filter(Boolean).length === 1, "give one of at (with optional days), every or once"),
     )
     .default([]),
   watchers: z
@@ -447,6 +448,20 @@ export class PersonaStore extends TypedEmitter<Events> {
     if (p.config.network.allow.includes(host)) return;
     const doc = YAML.parseDocument(p.yaml);
     doc.setIn(["network", "allow"], doc.createNode([...p.config.network.allow, host]));
+    await this.save(id, doc.toString());
+  }
+
+  /** Add or replace (by name) a schedule or watcher, or remove one (`entry` null). */
+  async setTrigger(id: string, kind: "schedules" | "watchers", name: string, entry: Record<string, unknown> | null) {
+    const p = this.personas.get(id);
+    if (!p?.config) throw new Error("persona is invalid");
+    const list = (p.config[kind] as { name: string }[]).filter((t) => t.name !== name);
+    if (entry) list.push(entry as { name: string });
+    else if (list.length === p.config[kind].length) throw new Error(`no ${kind === "schedules" ? "schedule" : "watcher"} "${name}"`);
+    const doc = YAML.parseDocument(p.yaml);
+    doc.set(kind, doc.createNode(list));
+    const r = PersonaSchema.safeParse(doc.toJS());
+    if (!r.success) throw new Error(r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
     await this.save(id, doc.toString());
   }
 

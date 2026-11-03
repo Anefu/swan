@@ -103,6 +103,7 @@ export function builtinTools(): ToolDef[] {
         command: z.string().min(1).describe("The command to run"),
         cwd: z.string().optional().describe("Working directory (default: the persona's working directory)"),
         timeout_ms: z.number().int().min(1000).max(600_000).optional().describe("Timeout in ms (default 120000)"),
+        reason: z.string().max(200).optional().describe("One short sentence on why; shown to the user when the command or a website it reaches needs approval"),
       }),
       preview: (i) => oneLine(i.command),
       primaryArg: (i) => i.command,

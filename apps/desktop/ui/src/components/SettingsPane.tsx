@@ -8,7 +8,7 @@ import { toYaml } from "../yaml";
 import { Card, CardHead, focusPaneHead, PaneHead } from "./Cards";
 import { IconPlus, IconTrash } from "./icons";
 import { TriggersEditor } from "./TriggersEditor";
-import { Empty, Spinner } from "./ui";
+import { Empty, Fold, Spinner } from "./ui";
 
 /** Section titles, for the head of a section opened from the list. */
 const SECTION_TITLE: Record<string, string> = {
@@ -959,6 +959,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
         >
           <h4>Skills</h4>
           {allSkills.length === 0 && <p className="muted small">No skills installed.</p>}
+          {allSkills.length > 0 && (
+          <Fold summary={`${d.skills.length} of ${allSkills.length} on`}>
           {allSkills.map((name) => {
             const s = state.skills.find((x) => x.name === name);
             return (
@@ -977,6 +979,8 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               </label>
             );
           })}
+          </Fold>
+          )}
           <Field
             label="MCP servers (JSON)"
             error={errors.mcp}
@@ -1554,6 +1558,7 @@ function ConnectionRules({
       </div>
       {!status && <span className="field-error">Not defined in config.yaml; these rules do nothing.</span>}
       {rules.length === 0 && <p className="muted small">No rules: requests go out without these credentials.</p>}
+      <Fold summary={`${rules.length} ${rules.length === 1 ? "rule" : "rules"}`} defaultOpen={rules.length === 0 || !!Object.keys(errors).some((k) => k.startsWith(`rule-${name}-`))}>
       {rules.map((r, i) => (
         <RuleEditor
           key={i}
@@ -1575,6 +1580,7 @@ function ConnectionRules({
       >
         <IconPlus /> Add rule
       </button>
+      </Fold>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./s
 import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { TRACKER_TOOLS, trackerTools } from "./tracker-tools.js";
+import { SCHEDULE_TOOLS, triggerTools } from "./trigger-tools.js";
 import type { TrackerStore } from "../tracker.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
@@ -118,12 +119,14 @@ function systemPrompt(o: {
     ...o.credentialLines,
   );
   lines.push(
-    "- Some tool calls require the user's approval. If a call is denied, adjust your plan instead of retrying the same call.",
+    "- Some tool calls require the user's approval. If a call is denied, adjust your plan instead of retrying the same call. Give bash calls a short reason: the user sees it when asked to approve the command or a website it reaches.",
+    "- Use schedule for reminders (\"remind me at 17:00\") and recurring checks, and watch to follow an API for new items.",
     "- Use track for the merge requests, tickets, docs and deploys you create or are asked to follow, and keep their status current (tracker_list shows what is open).",
     "- The user may send a new message while you work; it arrives with your tool results. Take it into account before your next step.",
     "",
     "# Working in parallel",
     "You can delegate with the `agent` tool: it starts a sub-agent with your tools, sandbox and permissions, which works on its own and returns a report. When a task splits into independent parts (reading several areas of a codebase, researching several sources, checking separate hypotheses, editing unrelated files), launch several `agent` calls in the same response so they run in parallel, then combine their reports. Give each sub-agent a complete, self-contained brief: it does not see this conversation. Do small or tightly coupled work yourself.",
+    "Keep this conversation for the user: understanding what they want, decisions, and reporting results. Hand off substantial work (multi-step investigation, implementation, long builds or checks) to sub-agents, with background: true when the user may want to talk to you meanwhile, and tell the user what you started.",
     "",
     "# Memory",
     "This is one long-running conversation. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
@@ -190,6 +193,7 @@ export class Session {
   private restarting: Promise<void> | null = null;
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean; trigger?: string }[] = [];
   private unattended = false; // the turn running was started by a watcher or schedule
+  private lastActivity: { preview: string; reason?: string } | null = null; // the latest tool call, to explain a network request
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
   private dreaming = false;
@@ -414,6 +418,7 @@ export class Session {
       inputPreview: target,
       status: "pending_approval",
       approvalReason: "not in this persona's allowed hosts",
+      ...(this.lastActivity ? { reason: `While running ${this.lastActivity.preview.slice(0, 120)}${this.lastActivity.reason ? `: ${this.lastActivity.reason}` : ""}` } : {}),
     };
     this.addItem(item);
     const p = new Promise<boolean>((resolve) => {
@@ -629,7 +634,7 @@ export class Session {
       ...builtinTools(),
       ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
-      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }),
+      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }),
       ...this.creds.tools(),
       ...(await this.agentTools()),
       ...(await this.mcp.tools()),
@@ -1582,11 +1587,15 @@ export class Session {
     const v = tool.validate(tu.input);
     if (!v.ok) return finish("error", { text: `Invalid input: ${v.error}`, isError: true });
     item.inputPreview = tool.preview(v.value);
+    const why = (v.value as { reason?: unknown }).reason;
+    if (typeof why === "string" && why.trim()) item.reason = why.trim();
+    this.lastActivity = { preview: item.inputPreview, reason: item.reason };
 
     let perm = policy.evaluate(tool, v.value);
     // Memory and history reads are allowed unless a rule says otherwise.
     if (perm.rule.startsWith("default") && MEMORY_READ_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "memory read" };
     if (perm.rule.startsWith("default") && TRACKER_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "tracker" };
+    if (perm.rule.startsWith("default") && SCHEDULE_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "schedule" };
     // Connection status and sign-in requests only show the user a card: allowed by default.
     if (perm.rule.startsWith("default") && CONNECTION_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "connection tool" };
     // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
@@ -1690,8 +1699,8 @@ export class Session {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
-      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...this.creds.tools()];
-    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
+      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), ...this.creds.tools()];
+    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || SCHEDULE_TOOLS.has(n) || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
     return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
   }
 

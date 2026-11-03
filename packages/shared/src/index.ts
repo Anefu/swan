@@ -188,6 +188,7 @@ export type ChatItem =
       isError?: boolean;
       durationMs?: number;
       approvalReason?: string; // why it needs approval (matched rule)
+      reason?: string; // why the agent wants it, in its words
       uncoveredCommands?: string[]; // while pending: parts of a command line no allow rule covers
       allowPatterns?: string[]; // while pending: "npm test *", what "until stopped" and "always" would allow
       denyReason?: string;
@@ -500,7 +501,8 @@ export interface ScheduleView {
   name: string;
   at?: string; // "09:00", with optional days
   days?: string[]; // mon..sun
-  every?: string; // "1h"; either at or every
+  every?: string; // "1h"
+  once?: string; // "2026-11-03 17:00", local: a reminder; one of at, every, once
   prompt: string;
 }
 

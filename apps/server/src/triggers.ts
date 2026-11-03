@@ -96,6 +96,7 @@ function nextSlot(s: Schedule, now: Date): Date | null {
 }
 
 function scheduleSummary(s: Schedule): string {
+  if (s.once) return `Once, ${new Date(s.once.replace(" ", "T")).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`;
   if (s.every) return `Every ${s.every}`;
   const days = !s.days?.length ? "Every day" : s.days.length === 5 && !s.days.includes("sat") && !s.days.includes("sun") ? "Weekdays" : s.days.map((d) => d[0]!.toUpperCase() + d.slice(1)).join(", ");
   return `${days} at ${s.at}`;
@@ -169,6 +170,11 @@ export class TriggerManager extends EventEmitter {
         if (this.running.has(key)) continue;
         const t = this.ts(st, s.name);
         const last = t.lastRun ? new Date(t.lastRun) : null;
+        if (s.once) {
+          // A reminder runs once, late if Swan was closed when it was due.
+          if (!last && now >= new Date(s.once.replace(" ", "T"))) await this.fireSchedule(p.id, s, now);
+          continue;
+        }
         if (s.every) {
           if (!last) {
             t.lastRun = now.toISOString(); // first one an interval from now
@@ -343,7 +349,7 @@ export class TriggerManager extends EventEmitter {
     const triggers: TriggerStatus[] = [];
     for (const s of cfg?.schedules ?? []) {
       const t = this.ts(st, s.name);
-      const next = s.every ? (t.lastRun ? new Date(new Date(t.lastRun).getTime() + intervalMs(s.every)) : null) : nextSlot(s, now);
+      const next = s.once ? (t.lastRun ? null : new Date(s.once.replace(" ", "T"))) : s.every ? (t.lastRun ? new Date(new Date(t.lastRun).getTime() + intervalMs(s.every)) : null) : nextSlot(s, now);
       triggers.push({ name: s.name, type: "schedule", summary: scheduleSummary(s), lastRun: t.lastRun, nextRun: st.paused ? null : (next?.toISOString() ?? null), lastError: t.lastError, failures: t.failures, firedToday: t.firedToday });
     }
     for (const w of cfg?.watchers ?? []) {

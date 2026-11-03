@@ -105,19 +105,27 @@ export function TriggersEditor({ d, update }: { d: PersonaConfigView; update: (f
           <label className="mini-select">
             <span className="sr-only">When</span>
             <select
-              value={s.every !== undefined ? "every" : "at"}
+              value={s.once !== undefined ? "once" : s.every !== undefined ? "every" : "at"}
               onChange={(e) =>
                 setS(i, (x) => {
-                  if (e.target.value === "every") Object.assign(x, { every: "1h", at: undefined, days: undefined });
-                  else Object.assign(x, { at: "09:00", every: undefined });
+                  const off = { at: undefined, days: undefined, every: undefined, once: undefined };
+                  if (e.target.value === "every") Object.assign(x, off, { every: "1h" });
+                  else if (e.target.value === "once") Object.assign(x, off, { once: `${new Date().toISOString().slice(0, 10)} 17:00` });
+                  else Object.assign(x, off, { at: "09:00" });
                 })
               }
             >
               <option value="at">At a time</option>
               <option value="every">Every</option>
+              <option value="once">Once (a reminder)</option>
             </select>
           </label>
-          {s.every !== undefined ? (
+          {s.once !== undefined ? (
+            <label className="field">
+              <span className="field-label">On</span>
+              <input className="input" type="datetime-local" value={s.once.replace(" ", "T")} onChange={(e) => setS(i, (x) => void (x.once = e.target.value.replace("T", " ")))} />
+            </label>
+          ) : s.every !== undefined ? (
             <Text label="Interval (5m, 1h, 1d)" mono value={s.every} onChange={(v) => setS(i, (x) => void (x.every = v))} />
           ) : (
             <>
