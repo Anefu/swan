@@ -22,6 +22,8 @@ ENV NODE_EXTRA_CA_CERTS=/usr/local/share/swan/ca-bundle.pem \
     NODE_USE_ENV_PROXY=1
 
 # sandboxTools, with the image's own package manager.
+ARG SWAN_PROXY
+ARG SWAN_NO_PROXY
 COPY swan-tools.sh /tmp/swan-tools.sh
 RUN sh /tmp/swan-tools.sh && rm -f /tmp/swan-tools.sh
 

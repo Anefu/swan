@@ -28,6 +28,8 @@ RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
 
 # Extra tools from config.yaml (sandboxTools): packages, then the install script, as root with
 # the proxy, mirrors and certificates above. Its own layer, so changing it rebuilds only from here.
+ARG SWAN_PROXY
+ARG SWAN_NO_PROXY
 COPY swan-tools.sh /tmp/swan-tools.sh
 RUN sh /tmp/swan-tools.sh && rm -f /tmp/swan-tools.sh
 

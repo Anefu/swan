@@ -60,6 +60,8 @@ describe("sandbox image setup", () => {
       "--build-arg", "https_proxy=http://proxy.corp.example.com:8080",
       "--build-arg", "NO_PROXY=localhost,127.0.0.1,::1,.corp.example.com",
       "--build-arg", "no_proxy=localhost,127.0.0.1,::1,.corp.example.com",
+      "--build-arg", "SWAN_PROXY=http://proxy.corp.example.com:8080",
+      "--build-arg", "SWAN_NO_PROXY=localhost,127.0.0.1,::1,.corp.example.com",
     ]);
     expect(args("http://127.0.0.1:3128")[2]).toBe("HTTP_PROXY=http://host.containers.internal:3128");
     expect(args("http://localhost:3128/")[2]).toBe("HTTP_PROXY=http://host.containers.internal:3128/");
@@ -120,6 +122,24 @@ describe("sandbox tools", () => {
     expect(lines.indexOf("  rm -rf /var/lib/apt/lists/*")).toBeLessThan(lines.findIndex((l) => l.startsWith("curl")));
     expect(script.endsWith("chmod +x /usr/local/bin/kubectl\n")).toBe(true);
     execFileSync("sh", ["-n"], { input: script }); // valid shell
+  });
+
+  it("uses config.yaml's proxy over proxy settings in the image, which beat build arguments", () => {
+    const script = toolsScript(tools({ install: 'echo "$HTTPS_PROXY|$https_proxy|$HTTP_PROXY|$http_proxy|$NO_PROXY|$no_proxy"' }));
+    const run = (env: Record<string, string>) => execFileSync("sh", ["-c", script], { env: { PATH: process.env.PATH!, HTTPS_PROXY: "http://image:1", https_proxy: "", HTTP_PROXY: "", http_proxy: "", NO_PROXY: "*", no_proxy: "*", ...env } }).toString().trim();
+    expect(run({ SWAN_PROXY: "http://p:8", SWAN_NO_PROXY: "localhost" })).toBe("http://p:8|http://p:8|http://p:8|http://p:8|localhost|localhost");
+    // No proxy in config.yaml: the image's settings stand.
+    expect(run({})).toBe("http://image:1||||*|*");
+  });
+
+  it("declares the proxy arguments in both Containerfiles, or the tools step wouldn't see them", () => {
+    for (const f of ["Containerfile", "Containerfile.base"]) {
+      const text = readFileSync(path.join(import.meta.dirname, "../../../../sandbox", f), "utf8");
+      const copy = text.indexOf("COPY swan-tools.sh");
+      expect(text.indexOf("ARG SWAN_PROXY")).toBeGreaterThan(-1);
+      expect(text.indexOf("ARG SWAN_PROXY")).toBeLessThan(copy);
+      expect(text.indexOf("ARG SWAN_NO_PROXY")).toBeLessThan(copy);
+    }
   });
 
   it("builds a new image when the tools change, and only then", () => {
