@@ -65,6 +65,12 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "head -c 150000 /dev/urandom | base64 -w 0 | head -c 200000; echo; sleep 100" } },
     { text: "Report: done." },
   ],
+  "edit-demo": [
+    { tool: "bash", args: { command: "cd /workspace/project && sed -i 's/const days = 30;/const days = config.renewBeforeDays ?? 45;/' renew.ts && printf '\\nrenewBeforeDays: 45\\n' >> values.yaml && rm old.txt", reason: "Make the renewal window configurable" } },
+    { tool: "write_file", args: { path: "/workspace/project/notes.md", content: "# Certificates\n\nRenewal keeps the old one for a day.\n" } },
+    { tool: "edit_file", args: { path: "/workspace/project/renew.ts", old_string: "  renew(host);", new_string: "  log(host);\n  renew(host, { keepOldFor: '24h' });" } },
+    { text: "Done." },
+  ],
   "ask-demo": [
     { text: "I need one decision.", tool: "ask_user", args: { question: "Which region should the bucket go in?", options: [{ label: "eu-west-1", description: "Closest to the team" }, { label: "us-east-1", description: "Where the rest of the data lives" }] } },
     { text: "Thanks, going with that." },

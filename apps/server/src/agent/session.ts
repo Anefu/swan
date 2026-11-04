@@ -22,6 +22,7 @@ import { TRACKER_TOOLS, trackerTools } from "./tracker-tools.js";
 import { SCHEDULE_TOOLS, triggerTools } from "./trigger-tools.js";
 import { ASK_USER, askUserTool, questionResult, type AskInput } from "./ask-user.js";
 import type { TrackerStore } from "../tracker.js";
+import type { ChangeTracker } from "../changes.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
@@ -47,6 +48,7 @@ export interface SessionDeps {
   providers: ProviderRegistry;
   memory: MemoryStore;
   tracker: TrackerStore;
+  changes: ChangeTracker;
   usage: UsageLedger;
   attachments: AttachmentStore;
   catalog: ModelCatalog;
@@ -195,6 +197,7 @@ export class Session {
   private restarting: Promise<void> | null = null;
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean; trigger?: string }[] = [];
   private unattended = false; // the turn running was started by a watcher or schedule
+  private changesTimer: NodeJS.Timeout | null = null;
   private lastActivity: { preview: string; reason?: string } | null = null; // the latest tool call, to explain a network request
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
@@ -958,6 +961,24 @@ export class Session {
     }
   }
 
+  /** What the folders hold as this turn starts, for the Changes pane. A huge folder doesn't hold the turn up for long. */
+  private async snapshotFolders() {
+    const folders = (this.deps.personas.get(this.personaId)?.folders ?? []).filter((f) => f.mode === "rw").map((f) => f.hostPath);
+    if (!folders.length) return;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<void>((r) => (timer = setTimeout(r, 30_000)));
+    await Promise.race([this.deps.changes.snapshot(this.id, folders), late]);
+    clearTimeout(timer);
+  }
+
+  /** Files may have changed: tell the app, at most every couple of seconds. */
+  private changesTouched() {
+    this.changesTimer ??= setTimeout(() => {
+      this.changesTimer = null;
+      this.deps.broadcast({ type: "changes.updated", personaId: this.personaId });
+    }, 2000);
+  }
+
   /** A turn from a watcher or schedule: queued behind any running turn, and run unattended. */
   trigger(label: string, prompt: string) {
     this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: prompt, trigger: label });
@@ -1056,6 +1077,7 @@ export class Session {
         this.touch();
         await this.prepareEpoch();
         await this.placeFiles(q.files);
+        if (!q.fromAgent) await this.snapshotFolders();
         this.pushUser(q.text);
         this.unattended = !!q.trigger;
         try {
@@ -1076,6 +1098,7 @@ export class Session {
       this.loopRunning = false;
       this.abort = null;
       this.touch();
+      this.deps.broadcast({ type: "changes.updated", personaId: this.personaId });
       await this.restartIfDue();
       await this.persist();
     }
@@ -1667,6 +1690,7 @@ export class Session {
       out = { text: `Tool failed: ${errMsg(e)}`, isError: true };
     }
     const durationMs = Date.now() - started;
+    if (tool.name === "bash" || tool.name === "write_file" || tool.name === "edit_file") this.changesTouched();
     if (signal.aborted) return finish("interrupted", { text: truncateMiddle(`${out.text}\n[interrupted by the user]`, this.deps.settings.toolOutputLimit), isError: true }, { durationMs });
     return finish(out.isError ? "error" : "done", out, { durationMs });
   }
@@ -1798,6 +1822,7 @@ export class SessionManager {
     if (!s) return;
     await s.stop();
     await s.deleteFile();
+    await this.deps.changes.removeSession(id);
     await this.deps.attachments.removeSession(id);
     this.sessions.delete(id);
     this.deps.broadcast({ type: "session.deleted", sessionId: id });

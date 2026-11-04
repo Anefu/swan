@@ -125,6 +125,15 @@ What runs where:
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
+### Changes pane: git on the host, over folders the agent can write
+
+The Changes pane runs git on the host, against read-write folders the sandbox can write to. A diff
+made inside the sandbox could be forged by the agent, so it isn't. To keep the host safe, git gets a
+private git dir per conversation (`~/.swan/changes`), so the folder's own `.git` is never read; no
+system or global config, so no filter, diff driver or hook has anything to run; and an environment
+built by Swan with no secrets. Symlinks are stored as links. `changes.test.ts` proves each of these
+against a tampered folder. Only file contents reach git, as data, never as arguments.
+
 ## Credential flow
 
 1. Every credential comes from a **connection** in `config.yaml` (`connections:`, hot-reloaded).

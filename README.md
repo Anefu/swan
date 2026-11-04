@@ -105,6 +105,11 @@ to use one of the persona's skills.
   anything is saved: you pick its name, point its folders at yours, and choose whether to add sign-in
   tools that run on your Mac. Connections and skills you already have are kept.
 
+- **Changes**: the +/− button at the top right opens every file changed in the persona's read-write
+  folders, since the conversation began or since your last message. It covers commands as well as
+  file edits, and folders that aren't git repositories. Swan keeps its own snapshots under
+  `~/.swan/changes`, so large folders take disk space there; `.gitignore` is honoured and
+  `node_modules` is skipped. A repository nested inside a folder isn't looked into.
 - **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
   Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
   can't ask.

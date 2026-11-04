@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { DOCK_DEFAULT, dockWidthKey, inRail, useStore, type DockMode } from "../store";
+import { CHANGES_DEFAULT, DOCK_DEFAULT, dockWidthKey, inRail, useStore, type DockMode } from "../store";
 import { cls } from "../util";
 import { MemoryUsagePane } from "./MemoryUsagePane";
 import { NetworkPane } from "./NetworkPane";
@@ -7,6 +7,7 @@ import { OverviewPane } from "./OverviewPane";
 import { AttachmentsPane } from "./AttachmentsPane";
 import { SettingsPane } from "./SettingsPane";
 import { SwanSettingsPane } from "./SwanSettings";
+import { ChangesPane } from "./ChangesPane";
 import { ImportPane } from "./ImportPane";
 import { TrackerPane, TriggersPane } from "./TrackerPane";
 
@@ -22,8 +23,10 @@ const DOCK_LABEL: Record<DockMode, string> = {
   import: "Import persona",
   tracker: "Tracker",
   triggers: "Triggers",
+  changes: "Changes",
 };
 export const DOCK_MAX = 560;
+const CHANGES_MAX = 1100;
 
 export function useMediaQuery(q: string): boolean {
   const [m, setM] = useState(() => window.matchMedia(q).matches);
@@ -37,8 +40,6 @@ export function useMediaQuery(q: string): boolean {
   return m;
 }
 
-const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.round(w)));
-
 export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
   close();
   // Back to the header button that opened it; the rail's screens share one button.
@@ -49,6 +50,8 @@ export function closeDockAndRestoreFocus(mode: DockMode, close: () => void) {
 export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
   const { state, actions } = useStore();
   const key = dockWidthKey(mode);
+  const max = mode === "changes" ? CHANGES_MAX : DOCK_MAX;
+  const clamp = (w: number) => Math.max(DOCK_MIN, Math.min(max, Math.round(w)));
   const width = clamp(state.ui.widths[key]);
   const [drag, setDrag] = useState<number | null>(null);
   const start = useRef<{ x: number; w: number } | null>(null);
@@ -74,7 +77,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
     if (e.key === "ArrowLeft") actions.setDockWidth(key, clamp(width + step));
     else if (e.key === "ArrowRight") actions.setDockWidth(key, clamp(width - step));
     else if (e.key === "Home") actions.setDockWidth(key, DOCK_MIN);
-    else if (e.key === "End") actions.setDockWidth(key, DOCK_MAX);
+    else if (e.key === "End") actions.setDockWidth(key, max);
     else return;
     e.preventDefault();
   };
@@ -91,7 +94,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
       {overlay && <div className="dock-backdrop" onClick={close} aria-hidden="true" />}
       <aside
         className={cls("dock", overlay && "overlay", drag !== null && "dragging")}
-        style={overlay ? undefined : { width: shown }}
+        style={overlay ? undefined : { width: shown, ...(mode === "changes" ? { maxWidth: "70vw" } : {}) }}
         aria-label={DOCK_LABEL[mode]}
         data-dock={mode}
       >
@@ -102,7 +105,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
             aria-orientation="vertical"
             aria-label="Resize pane"
             aria-valuemin={DOCK_MIN}
-            aria-valuemax={DOCK_MAX}
+            aria-valuemax={max}
             aria-valuenow={shown}
             tabIndex={0}
             onPointerDown={onPointerDown}
@@ -110,7 +113,7 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
             onKeyDown={onKey}
-            onDoubleClick={() => actions.setDockWidth(key, DOCK_DEFAULT)}
+            onDoubleClick={() => actions.setDockWidth(key, mode === "changes" ? CHANGES_DEFAULT : DOCK_DEFAULT)}
           />
         )}
         {mode === "overview" ? (
@@ -121,6 +124,8 @@ export function Dock({ mode, overlay }: { mode: DockMode; overlay: boolean }) {
           <SwanSettingsPane onClose={close} />
         ) : mode === "import" ? (
           <ImportPane onClose={() => closeDockAndRestoreFocus("import", actions.closeImport)} />
+        ) : mode === "changes" ? (
+          <ChangesPane onClose={close} />
         ) : mode === "tracker" ? (
           <TrackerPane onBack={back} />
         ) : mode === "triggers" ? (

@@ -1376,6 +1376,119 @@ button.line:focus-visible .chev,
   gap: 8px;
 }
 
+/* Changes */
+.rail-btn.rail-changes {
+  width: auto;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+.change-counts {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.change-add {
+  color: var(--diff-add);
+}
+.change-del {
+  color: var(--diff-del);
+}
+.changes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.change-file {
+  flex: none;
+  background: var(--sunken);
+  border-radius: var(--r);
+}
+.change-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--raised);
+  border: none;
+  border-radius: var(--r);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.change-head:hover {
+  background: var(--hover);
+}
+.change-head svg {
+  flex: none;
+  color: var(--ink-2);
+}
+.change-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.change-head .change-counts {
+  margin-left: auto;
+}
+.change-code {
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.change-row {
+  display: flex;
+  min-width: max-content;
+}
+.change-no {
+  flex: none;
+  width: 40px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--ink-2);
+  opacity: 0.65;
+  user-select: none;
+}
+.change-text {
+  flex: 1 0 auto;
+  padding: 0 12px 0 8px;
+  white-space: pre;
+}
+.change-hunk {
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.change-row.is-add {
+  background: color-mix(in srgb, var(--diff-add) 13%, transparent);
+}
+.change-row.is-del {
+  background: color-mix(in srgb, var(--diff-del) 13%, transparent);
+}
+.is-add .change-word {
+  background: color-mix(in srgb, var(--diff-add) 30%, transparent);
+  border-radius: 2px;
+}
+.is-del .change-word {
+  background: color-mix(in srgb, var(--diff-del) 30%, transparent);
+  border-radius: 2px;
+}
+.change-note {
+  margin: 0;
+  padding: 8px 12px;
+}
+
 /* Composer */
 .composer-wrap {
   flex: none;

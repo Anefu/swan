@@ -127,14 +127,13 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const c = str(item.input, ["content"]) ?? "";
       const n = lineCount(c);
-      return { verb: "Wrote", target: basename(p), result: c ? `${n} ${n === 1 ? "line" : "lines"}` : null, icon: "pencil" };
+      return { verb: "Wrote", target: basename(p), result: c ? `+${n}` : null, icon: "pencil" };
     }
     case "edit_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const n = str(item.input, ["new_string"]) ?? "";
       const o = str(item.input, ["old_string"]) ?? "";
-      const lines = Math.max(lineCount(n), lineCount(o));
-      return { verb: "Edited", target: basename(p), result: lines ? `${lines} ${lines === 1 ? "line" : "lines"}` : null, icon: "pencil" };
+      return { verb: "Edited", target: basename(p), result: editCounts(o, n), icon: "pencil" };
     }
     case "load_skill":
       return { verb: "Loaded skill", target: str(item.input, ["name"]) ?? item.inputPreview, result: null, icon: "sparkles" };
@@ -267,4 +266,17 @@ export function summarizeTools(items: ToolItem[]): string {
   }
   const s = parts.join(", ");
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** "+5 −2" for a replacement, not counting the lines it left alone at either end. */
+function editCounts(oldText: string, newText: string): string | null {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  const added = b.length - s - e;
+  const removed = a.length - s - e;
+  return [added && `+${added}`, removed && `−${removed}`].filter(Boolean).join(" ") || null;
 }

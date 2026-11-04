@@ -401,7 +401,8 @@ export type ServerEvent =
   | { type: "usage.updated"; personaId: string }
   | { type: "memory.updated"; personaId: string }
   | { type: "tracker.updated"; personaId: string }
-  | { type: "triggers.updated"; personaId: string };
+  | { type: "triggers.updated"; personaId: string }
+  | { type: "changes.updated"; personaId: string };
 
 // ---------- Attachments ----------
 // POST /api/sessions/:id/attachments {name, mediaType, data (base64)} -> AttachmentMeta  (max 20 MB)
@@ -698,4 +699,35 @@ export interface WatcherTestResult {
   items: number; // items found in the responses
   matching: { label: string; text: string }[]; // what a real run would send (first 10)
   errors: string[];
+}
+
+// ---------- What the agent changed ----------
+
+export type ChangeScope = "conversation" | "turn";
+
+export interface ChangeLine {
+  kind: "add" | "del" | "ctx";
+  old?: number;
+  new?: number;
+  text: string;
+}
+
+export interface ChangedFile {
+  folder: string; // the folder's name in the sandbox
+  path: string; // inside that folder
+  oldPath?: string;
+  status: "modified" | "added" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  truncated: boolean; // too long to show whole; the counts are still whole
+  hunks: { header: string; lines: ChangeLine[] }[];
+}
+
+export interface ChangesReport {
+  scope: ChangeScope;
+  files: ChangedFile[];
+  additions: number;
+  deletions: number;
+  problems: string[];
 }

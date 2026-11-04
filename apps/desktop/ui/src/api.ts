@@ -14,6 +14,8 @@ import type {
   PersonaImportChoices,
   PersonaImportPreview,
   PersonaImportResult,
+  ChangeScope,
+  ChangesReport,
   TrackerItem,
   TrackStatus,
   TriggersInfo,
@@ -164,6 +166,7 @@ export const api = {
   deletePersona: (id: string) => request<Ok>("DELETE", `/api/personas/${enc(id)}`),
   previewImport: (text: string) => request<PersonaImportPreview>("POST", "/api/personas/import/preview", { text }),
   importPersona: (text: string, choices: PersonaImportChoices) => request<PersonaImportResult>("POST", "/api/personas/import", { text, choices }),
+  changes: (personaId: string, scope: ChangeScope) => request<ChangesReport>("GET", `/api/personas/${enc(personaId)}/changes?scope=${scope}`),
   tracker: (personaId: string) => request<TrackerItem[]>("GET", `/api/personas/${enc(personaId)}/tracker`),
   track: (personaId: string, item: { url: string; title?: string; kind?: string; status?: TrackStatus; note?: string }) =>
     request<TrackerItem>("POST", `/api/personas/${enc(personaId)}/tracker`, item),

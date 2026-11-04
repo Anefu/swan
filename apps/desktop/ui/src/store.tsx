@@ -32,7 +32,7 @@ export type ToastKind = "info" | "success" | "warn" | "error";
  * "overview" is the rail of cards; memory, usage, network and attachments open from it and lead back to it.
  * "settings" is the selected persona's settings; "swan" is Swan's own (providers, connections, sandbox).
  */
-export type DockMode = "overview" | "settings" | "swan" | "memory" | "usage" | "network" | "attachments" | "import" | "tracker" | "triggers";
+export type DockMode = "overview" | "settings" | "swan" | "memory" | "usage" | "network" | "attachments" | "import" | "tracker" | "triggers" | "changes";
 export const RAIL_MODES: readonly DockMode[] = ["overview", "memory", "usage", "network", "attachments", "tracker", "triggers"];
 export const inRail = (mode: DockMode | null): boolean => !!mode && RAIL_MODES.includes(mode);
 /** The rail and the screens it opens share one width, so moving between them never jumps. */
@@ -164,6 +164,7 @@ export interface State {
   memoryRev: Record<string, number>;
   trackerRev: Record<string, number>;
   triggersRev: Record<string, number>;
+  changesRev: Record<string, number>;
   toasts: Toast[];
   ui: UiPrefs;
 }
@@ -174,9 +175,10 @@ const COMPOSER_KEY = "swan.composer.v1";
 const MAX_EGRESS = 2000;
 
 export const DOCK_DEFAULT = 380;
+export const CHANGES_DEFAULT = 680; // code needs the room
 const DEFAULT_UI: UiPrefs = {
   dock: null,
-  widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT, import: DOCK_DEFAULT, tracker: DOCK_DEFAULT, triggers: DOCK_DEFAULT },
+  widths: { overview: DOCK_DEFAULT, settings: DOCK_DEFAULT, swan: DOCK_DEFAULT, memory: DOCK_DEFAULT, usage: DOCK_DEFAULT, network: DOCK_DEFAULT, attachments: DOCK_DEFAULT, import: DOCK_DEFAULT, tracker: DOCK_DEFAULT, triggers: DOCK_DEFAULT, changes: CHANGES_DEFAULT },
 };
 
 /** Saved prefs hold every width, chosen or not; 400 and 440 were earlier defaults, so they move to the new one. */
@@ -226,6 +228,7 @@ function initState(): State {
     memoryRev: {},
     trackerRev: {},
     triggersRev: {},
+    changesRev: {},
     toasts: [],
     ui: loadUi(),
   };
@@ -278,7 +281,7 @@ type Action =
   | { type: "focus.approval"; sessionId: string; toolUseId: string }
   | { type: "focus.item"; sessionId: string; itemId: string }
   | { type: "personaMenu.open" }
-  | { type: "rev"; which: "usageRev" | "memoryRev" | "trackerRev" | "triggersRev"; personaId: string }
+  | { type: "rev"; which: "usageRev" | "memoryRev" | "trackerRev" | "triggersRev" | "changesRev"; personaId: string }
   | { type: "toast.add"; toast: Toast }
   | { type: "toast.remove"; id: number };
 
@@ -1068,6 +1071,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         break;
       case "triggers.updated":
         dispatch({ type: "rev", which: "triggersRev", personaId: ev.personaId });
+        break;
+      case "changes.updated":
+        dispatch({ type: "rev", which: "changesRev", personaId: ev.personaId });
         break;
     }
   };

@@ -22,6 +22,7 @@ import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { builtinTools, skillTool } from "./agent/tools.js";
 import { AnswerSchema } from "./agent/ask-user.js";
+import type { ChangeTracker } from "./changes.js";
 import { TRACK_STATUSES, type TrackerStore } from "./tracker.js";
 import type { TriggerManager } from "./triggers.js";
 import { PermissionPolicy } from "./agent/permissions.js";
@@ -45,6 +46,7 @@ export interface ApiDeps {
   attachments: AttachmentStore;
   tracker: TrackerStore;
   triggers: TriggerManager;
+  changes: ChangeTracker;
 }
 
 class HttpError extends Error {
@@ -197,6 +199,13 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     await d.tracker.removePersona(req.params.id);
     await d.personas.remove(req.params.id);
     return { ok: true };
+  });
+  app.get("/api/personas/:id/changes", async (req: FastifyRequest<{ Params: { id: string }; Querystring: { scope?: string } }>) => {
+    const p = persona(req.params.id);
+    const scope = req.query.scope === "turn" ? "turn" : "conversation";
+    const s = d.sessions.list(p.id)[0];
+    if (!s) return { scope, files: [], additions: 0, deletions: 0, problems: [] };
+    return d.changes.diff(s.id, p.folders.filter((f) => f.mode === "rw").map((f) => ({ hostPath: f.hostPath, name: path.basename(f.mountPath) })), scope);
   });
   app.get("/api/personas/:id/tracker", async (req: P) => {
     persona(req.params.id);

@@ -1,6 +1,9 @@
 import { inRail, usePendingApprovals, useStore } from "../store";
 import { cls } from "../util";
-import { IconOverview, IconSettings, IconShield, IconSwan } from "./icons";
+import { api } from "../api";
+import { Counts } from "./ChangesPane";
+import { IconDiff, IconOverview, IconSettings, IconShield, IconSwan } from "./icons";
+import { useLoad } from "./MemoryUsagePane";
 import { isMac } from "./ui";
 
 /**
@@ -16,6 +19,10 @@ export function Rail() {
   const settingsOn = dock === "settings";
   const swanOn = dock === "swan";
   const settingsLabel = `Settings${settingsDirty ? " (unsaved changes)" : ""}`;
+  const persona = state.selectedPersonaId;
+  const changesOn = dock === "changes";
+  const { data: changes } = useLoad(() => (persona ? api.changes(persona, "conversation") : Promise.resolve(undefined)), [persona, state.changesRev[persona ?? ""] ?? 0]);
+  const changed = changes && changes.additions + changes.deletions > 0;
   return (
     <nav className="header-tools" aria-label="Panels">
       {approvals.length > 0 && (
@@ -28,6 +35,20 @@ export function Rail() {
         >
           <IconShield size={18} />
           <span className="rail-count">{approvals.length}</span>
+        </button>
+      )}
+      {(changed || changesOn) && (
+        <button
+          type="button"
+          id="trigger-changes"
+          className={cls("rail-btn rail-changes", changesOn && "is-on")}
+          aria-pressed={changesOn}
+          aria-label={`Changes: ${changes?.additions ?? 0} lines added, ${changes?.deletions ?? 0} removed`}
+          title="Changes"
+          onClick={() => actions.openDock(changesOn ? null : "changes")}
+        >
+          <IconDiff size={16} />
+          {changes && <Counts additions={changes.additions} deletions={changes.deletions} />}
         </button>
       )}
       <button
