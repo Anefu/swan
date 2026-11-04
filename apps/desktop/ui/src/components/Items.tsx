@@ -735,7 +735,7 @@ function QuestionPrompt({ item, sessionId }: { item: ToolItem; sessionId: string
           </button>
         )}
         <button type="button" className="link-btn" disabled={busy} onClick={() => document.getElementById("composer-input")?.focus()}>
-          Something else…
+          Other
         </button>
         <button type="button" className="link-btn" disabled={busy} onClick={() => void send([])}>
           Skip
