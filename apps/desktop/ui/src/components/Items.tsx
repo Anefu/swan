@@ -676,79 +676,73 @@ function useAutoFocus(ref: React.RefObject<HTMLElement | null>) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-/** The agent's question: one click answers, or several and Send when it allows several, or the user's own words. */
+/** The agent's question, inline: one click answers, or toggle several and Send. The message box takes any other answer. */
 function QuestionPrompt({ item, sessionId }: { item: ToolItem; sessionId: string }) {
   const { actions } = useStore();
   const input = item.input as { question?: string; options?: { label: string; description?: string }[]; multiple?: boolean };
   const options = input.options ?? [];
   const [selected, setSelected] = useState<string[]>([]);
-  const [other, setOther] = useState("");
   const [busy, setBusy] = useState(false);
+  const [described, setDescribed] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   useAutoFocus(ref);
 
-  const send = async (chosen: string[], words: string) => {
+  const send = async (chosen: string[]) => {
     if (busy) return;
     setBusy(true);
-    const ok = await actions.approve(sessionId, item.id, { decision: "allow", answer: { selected: chosen, ...(words.trim() ? { other: words.trim() } : {}) } });
+    const ok = await actions.approve(sessionId, item.id, { decision: "allow", answer: { selected: chosen } });
     if (!ok) setBusy(false);
+  };
+  const choose = (label: string) => {
+    if (input.multiple) setSelected((s) => (s.includes(label) ? s.filter((x) => x !== label) : [...s, label]));
+    else void send([label]);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
     const o = options[Number(e.key) - 1];
     if (!o || isEditableTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
     e.preventDefault();
-    if (input.multiple) setSelected((s) => (s.includes(o.label) ? s.filter((x) => x !== o.label) : [...s, o.label]));
-    else void send([o.label], "");
+    choose(o.label);
   };
 
   return (
-    <div ref={ref} id={`approval-${item.id}`} className="prompt" tabIndex={0} role="group" aria-label={`Question: ${input.question ?? ""}`} onKeyDown={onKeyDown}>
-      <p className="prompt-q">{input.question}</p>
-      {input.multiple ? (
-        <div className="prompt-options">
-          {options.map((o) => (
-            <label key={o.label} className="check-row">
-              <input
-                type="checkbox"
-                checked={selected.includes(o.label)}
-                disabled={busy}
-                onChange={(e) => setSelected((s) => (e.target.checked ? [...s, o.label] : s.filter((x) => x !== o.label)))}
-              />
-              <span>
-                {o.label}
-                {o.description && <span className="muted small"> · {o.description}</span>}
-              </span>
-            </label>
-          ))}
-        </div>
-      ) : (
-        <div className="prompt-options">
-          {options.map((o) => (
-            <button key={o.label} type="button" className="btn prompt-option" disabled={busy} onClick={() => void send([o.label], "")}>
-              <span>{o.label}</span>
-              {o.description && <span className="muted small">{o.description}</span>}
+    <div ref={ref} id={`approval-${item.id}`} className="question" tabIndex={0} role="group" aria-label={`Question: ${input.question ?? ""}`} onKeyDown={onKeyDown}>
+      <p className="question-q">{input.question}</p>
+      <div className="row gap wrap">
+        {options.map((o) => {
+          const on = selected.includes(o.label);
+          return (
+            <button
+              key={o.label}
+              type="button"
+              className={cls("btn sm", on && "is-on")}
+              aria-pressed={input.multiple ? on : undefined}
+              aria-description={o.description}
+              disabled={busy}
+              onClick={() => choose(o.label)}
+              onMouseEnter={() => setDescribed(o.description ?? null)}
+              onMouseLeave={() => setDescribed(null)}
+              onFocus={() => setDescribed(o.description ?? null)}
+              onBlur={() => setDescribed(null)}
+            >
+              {o.label}
             </button>
-          ))}
-        </div>
-      )}
-      <form
-        className="row gap"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (selected.length || other.trim()) void send(selected, other);
-        }}
-      >
-        <input className="input grow" aria-label="Answer in your own words" placeholder="Or answer in your own words" value={other} disabled={busy} onChange={(e) => setOther(e.target.value)} />
-        {(input.multiple || other.trim()) && (
-          <button type="submit" className="btn sm primary" disabled={busy || (!selected.length && !other.trim())}>
+          );
+        })}
+        {input.multiple && selected.length > 0 && (
+          <button type="button" className="btn sm primary" disabled={busy} onClick={() => void send(selected)}>
             {busy && <Spinner size={10} />}
             Send
           </button>
         )}
-        <button type="button" className="btn sm" disabled={busy} onClick={() => void send([], "")}>
+        <button type="button" className="link-btn" disabled={busy} onClick={() => document.getElementById("composer-input")?.focus()}>
+          Something else…
+        </button>
+        <button type="button" className="link-btn" disabled={busy} onClick={() => void send([])}>
           Skip
         </button>
-      </form>
+      </div>
+      {/* Room is kept for it only when there is one to show, so the options don't jump. */}
+      {options.some((o) => o.description) && <p className="question-desc small muted">{described ?? "\u00a0"}</p>}
     </div>
   );
 }

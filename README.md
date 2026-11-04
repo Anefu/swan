@@ -105,8 +105,9 @@ to use one of the persona's skills.
   anything is saved: you pick its name, point its folders at yours, and choose whether to add sign-in
   tools that run on your Mac. Connections and skills you already have are kept.
 
-- **Questions**: when the agent needs you to choose, it shows a card with options and waits. Pick
-  one, type your own answer (there or in the message box), or skip. Unattended runs can't ask.
+- **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
+  Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
+  can't ask.
 - **Tracker**: the merge requests, tickets, docs and deploys the agent creates or follows, with
   their status (in progress, waiting, done, dropped). Open it from the Overview; you can add items
   and change their status too.

@@ -1175,22 +1175,32 @@ button.line:focus-visible .chev,
   margin: 0;
   font-size: 15px;
 }
-.prompt-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
+.question {
+  margin: 2px 0 2px 2px;
+  border-radius: var(--r-sm);
+  scroll-margin: 96px;
 }
-.prompt-option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+.question:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.question-q {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.question .btn {
   height: auto;
-  width: 100%;
-  padding-block: 8px;
-  text-align: left;
+  min-height: 30px;
   white-space: normal;
+  text-align: left;
+}
+.question .btn.is-on,
+.question .btn.is-on:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.question-desc {
+  margin: 6px 0 0;
 }
 .prompt-actions {
   display: flex;
