@@ -20,6 +20,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
   const [folders, setFolders] = useState<{ path: string; keep: boolean }[]>([]);
   const [tools, setTools] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
+  const [acceptTools, setAcceptTools] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
     if (!file || !preview || idError || folderError || !name.trim()) return;
     setBusy(true);
     try {
-      const r = await api.importPersona(file.text, { id, name: name.trim(), folders: folders.map((f) => (f.keep ? f.path.trim() : null)), commandConnections: tools, skills });
+      const r = await api.importPersona(file.text, { id, name: name.trim(), folders: folders.map((f) => (f.keep ? f.path.trim() : null)), commandConnections: tools, skills, acceptTools });
       const extra = [r.connectionsAdded.length && `connections ${r.connectionsAdded.join(", ")}`, r.skillsAdded.length && `skills ${r.skillsAdded.join(", ")}`].filter(Boolean);
       actions.toast("success", `${r.persona.name} imported${extra.length ? `, with ${extra.join(" and ")}` : ""}.`, "Import");
       actions.closeImport();
@@ -174,6 +175,23 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
                 {preview.skillsNotIncluded.length > 0 && (
                   <p className="hint">Not in the file, and not on this Mac: {preview.skillsNotIncluded.join(", ")}.</p>
                 )}
+              </section>
+            )}
+
+            {preview.access.tools && (
+              <section className="swan-section">
+                <h3>Sandbox tools</h3>
+                <p className="small">Built into this persona's sandbox, as root, with open network access during the build. Read them before you add them.</p>
+                {preview.access.tools.packages.length > 0 && (
+                  <p className="small">
+                    Packages: <span className="mono">{preview.access.tools.packages.join(", ")}</span>
+                  </p>
+                )}
+                {preview.access.tools.install && <pre className="small">{preview.access.tools.install}</pre>}
+                <label className="check-row">
+                  <input type="checkbox" checked={acceptTools} onChange={(e) => setAcceptTools(e.target.checked)} />
+                  <span>Add these tools</span>
+                </label>
               </section>
             )}
 

@@ -24,6 +24,7 @@ import { ASK_USER, askUserTool, questionResult, type AskInput } from "./ask-user
 import type { TrackerStore } from "../tracker.js";
 import type { DiffStore } from "../diffs.js";
 import { CLEAR_DIFFS, diffTools, permissionView } from "./diff-tools.js";
+import { hasTools } from "../sandbox/image.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
@@ -199,6 +200,7 @@ export class Session {
   private restarting: Promise<void> | null = null;
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean; trigger?: string }[] = [];
   private unattended = false; // the turn running was started by a watcher or schedule
+  private toolsNoticed = false;
   private lastActivity: { preview: string; reason?: string } | null = null; // the latest tool call, to explain a network request
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
@@ -610,7 +612,12 @@ export class Session {
 
     try {
       if (cfg.sandbox.image) this.setStatus("starting", `preparing the sandbox from ${cfg.sandbox.image}`);
-      const image = await runtime.sessionImage(cfg.sandbox.image);
+      else if (cfg.sandbox.tools) this.setStatus("starting", "preparing the sandbox with this persona's tools");
+      const image = await runtime.sessionImage(cfg.sandbox);
+      if (!cfg.sandbox.tools && hasTools(settings.sandboxTools) && !this.toolsNoticed) {
+        this.toolsNoticed = true;
+        this.notice("warn", "sandboxTools in config.yaml is being replaced: move it to this persona's sandbox.tools.");
+      }
       this.setStatus("starting", "starting sandbox container");
       this.container = await runtime.startSession({
         sessionId: this.id,

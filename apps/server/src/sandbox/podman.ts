@@ -5,7 +5,7 @@ import path from "node:path";
 import type { FolderMount, RuntimeStatus } from "@ph/shared";
 import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
-import { adoptFiles, adoptKey, buildArgs, proxyEnv, buildFiles, buildKey } from "./image.js";
+import { adoptFiles, adoptKey, buildArgs, hasTools, proxyEnv, buildFiles, buildKey } from "./image.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
 
 export interface RunResult {
@@ -216,9 +216,8 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   async ensureImage(force = false): Promise<void> {
     const containerfile = await fs.readFile(paths.containerfile, "utf8");
     const mirrors = this.settings.mirrors;
-    const tools = this.settings.sandboxTools;
-    const files = buildFiles(mirrors, this.extraCas, tools);
-    this.buildKey = buildKey(containerfile, mirrors, files, tools);
+    const files = buildFiles(mirrors, this.extraCas);
+    this.buildKey = buildKey(containerfile, mirrors, files);
     if (!force && (await this.run(["image", "exists", this.imageTag])).code === 0) return;
     this.update({ busy: "building sandbox image (first run takes a few minutes)", imageReady: false });
     log.info("runtime", `building ${this.imageTag}${mirrors.baseImage ? ` from ${mirrors.baseImage}` : ""}`);
@@ -227,20 +226,23 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
   }
 
   /**
-   * The image a session runs: Swan's, or a persona's own (sandbox.image) with Swan's layer on top
-   * (Containerfile.base), built on first use and again when the image reference, the layer or
-   * sandboxTools change. The relay always runs Swan's image.
+   * The image a session runs: Swan's, or a layer (Containerfile.base) over the persona's sandbox.image
+   * or Swan's image with its sandbox.tools, built on first use and again when the image, the layer or
+   * the tools change. The relay always runs Swan's image. config.yaml's sandboxTools stand in for
+   * tools a persona doesn't set.
    */
-  async sessionImage(base?: string): Promise<string> {
-    if (!base) return this.imageTag;
+  async sessionImage(sandbox: { image?: string; tools?: Settings["sandboxTools"] }): Promise<string> {
+    const tools = sandbox.tools ?? this.settings.sandboxTools;
+    if (!sandbox.image && !hasTools(tools)) return this.imageTag;
+    const base = sandbox.image ?? this.imageTag;
     const containerfile = await fs.readFile(paths.containerfileBase, "utf8");
-    const files = adoptFiles(this.extraCas, this.settings.sandboxTools, this.settings.mirrors);
+    const files = adoptFiles(this.extraCas, tools, this.settings.mirrors);
     const tag = `${this.rt.image}-own:ca-${this.ca.fingerprint}-${adoptKey(containerfile, base, files)}`;
     let p = this.adopting.get(tag);
     if (!p) {
       p = (async () => {
         if ((await this.run(["image", "exists", tag])).code === 0) return tag;
-        this.update({ busy: `building the sandbox from ${base}` });
+        this.update({ busy: sandbox.image ? `building the sandbox from ${base}` : "adding this persona's tools to the sandbox" });
         try {
           log.info("runtime", `building ${tag} from ${base}`);
           await this.build(tag, containerfile, files, buildArgs({ ...this.settings.mirrors, baseImage: base }, this.settings.proxy), `own-${tag.slice(-12)}`);

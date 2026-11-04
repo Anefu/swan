@@ -57,6 +57,12 @@ const ProviderSchema = z.object({
 const HttpUrl = z.string().regex(/^https?:\/\/[^\s'"#\\`$]+$/, "expected an http(s) URL without spaces, quotes, # or $");
 const ImageRef = z.string().regex(/^[a-z0-9][a-z0-9._\-/:@]*$/i, "expected an image reference such as registry.example.com/library/node:22-bookworm-slim");
 
+/** Extra tools in a persona's sandbox (kubectl, the AWS CLI…): packages, then a script run as root while the image builds. */
+export const SandboxToolsSchema = z.object({
+  packages: z.array(z.string().regex(/^[a-z0-9][a-z0-9+.-]*(=[A-Za-z0-9.+:~-]+)?$/, "expected a package name, or name=version")).default([]),
+  install: z.string().max(20_000).optional(),
+});
+
 export const SettingsSchema = z.object({
   port: z.number().int().default(4317),
   proxyPort: z.number().int().default(4318),
@@ -97,13 +103,8 @@ export const SettingsSchema = z.object({
       npm: HttpUrl.optional(), // npm registry
     })
     .prefault({}),
-  // Extra tools in the sandbox image for every persona (kubectl, the AWS CLI…). Changing it rebuilds the image.
-  sandboxTools: z
-    .object({
-      packages: z.array(z.string().regex(/^[a-z0-9][a-z0-9+.-]*(=[A-Za-z0-9.+:~-]+)?$/, "expected a Debian package name, or name=version")).default([]),
-      install: z.string().max(20_000).optional(), // shell script, run as root while the image builds
-    })
-    .prefault({}),
+  // Replaced by a persona's sandbox.tools; still used by personas that set none.
+  sandboxTools: SandboxToolsSchema.prefault({}),
   connections: z.unknown().optional(), // validated and hot-reloaded by the ConnectionManager
   toolOutputLimit: z.number().int().default(30_000),
   bashTimeoutMs: z.number().int().default(120_000),
@@ -138,12 +139,6 @@ skillDirs: []
 # mirrors:
 #   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim
 #   pypi: https://artifactory.example.com/artifactory/api/pypi/pypi-remote/simple
-# Extra tools in the sandbox (Debian packages, and a script run as root while the image builds):
-# sandboxTools:
-#   packages: [postgresql-client]
-#   install: |
-#     curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.31.2/bin/linux/$(dpkg --print-architecture)/kubectl"
-#     chmod +x /usr/local/bin/kubectl
 # Where agents' credentials come from. Values live in secrets.yaml as connection/NAME.
 connections:
   github:

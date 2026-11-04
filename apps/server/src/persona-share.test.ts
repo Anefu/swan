@@ -110,6 +110,19 @@ describe("importing a persona", () => {
     expect((await fs.stat(path.join(paths.skills, "tour", "scripts", "run.sh"))).mode & 0o111).toBeTruthy();
   });
 
+  it("shows a persona's sandbox tools and adds them only when accepted, since they run as root in the build", async () => {
+    await d.personas.save("tooly", "name: Tooly\nsandbox:\n  memory: 4g\n  tools:\n    packages: [jq]\n    install: curl https://example.com/x | sh\n", { create: true });
+    const text = await exportPersona(d, "tooly", []);
+    expect(YAML.parse(text).needs.sandboxTools).toBe(false);
+    expect((await previewImport(d, text)).access.tools).toEqual({ packages: ["jq"], install: "curl https://example.com/x | sh" });
+    const base = { name: "T", folders: [], skills: [], commandConnections: [] };
+    await importPersona(d, text, { ...base, id: "tools-left-out" });
+    expect(d.personas.get("tools-left-out")!.config!.sandbox).toMatchObject({ memory: "4g" });
+    expect(d.personas.get("tools-left-out")!.config!.sandbox.tools).toBeUndefined();
+    await importPersona(d, text, { ...base, id: "tools-kept", acceptTools: true });
+    expect(d.personas.get("tools-kept")!.config!.sandbox.tools).toMatchObject({ packages: ["jq"] });
+  });
+
   it("adds a new sign-in tool only when ticked, and refuses taken ids", async () => {
     await fs.writeFile(paths.config, CONFIG());
     await d.connections.loadConfig();

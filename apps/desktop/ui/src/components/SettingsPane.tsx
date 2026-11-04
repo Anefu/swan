@@ -1098,6 +1098,7 @@ function ExportPersona({ persona }: { persona: PersonaSummary }) {
         A file to share {persona.name}: its settings and the connections it uses, without any secret values. Check its instructions and
         environment variables before sharing.
       </p>
+      {persona.hasSandboxTools && <p className="small">It includes the persona's sandbox tools and install script, so check those for internal addresses too.</p>}
       {persona.skills.length > 0 && (
         <div role="group" aria-label="Include skills">
           <p className="small muted">Include skills</p>

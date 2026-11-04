@@ -9,7 +9,7 @@ import type { Effort, FolderMount, McpServerSummary, PersonaConfigView, PersonaS
 import { PersonaConnectionsSchema, credentialRefs } from "./connections/config.js";
 import type { ConnectionManager } from "./connections/manager.js";
 import { patternError } from "./connections/rules.js";
-import { PH_HOME, paths, type Settings } from "./settings.js";
+import { PH_HOME, paths, SandboxToolsSchema, type Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { TypedEmitter, debounce, errMsg, exists, expandHome, log, writeFileAtomic } from "./util.js";
 
@@ -102,6 +102,8 @@ export const PersonaSchema = z.strictObject({
     .strictObject({
       // An image of your own; Swan adds its layer (certificates, uid 1000 user) before running it.
       image: z.string().regex(/^[a-z0-9][a-z0-9._\-/:@]*$/i, "expected an image reference such as registry.example.com/team/dev-tools:2026.10").optional(),
+      // Extra tools, built into this persona's image. No secrets here: they would stay in the image.
+      tools: SandboxToolsSchema.strict().optional(),
       cpus: z.number().positive().default(2),
       memory: z.string().default("2g"),
       pidsLimit: z.number().int().positive().default(512),
@@ -545,6 +547,7 @@ export class PersonaStore extends TypedEmitter<Events> {
       model: { provider: model.provider, id: model.id, effort: cfg?.model?.effort },
       folders: p.folders,
       skills: cfg?.skills ?? [],
+      hasSandboxTools: !!cfg?.sandbox.tools,
       mcpServers,
       connections: Object.keys(cfg?.connections ?? {}),
       credentials,

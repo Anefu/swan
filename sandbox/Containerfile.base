@@ -1,6 +1,6 @@
-# Swan's layer over a sandbox image of your own (config.yaml sandboxImage, or a persona's
-# sandbox.image). It adds only what the sandbox needs: Swan's certificate and caFiles, a uid 1000
-# user with a home, /workspace and /skills, and the certificate variables; then sandboxTools.
+# Swan's layer over a persona's sandbox.image, or over Swan's own image for a persona with
+# sandbox.tools. It adds only what the sandbox needs: Swan's certificate and caFiles, a uid 1000
+# user with a home, /workspace and /skills, and the certificate variables; then the tools.
 # swan/adopt.sh checks for bash, coreutils and awk first and says what is missing.
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
@@ -21,7 +21,7 @@ ENV NODE_EXTRA_CA_CERTS=/usr/local/share/swan/ca-bundle.pem \
     UV_NATIVE_TLS=1 \
     NODE_USE_ENV_PROXY=1
 
-# sandboxTools, with the image's own package manager.
+# sandbox.tools, with the image's own package manager.
 ARG SWAN_PROXY
 ARG SWAN_NO_PROXY
 COPY swan-tools.sh /tmp/swan-tools.sh

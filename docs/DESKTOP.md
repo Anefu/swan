@@ -75,24 +75,26 @@ internal hosts as on any other host.
 
 ## Tools in the sandbox
 
-The sandbox has git, curl, jq, Python, Node, ripgrep and a few more. Add your own for every persona
-under `sandboxTools` in `~/.swan/config.yaml`, then restart Swan; it rebuilds the image (the first
-build after a change takes a few minutes, later steps come from the cache):
+The sandbox has git, curl, jq, Python, Node, ripgrep and a few more. Add your own under
+`sandbox.tools` in a persona's YAML. Swan builds them into that persona's image, and restarts its
+sandbox between turns (the first build after a change takes a few minutes). `sandboxTools` in
+`config.yaml` still works for personas that set no tools of their own, but move it to the persona:
 
 ```yaml
-sandboxTools:
-  packages: [postgresql-client]   # Debian packages
-  install: |                      # runs as root in /tmp while the image builds
-    # kubectl, checked against its published checksum (or pin a version: v=v1.31.2)
-    v=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
-    arch=$(dpkg --print-architecture)
-    curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl"
-    curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl.sha256"
-    echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
-    install -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl kubectl.sha256
-    # AWS CLI v2
-    curl -fsSLo awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
-    unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
+sandbox:
+  tools:
+    packages: [postgresql-client]   # with the image's package manager
+    install: |                      # runs as root in /tmp while the image builds
+      # kubectl, checked against its published checksum (or pin a version: v=v1.31.2)
+      v=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+      arch=$(dpkg --print-architecture)
+      curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl"
+      curl -fsSLO "https://dl.k8s.io/release/$v/bin/linux/$arch/kubectl.sha256"
+      echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+      install -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl kubectl.sha256
+      # AWS CLI v2
+      curl -fsSLo awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
+      unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
 ```
 
 - The script runs with `sh -eu`: the build stops at the first failing command and shows its output
@@ -116,7 +118,7 @@ sandbox:
 Swan pulls it (through `proxy`) and builds a thin layer on top, once per image and again when it
 changes: Swan's certificate and `caFiles` (in the system store and a bundle that `SSL_CERT_FILE`,
 `AWS_CA_BUNDLE` and similar point to), root certificates if the image has none, a uid 1000 user
-with a home (the image's own if it has one), `/workspace`, and then `sandboxTools` with the image's
+with a home (the image's own if it has one), `/workspace`, and then `sandbox.tools` with the image's
 package manager (apt, apk or dnf). Nothing else changes. The image needs `bash` and the usual
 coreutils; Swan says what is missing if not. Build for `arm64` (Apple silicon), or the sandbox runs
 emulated. The sandbox's limits are the same as with Swan's image: they come from how Swan runs the

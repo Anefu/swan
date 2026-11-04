@@ -88,7 +88,7 @@ export async function exportPersona(d: ShareDeps, id: string, skillNames: string
     const s = d.skills.get(name);
     if (s) skills[name] = { files: await readSkill(s.hostPath) };
   }
-  const t = d.settings.sandboxTools;
+  const t = d.settings.sandboxTools; // config.yaml's stand in for tools the persona doesn't set, and don't travel
   const file: ShareFile = {
     swanPersona: 1,
     exportedAt: new Date().toISOString(),
@@ -96,9 +96,9 @@ export async function exportPersona(d: ShareDeps, id: string, skillNames: string
     persona: p.yaml,
     connections,
     skills,
-    needs: { values, commands, sandboxTools: t.packages.length > 0 || !!t.install?.trim() },
+    needs: { values, commands, sandboxTools: !p.config.sandbox.tools && (t.packages.length > 0 || !!t.install?.trim()) },
   };
-  const header = `# A Swan persona. Import it in Swan: persona menu → Import persona…\n# It holds no secret values; check the persona's instructions and env before sharing.\n`;
+  const header = `# A Swan persona. Import it in Swan: persona menu → Import persona…\n# It holds no secret values; check the persona's instructions, env and sandbox tools before sharing.\n`;
   return header + YAML.stringify(file, { lineWidth: 0 });
 }
 
@@ -155,6 +155,7 @@ export async function previewImport(d: ShareDeps, text: string): Promise<Persona
       credentialRules: Object.entries(c.connections).flatMap(([conn, pc]) => pc.rules.map((r) => ({ connection: conn, credential: r.credential, api: r.api, allow: r.allow, ask: r.ask, deny: r.deny }))),
       mcpServers: Object.entries(c.mcpServers).map(([name, s]) => (isHttpMcp(s) ? { name, kind: "http" as const, target: s.url } : { name, kind: "stdio" as const, target: [s.command, ...s.args].join(" ") })),
       image: c.sandbox.image ?? null,
+      tools: c.sandbox.tools ? { packages: c.sandbox.tools.packages, install: c.sandbox.tools.install?.trim() || null } : null,
       envNames: Object.keys(c.env),
     },
     connections,
@@ -177,6 +178,8 @@ export async function importPersona(d: ShareDeps, text: string, ch: PersonaImpor
   const folders = original.flatMap((x, i) => (ch.folders[i] ? [{ path: ch.folders[i]!, ...(x.mount ? { mount: x.mount } : {}), mode: x.mode ?? "ro" }] : []));
   doc.set("name", ch.name.trim());
   doc.set("folders", doc.createNode(folders));
+  // The script runs as root in a build outside the egress proxy, so it comes along only when the user agrees.
+  if (ch.acceptTools !== true && doc.hasIn(["sandbox", "tools"])) doc.deleteIn(["sandbox", "tools"]);
 
   // Skills first, so the persona finds them when it is checked.
   const skillsAdded: string[] = [];

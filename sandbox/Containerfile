@@ -26,12 +26,6 @@ RUN update-ca-certificates
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node \
  && mkdir -p /workspace /skills && chown agent:agent /workspace
 
-# Extra tools from config.yaml (sandboxTools): packages, then the install script, as root with
-# the proxy, mirrors and certificates above. Its own layer, so changing it rebuilds only from here.
-ARG SWAN_PROXY
-ARG SWAN_NO_PROXY
-COPY swan-tools.sh /tmp/swan-tools.sh
-RUN sh /tmp/swan-tools.sh && rm -f /tmp/swan-tools.sh
 
 # The whole bundle: the harness CA plus any extra roots from caFiles.
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \

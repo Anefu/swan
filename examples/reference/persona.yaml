@@ -80,3 +80,9 @@ sandbox:
   pidsLimit: 512
   workdir: /workspace/payments   # where bash starts
   # image: registry.example.com/team/dev-tools:2026.10   # an image of your own; Swan adds its layer (docs/DESKTOP.md)
+  # tools:                            # extra tools, built into this persona's image. No secrets here.
+  #   packages: [postgresql-client]   # with the image's package manager
+  #   install: |                      # runs as root in /tmp while the image builds, with sh -eu
+  #     arch=$(dpkg --print-architecture)
+  #     curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.31.2/bin/linux/$arch/kubectl"
+  #     chmod +x /usr/local/bin/kubectl

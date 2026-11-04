@@ -27,6 +27,7 @@ export interface PersonaSummary {
   model: { provider: string; id: string; effort?: Effort };
   folders: FolderMount[];
   skills: string[];
+  hasSandboxTools: boolean; // sandbox.tools is set: an export carries them
   mcpServers: McpServerSummary[];
   connections: string[]; // connection names the persona's rules use
   credentials: string[]; // "<connection>/<name>" refs its rules name
@@ -638,6 +639,7 @@ export interface PersonaImportPreview {
     credentialRules: { connection: string; credential: string; api: string; allow: string[]; ask: string[]; deny: string[] }[];
     mcpServers: { name: string; kind: "stdio" | "http"; target: string }[];
     image: string | null;
+    tools: { packages: string[]; install: string | null } | null; // built into the image, as root; only with acceptTools
     envNames: string[];
   };
   connections: { name: string; type: "static" | "command"; status: "new" | "same" | "different"; hosts: string[]; command?: string[] }[];
@@ -652,6 +654,7 @@ export interface PersonaImportChoices {
   folders: (string | null)[]; // a path on this Mac for each of the preview's folders, or null to leave it out
   commandConnections: string[]; // new sign-in tools the user agreed to run on this Mac
   skills: string[]; // skills from the file to add
+  acceptTools?: boolean; // keep the persona's sandbox.tools; left out otherwise
 }
 
 export interface PersonaImportResult {

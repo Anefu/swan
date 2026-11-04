@@ -301,14 +301,16 @@ proxy through a process-wide dispatcher and trust the extra roots; the Copilot r
 connection wrappers get the same settings as `HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS`. The
 sandbox image is built from `mirrors.baseImage` with the proxy as predefined build arguments (not
 kept in the image; a loopback proxy becomes `host.containers.internal`), a generated setup script
-points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle. A last
-root step installs `sandboxTools` (Debian packages, then an install script), in a layer of its own
-so changing it rebuilds only from there; mirrors, certificates and tools are part of the image tag,
-so a change builds a new image. The build's network use is the user's own config, not an agent's:
-nothing in the sandbox can edit `config.yaml`. A persona's `sandbox.image` is used as a base for a
-thin layer (`sandbox/Containerfile.base`: Swan's certificate and `caFiles`, root certificates if
-missing, a uid 1000 user, `/workspace`, `sandboxTools`), built on first use under its own tag; the
-relay keeps Swan's image. The container's limits come from how it is run, so an image cannot
+points apt, pip, uv and npm at any mirrors, and the extra roots join the image's CA bundle; mirrors
+and certificates are part of the image tag, so a change builds a new image. A persona's
+`sandbox.image`, or Swan's image when it only has `sandbox.tools`, is the base for a thin layer
+(`sandbox/Containerfile.base`: Swan's certificate and `caFiles`, root certificates if missing, a
+uid 1000 user, `/workspace`, then the tools as root), built on first use under its own tag; the
+relay keeps Swan's image. Builds don't go through the egress proxy, so their network use is the
+user's own config, not an agent's: nothing in the sandbox can edit `config.yaml` or a persona's
+file. An imported persona's tools are left out unless the user accepts them on the review screen.
+In the tools step `config.yaml`'s `proxy` also overrides proxy variables set by the image, whose
+`ENV` would otherwise beat the build arguments. The container's limits come from how it is run, so an image cannot
 loosen them. The egress proxy chains
 agents' traffic to the upstream proxy after its own checks (step 3 of the credential flow): blind
 tunnels and plain HTTP as well as the TLS connections it makes for credential hosts.
