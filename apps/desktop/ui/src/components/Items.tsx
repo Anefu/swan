@@ -400,13 +400,14 @@ export const ToolLine = memo(function ToolLine({
   const [open, setOpen] = useState(false);
   const d = describeTool(item, useContext(AgentNames));
   const pending = item.status === "pending_approval";
-  const status = TOOL_STATUS_TEXT[item.status];
+  const isQuestion = item.name === "ask_user";
+  const status = isQuestion && pending ? "Waiting for you" : TOOL_STATUS_TEXT[item.status];
   const isNet = item.name === "network_access";
   const isCred = item.name === "credential_use";
   // Network and credential asks are decisions, not commands: their output is a one-line outcome.
-  const isAsk = isNet || isCred;
+  const isAsk = isNet || isCred || isQuestion;
   const meta: string[] = [];
-  if (isAsk && item.output && !pending) meta.push(item.output);
+  if (isAsk && !isQuestion && item.output && !pending) meta.push(item.output);
   if (d.result) meta.push(d.result);
   if (item.durationMs !== undefined && !isAsk && !AGENT_CONTROL_TOOLS.has(item.name)) meta.push(fmtDuration(item.durationMs));
   const showPrompt = pending && (promptOpen || open);
@@ -415,7 +416,7 @@ export const ToolLine = memo(function ToolLine({
       <button type="button" className="line" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ToolGlyph item={item} />
         <span className="line-verb">{d.verb}</span>
-        {d.target && <span className={cls("line-target", !d.prose && "mono")}>{d.target}</span>}
+        {d.target && !(isQuestion && showPrompt) && <span className={cls("line-target", !d.prose && "mono")}>{d.target}</span>}
         {meta.length > 0 && <span className="line-meta">· {meta.join(" · ")}</span>}
         {status && item.status !== "running" && (
           <span className={cls("line-status", pending ? "tone-attention" : item.status === "interrupted" ? "tone-muted" : "tone-error")}>
@@ -437,11 +438,13 @@ export const ToolLine = memo(function ToolLine({
       )}
       {open && isAsk && !pending && (
         <div className="line-detail">
-          <Facts item={item} />
+          {isQuestion ? <p className="small">{item.output}</p> : <Facts item={item} />}
         </div>
       )}
       {showPrompt &&
-        (isNet ? (
+        (isQuestion ? (
+          <QuestionPrompt item={item} sessionId={sessionId} />
+        ) : isNet ? (
           <NetworkPrompt item={item} sessionId={sessionId} />
         ) : isCred ? (
           <CredentialPrompt item={item} sessionId={sessionId} />
@@ -671,6 +674,83 @@ function useAutoFocus(ref: React.RefObject<HTMLElement | null>) {
     const ae = document.activeElement;
     if (!ae || ae === document.body) ref.current?.focus({ preventScroll: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/** The agent's question: one click answers, or several and Send when it allows several, or the user's own words. */
+function QuestionPrompt({ item, sessionId }: { item: ToolItem; sessionId: string }) {
+  const { actions } = useStore();
+  const input = item.input as { question?: string; options?: { label: string; description?: string }[]; multiple?: boolean };
+  const options = input.options ?? [];
+  const [selected, setSelected] = useState<string[]>([]);
+  const [other, setOther] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useAutoFocus(ref);
+
+  const send = async (chosen: string[], words: string) => {
+    if (busy) return;
+    setBusy(true);
+    const ok = await actions.approve(sessionId, item.id, { decision: "allow", answer: { selected: chosen, ...(words.trim() ? { other: words.trim() } : {}) } });
+    if (!ok) setBusy(false);
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const o = options[Number(e.key) - 1];
+    if (!o || isEditableTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    if (input.multiple) setSelected((s) => (s.includes(o.label) ? s.filter((x) => x !== o.label) : [...s, o.label]));
+    else void send([o.label], "");
+  };
+
+  return (
+    <div ref={ref} id={`approval-${item.id}`} className="prompt" tabIndex={0} role="group" aria-label={`Question: ${input.question ?? ""}`} onKeyDown={onKeyDown}>
+      <p className="prompt-q">{input.question}</p>
+      {input.multiple ? (
+        <div className="prompt-options">
+          {options.map((o) => (
+            <label key={o.label} className="check-row">
+              <input
+                type="checkbox"
+                checked={selected.includes(o.label)}
+                disabled={busy}
+                onChange={(e) => setSelected((s) => (e.target.checked ? [...s, o.label] : s.filter((x) => x !== o.label)))}
+              />
+              <span>
+                {o.label}
+                {o.description && <span className="muted small"> · {o.description}</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+      ) : (
+        <div className="prompt-options">
+          {options.map((o) => (
+            <button key={o.label} type="button" className="btn prompt-option" disabled={busy} onClick={() => void send([o.label], "")}>
+              <span>{o.label}</span>
+              {o.description && <span className="muted small">{o.description}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      <form
+        className="row gap"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (selected.length || other.trim()) void send(selected, other);
+        }}
+      >
+        <input className="input grow" aria-label="Answer in your own words" placeholder="Or answer in your own words" value={other} disabled={busy} onChange={(e) => setOther(e.target.value)} />
+        {(input.multiple || other.trim()) && (
+          <button type="submit" className="btn sm primary" disabled={busy || (!selected.length && !other.trim())}>
+            {busy && <Spinner size={10} />}
+            Send
+          </button>
+        )}
+        <button type="button" className="btn sm" disabled={busy} onClick={() => void send([], "")}>
+          Skip
+        </button>
+      </form>
+    </div>
+  );
 }
 
 function ApprovalPrompt({

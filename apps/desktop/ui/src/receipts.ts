@@ -78,6 +78,8 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
       return { verb: "Checked agents", target: "", result: null, icon: "sparkles" };
     case "ask_parent":
       return { verb: "Asked the parent", target: str(item.input, ["question"]) ?? item.inputPreview, result: null, icon: "sparkles", prose: true };
+    case "ask_user":
+      return { verb: "Asked", target: str(item.input, ["question"]) ?? item.inputPreview, result: item.answer ?? null, icon: "sparkles", prose: true };
     case "network_access":
       return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
     case "credential_use": {

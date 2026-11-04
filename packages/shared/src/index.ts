@@ -189,6 +189,7 @@ export type ChatItem =
       durationMs?: number;
       approvalReason?: string; // why it needs approval (matched rule)
       reason?: string; // why the agent wants it, in its words
+      answer?: string; // on ask_user: what the user answered, for the line
       uncoveredCommands?: string[]; // while pending: parts of a command line no allow rule covers
       allowPatterns?: string[]; // while pending: "npm test *", what "until stopped" and "always" would allow
       denyReason?: string;
@@ -246,6 +247,7 @@ export type ApprovalDecision = "allow" | "allow_session" | "allow_always" | "den
 export interface ApprovalBody {
   decision: ApprovalDecision;
   reason?: string; // shown to the model when denying
+  answer?: { selected: string[]; other?: string }; // for ask_user: the options chosen, or the user's own words
 }
 
 export interface ToolSummary {

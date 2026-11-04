@@ -65,6 +65,22 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "head -c 150000 /dev/urandom | base64 -w 0 | head -c 200000; echo; sleep 100" } },
     { text: "Report: done." },
   ],
+  "ask-demo": [
+    { text: "I need one decision.", tool: "ask_user", args: { question: "Which region should the bucket go in?", options: [{ label: "eu-west-1", description: "Closest to the team" }, { label: "us-east-1", description: "Where the rest of the data lives" }] } },
+    { text: "Thanks, going with that." },
+  ],
+  "ask-many": [
+    { tool: "ask_user", args: { question: "Which checks should run?", multiple: true, options: [{ label: "Unit tests" }, { label: "Linter", description: "Fast" }, { label: "End to end", description: "Takes 20 minutes" }] } },
+    { text: "Running those." },
+  ],
+  "ask-sub": [
+    { tool: "agent", args: { description: "Try asking", prompt: "subtask-question: ask the user", max_turns: 3 } },
+    { text: "The sub-agent reported back." },
+  ],
+  "subtask-question": [
+    { tool: "ask_user", args: { question: "Can a sub-agent ask?", options: [{ label: "Yes" }, { label: "No" }] } },
+    { text: "Report: done." },
+  ],
   "subtask-count": [
     { tool: "bash", args: { command: "ls -1 /workspace/demo | wc -l" } },
     { text: "Report: /workspace/demo has the entries listed above." },

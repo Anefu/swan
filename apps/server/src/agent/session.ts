@@ -20,6 +20,7 @@ import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-creden
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { TRACKER_TOOLS, trackerTools } from "./tracker-tools.js";
 import { SCHEDULE_TOOLS, triggerTools } from "./trigger-tools.js";
+import { ASK_USER, askUserTool, questionResult, type AskInput } from "./ask-user.js";
 import type { TrackerStore } from "../tracker.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
@@ -120,6 +121,7 @@ function systemPrompt(o: {
   );
   lines.push(
     "- Some tool calls require the user's approval. If a call is denied, adjust your plan instead of retrying the same call. Give bash calls a short reason: the user sees it when asked to approve the command or a website it reaches.",
+    "- When you need the user to choose before you can go on, use ask_user: it shows a card with options and waits for the answer.",
     "- Use schedule for reminders (\"remind me at 17:00\") and recurring checks, and watch to follow an API for new items.",
     "- Use track for the merge requests, tickets, docs and deploys you create or are asked to follow, and keep their status current (tracker_list shows what is open).",
     "- The user may send a new message while you work; it arrives with your tool results. Take it into account before your next step.",
@@ -634,7 +636,7 @@ export class Session {
       ...builtinTools(),
       ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
-      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }),
+      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(),
       ...this.creds.tools(),
       ...(await this.agentTools()),
       ...(await this.mcp.tools()),
@@ -925,6 +927,13 @@ export class Session {
     if (trimmed.startsWith("/") && !attachmentIds.length) return this.command(trimmed);
     if (attachmentIds.length > 20) throw new Error("at most 20 attachments per message");
     const files = await Promise.all(attachmentIds.map((id) => this.deps.attachments.get(this.id, id)));
+    // A message while a question waits is the answer: otherwise it would queue behind the question.
+    const asked = [...this.approvals.values()].find((a) => a.info.name === ASK_USER);
+    if (asked && !files.length) {
+      this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: trimmed });
+      asked.resolve({ decision: "allow", answer: { selected: [], other: trimmed } });
+      return;
+    }
     if (!files.length) return this.enqueue(trimmed, trimmed);
     // Images reach the model as images and PDFs as documents; every file is also in the sandbox.
     const blocks: ContentBlockParam[] = [];
@@ -1382,6 +1391,7 @@ export class Session {
     const defs: ToolDef[] = e.frozen.tools.map((f) => {
       const live = this.liveTools.get(f.name);
       const def = live ? { ...live, description: f.description, inputSchema: f.inputSchema } : this.unavailableTool(f);
+      if (f.name === ASK_USER) return refusedTool(def, "Only the main agent can ask the user: use ask_parent.");
       return AGENT_TOOLS.has(f.name) ? refusedTool(def, "Only the main agent can start or manage sub-agents.") : def;
     });
     const maxTokens = cfg?.model?.maxTokens ?? DEFAULT_MAX_TOKENS;
@@ -1596,11 +1606,23 @@ export class Session {
     if (perm.rule.startsWith("default") && MEMORY_READ_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "memory read" };
     if (perm.rule.startsWith("default") && TRACKER_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "tracker" };
     if (perm.rule.startsWith("default") && SCHEDULE_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "schedule" };
+    if (perm.rule.startsWith("default") && tool.name === ASK_USER) perm = { mode: "allow", rule: "question" };
     // Connection status and sign-in requests only show the user a card: allowed by default.
     if (perm.rule.startsWith("default") && CONNECTION_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "connection tool" };
     // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
     if (perm.rule.startsWith("default") && (AGENT_TOOLS.has(tool.name) || tool.name === "ask_parent")) perm = { mode: "allow", rule: "sub-agent" };
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
+    // A question pauses the turn like an approval, and the card is the answer. Sub-agents get a refusal instead.
+    if (tool.name === ASK_USER && !parentId) {
+      if (this.unattended) return finish("error", { text: "The user isn't here in an unattended run, so nobody can answer. Choose what you reasonably can, or leave the question in your report.", isError: true });
+      item.status = "pending_approval";
+      show();
+      const d = await this.waitForApproval(tu.id, signal, { sessionId: this.id, personaId: this.personaId, toolUseId: tu.id, name: tool.name, inputPreview: item.inputPreview, rule: "question", since: nowIso() });
+      this.refreshStatus();
+      if (!d) return finish("interrupted", { text: "Interrupted by the user before they answered.", isError: true });
+      const r = questionResult(v.value as AskInput, d.decision === "deny" ? undefined : d.answer);
+      return finish("done", { text: r.text }, { answer: r.answer });
+    }
     // Nobody is there to answer in a triggered turn: only what the persona allows unattended goes ahead.
     if (perm.mode === "ask" && this.unattended) {
       const u = this.unattendedPolicy().evaluate(tool, v.value);
@@ -1699,8 +1721,8 @@ export class Session {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
-      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), ...this.creds.tools()];
-    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || SCHEDULE_TOOLS.has(n) || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
+      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(), ...this.creds.tools()];
+    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || SCHEDULE_TOOLS.has(n) || n === ASK_USER || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
     return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
   }
 

@@ -21,6 +21,7 @@ import type { SecretStore } from "./secrets.js";
 import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { builtinTools, skillTool } from "./agent/tools.js";
+import { AnswerSchema } from "./agent/ask-user.js";
 import { TRACK_STATUSES, type TrackerStore } from "./tracker.js";
 import type { TriggerManager } from "./triggers.js";
 import { PermissionPolicy } from "./agent/permissions.js";
@@ -411,7 +412,9 @@ export async function startApi(d: ApiDeps, hub: Hub) {
   app.post("/api/sessions/:id/approvals/:toolUseId", async (req: FastifyRequest<{ Params: { id: string; toolUseId: string }; Body: ApprovalBody }>) => {
     const body = req.body;
     if (!body || !["allow", "allow_session", "allow_always", "deny"].includes(body.decision)) throw new HttpError(400, "decision must be allow, allow_session, allow_always or deny");
-    session(req.params.id).approve(req.params.toolUseId, body);
+    const answer = AnswerSchema.safeParse(body.answer ?? {});
+    if (!answer.success) throw new HttpError(400, `answer.${answer.error.issues[0]?.path.join(".")}: ${answer.error.issues[0]?.message}`);
+    session(req.params.id).approve(req.params.toolUseId, { ...body, ...(body.answer ? { answer: answer.data } : {}) });
     return { ok: true };
   });
   app.post("/api/sessions/:id/agents/:agentId/stop", async (req: P<{ id: string; agentId: string }>) => {
