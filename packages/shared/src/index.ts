@@ -153,6 +153,7 @@ export interface SessionSummary {
   id: string;
   personaId: string;
   title: string;
+  trigger?: string; // started by this schedule or watcher, not by the user
   status: SessionStatus;
   statusDetail?: string; // e.g. the error text, or "starting MCP server github"
   createdAt: string;
@@ -403,7 +404,7 @@ export type ServerEvent =
   | { type: "memory.updated"; personaId: string }
   | { type: "tracker.updated"; personaId: string }
   | { type: "triggers.updated"; personaId: string }
-  | { type: "changes.updated"; personaId: string };
+  | { type: "changes.updated"; sessionId: string };
 
 // ---------- Attachments ----------
 // POST /api/sessions/:id/attachments {name, mediaType, data (base64)} -> AttachmentMeta  (max 20 MB)

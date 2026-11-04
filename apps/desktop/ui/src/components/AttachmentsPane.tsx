@@ -105,7 +105,7 @@ export function AttachmentsPane({ onBack }: { onBack: () => void }) {
             ))}
           </ul>
         )}
-        {images.some((a) => a.id === open) && <Details a={images.find((a) => a.id === open)!} personaId={persona!.id} currentSid={sid} />}
+        {images.some((a) => a.id === open) && <Details a={images.find((a) => a.id === open)!} personaId={persona!.id} />}
         {files.length > 0 && (
           <ul className="att-list" aria-label="Files">
             {files.map((a) => (
@@ -119,7 +119,7 @@ export function AttachmentsPane({ onBack }: { onBack: () => void }) {
                     </span>
                   </span>
                 </button>
-                {open === a.id && <Details a={a} personaId={persona!.id} currentSid={sid} />}
+                {open === a.id && <Details a={a} personaId={persona!.id} />}
               </li>
             ))}
           </ul>
@@ -128,7 +128,7 @@ export function AttachmentsPane({ onBack }: { onBack: () => void }) {
     </div>
   );
 
-  function Details({ a, personaId, currentSid }: { a: PersonaAttachment; personaId: string; currentSid?: string }) {
+  function Details({ a, personaId }: { a: PersonaAttachment; personaId: string }) {
     return (
       <div className="att-details">
         <dl className="facts small">
@@ -142,13 +142,9 @@ export function AttachmentsPane({ onBack }: { onBack: () => void }) {
           <dd className="mono">{a.sandboxPath}</dd>
         </dl>
         <div className="row gap wrap">
-          {a.sessionId === currentSid ? (
-            <button type="button" className="btn sm" onClick={() => actions.jumpToItem(personaId, a.itemId)}>
-              Show in conversation
-            </button>
-          ) : (
-            <span className="small muted">From an earlier conversation</span>
-          )}
+          <button type="button" className="btn sm" onClick={() => actions.jumpToItem(personaId, a.itemId, a.sessionId)}>
+            Show in conversation
+          </button>
           <a className="btn sm" href={attachmentFileUrl(a.sessionId, a.id)} target="_blank" rel="noopener noreferrer">
             Open <IconExternal size={12} />
           </a>

@@ -21,7 +21,8 @@ export function Rail() {
   const settingsLabel = `Settings${settingsDirty ? " (unsaved changes)" : ""}`;
   const persona = state.selectedPersonaId;
   const changesOn = dock === "changes";
-  const { data: diffs } = useLoad(() => (persona ? api.diffs(persona) : Promise.resolve(undefined)), [persona, state.changesRev[persona ?? ""] ?? 0]);
+  const sid = persona ? state.conversations[persona] : undefined;
+  const { data: diffs } = useLoad(() => (sid ? api.diffs(sid) : Promise.resolve(undefined)), [sid, state.changesRev[sid ?? ""] ?? 0]);
   const changes = diffs?.[0]; // the newest
   return (
     <nav className="header-tools" aria-label="Panels">

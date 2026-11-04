@@ -17,6 +17,10 @@ function useGlobalShortcuts(overlay: boolean) {
         if (s.personas.length === 0) return;
         e.preventDefault();
         actions.openPersonaMenu();
+      } else if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "n") {
+        if (!s.selectedPersonaId) return;
+        e.preventDefault();
+        void actions.newConversation(s.selectedPersonaId);
       } else if (mod && !e.altKey && !e.shiftKey && e.key === ",") {
         e.preventDefault();
         actions.openSwanSettings();

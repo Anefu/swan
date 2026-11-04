@@ -114,10 +114,10 @@ function FileChanges({ file }: { file: ChangedFile }) {
 export function ChangesPane({ onClose }: { onClose: () => void }) {
   const persona = useSelectedPersona();
   const { state } = useStore();
-  const id = persona?.id ?? "";
+  const id = (persona && state.conversations[persona.id]) ?? "";
   const [picked, setPicked] = useState<string | null>(null);
   const rev = state.changesRev[id] ?? 0;
-  const list = useLoad(() => api.diffs(id), [id, rev]);
+  const list = useLoad(() => (id ? api.diffs(id) : Promise.resolve([])), [id, rev]);
   const diffs = list.data;
   const current = diffs?.find((d) => d.id === picked) ?? diffs?.[0];
   const loaded = useLoad(() => (current ? api.diff(id, current.id) : Promise.resolve(undefined)), [id, current?.id]);

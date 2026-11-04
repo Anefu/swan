@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this is
 
-Swan (package name `persona-harness`) is a local, single-user agent harness for macOS, shipped as a desktop app. An agent loop runs on the host; every tool call runs in a Podman sandbox that only sees approved folders, and all sandbox traffic leaves through a host-side egress proxy that injects credentials. **Agents never see a secret value.** Work is organised into personas, each with one conversation.
+Swan (package name `persona-harness`) is a local, single-user agent harness for macOS, shipped as a desktop app. An agent loop runs on the host; every tool call runs in a Podman sandbox that only sees approved folders, and all sandbox traffic leaves through a host-side egress proxy that injects credentials. **Agents never see a secret value.** Work is organised into personas, each with any number of conversations.
 
 Read before changing behaviour:
 

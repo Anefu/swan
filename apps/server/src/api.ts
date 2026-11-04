@@ -200,16 +200,6 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     await d.personas.remove(req.params.id);
     return { ok: true };
   });
-  app.get("/api/personas/:id/diffs", async (req: P) => {
-    const s = d.sessions.list(persona(req.params.id).id)[0];
-    return s ? d.diffs.list(s.id) : [];
-  });
-  app.get("/api/personas/:id/diffs/:diffId", async (req: FastifyRequest<{ Params: { id: string; diffId: string } }>, reply) => {
-    const s = d.sessions.list(persona(req.params.id).id)[0];
-    const view = s && (await d.diffs.get(s.id, req.params.diffId));
-    if (!view) return reply.code(404).send({ error: "That diff is gone." });
-    return view;
-  });
   app.get("/api/personas/:id/tracker", async (req: P) => {
     persona(req.params.id);
     return d.tracker.list(req.params.id);
@@ -384,6 +374,19 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     const s = session(req.params.id);
     return { session: s.summary, items: s.items };
   });
+  app.patch("/api/sessions/:id", async (req: FastifyRequest<{ Params: { id: string }; Body: { title?: unknown } }>) => {
+    const s = session(req.params.id);
+    const title = typeof req.body?.title === "string" ? req.body.title.replace(/\s+/g, " ").trim() : "";
+    if (!title || title.length > 120) throw new HttpError(400, "title must be 1 to 120 characters");
+    s.rename(title);
+    return s.summary;
+  });
+  app.get("/api/sessions/:id/diffs", async (req: P) => d.diffs.list(session(req.params.id).id));
+  app.get("/api/sessions/:id/diffs/:diffId", async (req: P<{ id: string; diffId: string }>, reply) => {
+    const view = await d.diffs.get(session(req.params.id).id, req.params.diffId);
+    if (!view) return reply.code(404).send({ error: "That diff is gone." });
+    return view;
+  });
   app.get("/api/sessions/:id/tools", async (req: P) => session(req.params.id).tools());
   app.post("/api/sessions/:id/attachments", async (req: FastifyRequest<{ Params: { id: string }; Body: { name: string; mediaType: string; data: string } }>) => {
     session(req.params.id);
@@ -444,7 +447,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     return { ok: true };
   });
 
-  // ----- Swan: one conversation per persona -----
+  // ----- Swan: the conversation to open for a persona -----
   app.get("/api/personas/:id/conversation", async (req: P) => {
     const p = persona(req.params.id);
     if (!p.config) throw new HttpError(400, `persona "${p.id}" is invalid: ${p.errors.join("; ")}`);

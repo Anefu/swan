@@ -3,6 +3,7 @@ import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
 import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch, IconUpload } from "./icons";
+import { ConversationMenu } from "./ConversationMenu";
 import { Rail } from "./Rail";
 import { Kbd, MOD } from "./ui";
 
@@ -12,6 +13,7 @@ export function Header() {
   return (
     <header className="app-header">
       {state.personas.length > 0 && <PersonaMenu />}
+      {state.selectedPersonaId && <ConversationMenu personaId={state.selectedPersonaId} />}
       <Rail />
     </header>
   );

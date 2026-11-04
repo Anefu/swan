@@ -18,7 +18,7 @@ haven't allowed.
 - **No surprise network traffic.** Agents reach only the websites on their allowlist. Anything else
   is blocked and shows up in the Network panel, where you can allow it.
 - **Personas.** Set an agent up once for a kind of work (its model, folders, credentials and rules)
-  and keep one ongoing conversation with it. It remembers your preferences and decisions over time.
+  and keep as many conversations with it as you need. It remembers your preferences and decisions over time.
 - **Your choice of model.** Claude (Anthropic), OpenAI, any OpenAI-compatible server including models
   running on your Mac, or your GitHub Copilot subscription.
 - **More when you need it.** Skills, MCP servers, sub-agents that work in parallel, file and image
@@ -72,8 +72,8 @@ to use one of the persona's skills.
 ## Main ideas
 
 - **Persona**: an agent set up for a kind of work, with its own model, instructions, folders,
-  skills, credentials, allowed websites and permissions. Each persona has one conversation; long ones
-  continue in a fresh context with a summary, and nothing is lost.
+  skills, credentials, allowed websites and permissions. A persona can have many conversations, which share its
+  memory, tracker and folders; long ones continue in a fresh context with a summary, and nothing is lost.
 - **Folders**: the only parts of your Mac an agent sees, at `/workspace/<name>`. Swan refuses
   folders that would expose your whole home folder, system folders or its own data.
 - **Permissions**: per tool, `allow`, `ask` or `deny`, and for commands patterns such as `cd *` or
@@ -109,6 +109,10 @@ to use one of the persona's skills.
   the +/− button at the top right opens them. Each comes from a command in the sandbox (`git diff`,
   `git show`, `diff -u`), under the persona's rules for commands. They show what the agent chose to
   show, so treat them as a reading aid, not proof.
+- **Conversations**: the menu beside the persona's name switches between its conversations and
+  starts new ones (⌘N). Each keeps working in the background with its own sandbox, and shows its
+  status there. They share the persona's folders, so Swan warns when two are at work in them. Each
+  run of a schedule or watcher gets its own conversation, and its sandbox stops when the run ends.
 - **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
   Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
   can't ask.

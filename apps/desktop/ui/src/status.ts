@@ -17,9 +17,10 @@ export function personaStatus(
   const waiting = approvals.filter((a) => a.personaId === p.id).length;
   if (waiting > 0) return { text: plural(waiting, "decision"), tone: "attention" };
   if (p.errors.length > 0) return { text: "Configuration error", tone: "error" };
+  const mine = Object.values(state.sessions).filter((x) => x.personaId === p.id);
+  if (mine.some((x) => x.status === "running")) return { text: "Working", tone: "muted" };
+  if (mine.some((x) => x.status === "starting")) return { text: "Starting", tone: "muted" };
   const s = conversationSession(state, p.id);
-  if (s?.status === "running") return { text: "Working", tone: "muted" };
-  if (s?.status === "starting") return { text: "Starting", tone: "muted" };
   if (s?.status === "error") return { text: "Error", tone: "error" };
   const { missing, signIn } = unreadyCredentials(state, p);
   if (missing.length > 0) return { text: `Missing ${missing[0]}`, tone: "attention" };

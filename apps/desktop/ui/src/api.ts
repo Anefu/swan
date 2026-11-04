@@ -166,8 +166,9 @@ export const api = {
   deletePersona: (id: string) => request<Ok>("DELETE", `/api/personas/${enc(id)}`),
   previewImport: (text: string) => request<PersonaImportPreview>("POST", "/api/personas/import/preview", { text }),
   importPersona: (text: string, choices: PersonaImportChoices) => request<PersonaImportResult>("POST", "/api/personas/import", { text, choices }),
-  diffs: (personaId: string) => request<DiffSummary[]>("GET", `/api/personas/${enc(personaId)}/diffs`),
-  diff: (personaId: string, id: string) => request<DiffView>("GET", `/api/personas/${enc(personaId)}/diffs/${enc(id)}`),
+  diffs: (sessionId: string) => request<DiffSummary[]>("GET", `/api/sessions/${enc(sessionId)}/diffs`),
+  diff: (sessionId: string, id: string) => request<DiffView>("GET", `/api/sessions/${enc(sessionId)}/diffs/${enc(id)}`),
+  renameSession: (id: string, title: string) => request<SessionSummary>("PATCH", `/api/sessions/${enc(id)}`, { title }),
   tracker: (personaId: string) => request<TrackerItem[]>("GET", `/api/personas/${enc(personaId)}/tracker`),
   track: (personaId: string, item: { url: string; title?: string; kind?: string; status?: TrackStatus; note?: string }) =>
     request<TrackerItem>("POST", `/api/personas/${enc(personaId)}/tracker`, item),

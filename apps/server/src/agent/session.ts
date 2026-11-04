@@ -51,6 +51,7 @@ export interface SessionDeps {
   memory: MemoryStore;
   tracker: TrackerStore;
   diffs: DiffStore;
+  siblingAtWork?: (sessionId: string, personaId: string) => boolean; // set by SessionManager
   usage: UsageLedger;
   attachments: AttachmentStore;
   catalog: ModelCatalog;
@@ -136,7 +137,7 @@ function systemPrompt(o: {
     "Keep this conversation for the user: understanding what they want, decisions, and reporting results. Hand off substantial work (multi-step investigation, implementation, long builds or checks) to sub-agents, with background: true when the user may want to talk to you meanwhile, and tell the user what you started.",
     "",
     "# Memory",
-    "This is one long-running conversation. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
+    "The user may have other conversations with this persona; you see only this one, and share memory with them. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
   );
   if (o.epoch > 1) lines.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
   if (o.brief) lines.push("", "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
@@ -201,6 +202,8 @@ export class Session {
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean; trigger?: string }[] = [];
   private unattended = false; // the turn running was started by a watcher or schedule
   private toolsNoticed = false;
+  private attended = false; // the user has written here since Swan started
+  private sharingNoticed = false;
   private lastActivity: { preview: string; reason?: string } | null = null; // the latest tool call, to explain a network request
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
@@ -243,7 +246,7 @@ export class Session {
     );
   }
 
-  static create(deps: SessionDeps, personaId: string, title?: string): Session {
+  static create(deps: SessionDeps, personaId: string, title?: string, trigger?: string): Session {
     const p = deps.personas.get(personaId);
     if (!p?.config) throw new Error(`persona "${personaId}" not found or invalid`);
     const model = p.config.model ?? deps.settings.defaultModel;
@@ -254,6 +257,7 @@ export class Session {
         id: randomId("s", 6),
         personaId,
         title: title?.trim() || "New conversation",
+        ...(trigger ? { trigger } : {}),
         status: "stopped",
         createdAt: ts,
         updatedAt: ts,
@@ -969,6 +973,26 @@ export class Session {
     }
   }
 
+  /** Conversations of one persona mount the same folders, so two at work can overwrite each other's edits. */
+  private warnIfSharingFolders() {
+    const writes = this.deps.personas.get(this.personaId)?.folders.some((f) => f.mode === "rw");
+    const sharing = !!writes && !!this.deps.siblingAtWork?.(this.id, this.personaId);
+    if (sharing && !this.sharingNoticed) this.notice("warn", "Another conversation of this persona is working too, in the same folders. They can overwrite each other's edits.");
+    this.sharingNoticed = sharing;
+  }
+
+  /** A scheduled run has its own conversation, so its sandbox shouldn't outlive the run, or they would pile up. */
+  private async stopIfTriggerDone() {
+    if (!this.summary.trigger || this.attended || this.approvals.size || this.queue.length) return;
+    if ([...this.agents.values()].some((a) => a.sub.active)) return;
+    await this.stop();
+  }
+
+  rename(title: string) {
+    this.summary = { ...this.summary, title };
+    this.touch();
+  }
+
   /** A turn from a watcher or schedule: queued behind any running turn, and run unattended. */
   trigger(label: string, prompt: string) {
     this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: prompt, trigger: label });
@@ -987,6 +1011,7 @@ export class Session {
 
   private enqueue(display: string, content: string | ContentBlockParam[], files?: { meta: AttachmentMeta; data: Buffer }[]) {
     this.unattended = false; // someone is here now
+    this.attended = true;
     this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: display, ...(files?.length ? { attachments: files.map((f) => f.meta) } : {}) });
     if (this.summary.title === "New conversation" || this.summary.title === "New session")
       this.summary = { ...this.summary, title: display.replace(/\s+/g, " ").slice(0, 60) };
@@ -1067,6 +1092,7 @@ export class Session {
         this.touch();
         await this.prepareEpoch();
         await this.placeFiles(q.files);
+        this.warnIfSharingFolders();
         this.pushUser(q.text);
         this.unattended = !!q.trigger;
         try {
@@ -1088,6 +1114,7 @@ export class Session {
       this.abort = null;
       this.touch();
       await this.restartIfDue();
+      await this.stopIfTriggerDone();
       await this.persist();
     }
   }
@@ -1259,7 +1286,7 @@ export class Session {
   // ---------- tools ----------
 
   private diffTools() {
-    return diffTools({ diffs: this.deps.diffs, sessionId: this.id, changed: () => this.deps.broadcast({ type: "changes.updated", personaId: this.personaId }) });
+    return diffTools({ diffs: this.deps.diffs, sessionId: this.id, changed: () => this.deps.broadcast({ type: "changes.updated", sessionId: this.id }) });
   }
 
   private unavailableTool(f: FrozenTool): ToolDef {
@@ -1751,6 +1778,7 @@ export class Session {
 export class SessionManager {
   private sessions = new Map<string, Session>();
   constructor(private deps: SessionDeps) {
+    deps.siblingAtWork = (id, personaId) => [...this.sessions.values()].some((s) => s.id !== id && s.personaId === personaId && (s.summary.status === "running" || s.summary.status === "awaiting_approval"));
     deps.proxy.asker = async (ps, host, port) => this.sessions.get(ps.sessionId)?.requestNetwork(host, port) ?? false;
     deps.proxy.credentialAsker = async (ps, ref, v) => this.sessions.get(ps.sessionId)?.requestCredentialUse(ref, v) ?? false;
     deps.proxy.onDenied = (ps, ref, v) => this.sessions.get(ps.sessionId)?.credentialBlocked(ref, v);
@@ -1781,18 +1809,26 @@ export class SessionManager {
     }
   }
 
-  create(personaId: string, title?: string) {
-    const s = Session.create(this.deps, personaId, title);
+  create(personaId: string, title?: string, trigger?: string) {
+    const s = Session.create(this.deps, personaId, title, trigger);
     this.sessions.set(s.id, s);
     void s.persist();
     this.deps.broadcast({ type: "session.updated", session: s.summary });
     return s;
   }
 
-  /** The persona's one ongoing conversation: the most recently active session, created if absent. */
+  /** The conversation to open for a persona: the latest one the user started, created if absent. */
   conversation(personaId: string) {
-    const mine = [...this.sessions.values()].filter((s) => s.personaId === personaId).sort((a, b) => b.summary.updatedAt.localeCompare(a.summary.updatedAt));
+    const mine = [...this.sessions.values()].filter((s) => s.personaId === personaId && !s.summary.trigger).sort((a, b) => b.summary.updatedAt.localeCompare(a.summary.updatedAt));
     return mine[0] ?? this.create(personaId);
+  }
+
+  /** For schedules and watchers: each run gets a conversation of its own, and polling uses the persona's usual sandbox. */
+  triggerTarget(personaId: string) {
+    return {
+      trigger: (label: string, prompt: string) => this.create(personaId, label, label).trigger(label, prompt),
+      pollExec: (argv: string[], timeoutMs?: number) => this.conversation(personaId).pollExec(argv, timeoutMs),
+    };
   }
 
   get(id: string) {

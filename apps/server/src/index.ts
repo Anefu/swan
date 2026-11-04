@@ -101,7 +101,7 @@ async function main() {
   memory.on("changed", (personaId) => hub.broadcast({ type: "memory.updated", personaId }));
   await sessions.loadAll();
   tracker.on("changed", (personaId) => hub.broadcast({ type: "tracker.updated", personaId }));
-  const triggers = new TriggerManager({ personas, tracker, target: (id) => sessions.conversation(id) });
+  const triggers = new TriggerManager({ personas, tracker, target: (id) => sessions.triggerTarget(id) });
   triggers.on("changed", (personaId) => hub.broadcast({ type: "triggers.updated", personaId }));
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));

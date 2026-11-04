@@ -138,7 +138,7 @@ export interface State {
   models: ModelOption[] | null;
   /** null = the server has no /api/approvals; pending calls are derived from loaded transcripts. */
   approvals: PendingApproval[] | null;
-  /** personaId -> sessionId of its one conversation */
+  /** personaId -> sessionId of the conversation on screen */
   conversations: Record<string, string>;
   conversationError: Record<string, string>;
   sessions: Record<string, SessionSummary>;
@@ -569,9 +569,15 @@ export interface Actions {
   setNetwork(patch: Partial<NetworkFilters>): void;
   openPersonaMenu(): void;
   jumpToApproval(a?: PendingApproval): void;
-  jumpToItem(personaId: string, itemId: string): void;
+  jumpToItem(personaId: string, itemId: string, sessionId?: string): void;
 
   loadConversation(personaId: string): Promise<void>;
+  openConversation(personaId: string, sessionId: string): Promise<void>;
+  /** Opens an empty conversation of the persona, starting one only if it has none. */
+  newConversation(personaId: string): Promise<void>;
+  renameConversation(sessionId: string, title: string): Promise<boolean>;
+  /** Removes it; the persona's latest conversation opens instead. */
+  deleteConversation(personaId: string, sessionId: string): Promise<boolean>;
   refreshEgress(): Promise<void>;
   refreshProviders(): Promise<void>;
   refreshModels(): Promise<void>;
@@ -674,8 +680,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    const openConversation = async (personaId: string, sessionId: string): Promise<void> => {
+      try {
+        const res = await api.session(sessionId);
+        dispatch({ type: "conversation", personaId, session: res.session, items: res.items });
+      } catch (e) {
+        if (!(e instanceof ApiError && e.unreachable)) dispatch({ type: "conversation.error", personaId, error: errorMessage(e) });
+      }
+    };
+
     const inflight = new Map<string, Promise<void>>();
-    /** One conversation per persona: ask the server for it; older servers fall back to the newest session. */
+    /** The conversation to open for a persona: ask the server; older servers fall back to the newest session. */
     const loadConversation = (personaId: string): Promise<void> => {
       const existing = inflight.get(personaId);
       if (existing) return existing;
@@ -846,18 +861,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!a) return;
         if (a.personaId && a.personaId !== s.selectedPersonaId) {
           dispatch({ type: "select.persona", id: a.personaId });
-          if (!conversationOf(a.personaId)) void loadConversation(a.personaId);
         }
-        dispatch({ type: "focus.approval", sessionId: a.sessionId, toolUseId: a.toolUseId });
+        // It may be waiting in another conversation; focus once that one is on screen.
+        const focus = () => dispatch({ type: "focus.approval", sessionId: a.sessionId, toolUseId: a.toolUseId });
+        if (a.personaId && s.conversations[a.personaId] !== a.sessionId) void openConversation(a.personaId, a.sessionId).then(focus);
+        else focus();
       },
-      jumpToItem: (personaId, itemId) => {
+      jumpToItem: (personaId, itemId, sessionId) => {
         const s = stateRef.current;
         if (personaId !== s.selectedPersonaId) dispatch({ type: "select.persona", id: personaId });
-        const sid = s.conversations[personaId];
-        if (sid) dispatch({ type: "focus.item", sessionId: sid, itemId });
+        const sid = sessionId ?? s.conversations[personaId];
+        if (!sid) return;
+        const focus = () => dispatch({ type: "focus.item", sessionId: sid, itemId });
+        if (s.conversations[personaId] !== sid) void openConversation(personaId, sid).then(focus);
+        else focus();
       },
 
       loadConversation,
+      openConversation,
+      newConversation: async (personaId) => {
+        const s = stateRef.current;
+        const empty = Object.values(s.sessions).find((x) => x.personaId === personaId && x.title === "New conversation");
+        try {
+          await openConversation(personaId, empty?.id ?? (await api.createSession(personaId)).id);
+        } catch (e) {
+          toast("error", errorMessage(e), "Conversation");
+        }
+      },
+      renameConversation: async (sessionId, title) => {
+        try {
+          dispatch({ type: "session.upsert", session: await api.renameSession(sessionId, title) });
+          return true;
+        } catch (e) {
+          toast("error", errorMessage(e), "Conversation");
+          return false;
+        }
+      },
+      deleteConversation: async (personaId, sessionId) => {
+        try {
+          await api.deleteSession(sessionId);
+          dispatch({ type: "session.remove", id: sessionId });
+          await loadConversation(personaId);
+          return true;
+        } catch (e) {
+          toast("error", errorMessage(e), "Conversation");
+          return false;
+        }
+      },
       refreshEgress,
       refreshProviders,
       refreshModels,
@@ -1073,7 +1123,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "rev", which: "triggersRev", personaId: ev.personaId });
         break;
       case "changes.updated":
-        dispatch({ type: "rev", which: "changesRev", personaId: ev.personaId });
+        dispatch({ type: "rev", which: "changesRev", personaId: ev.sessionId });
         break;
     }
   };
