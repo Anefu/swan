@@ -71,6 +71,12 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "edit_file", args: { path: "/workspace/project/renew.ts", old_string: "  renew(host);", new_string: "  log(host);\n  renew(host, { keepOldFor: '24h' });" } },
     { text: "Done." },
   ],
+  "diff-demo": [
+    { tool: "bash", args: { command: "cd /workspace/project && git init -q 2>/dev/null; git add -A && git -c user.name=a -c user.email=a@b commit -qm base --allow-empty; sed -i 's/const days = 30;/const days = config.renewBeforeDays ?? 45;/' renew.ts; printf 'new\\n' > added.txt; printf 'x\\n' > /tmp/a; printf 'y\\n' > /tmp/b" } },
+    { tool: "show_diff", args: { title: "Renewal window", command: "git add -N . && git diff", cwd: "/workspace/project" } },
+    { tool: "show_diff", args: { title: "Two loose files", command: "diff -u /tmp/a /tmp/b" } },
+    { text: "Both diffs are in the pane." },
+  ],
   "ask-demo": [
     { text: "I need one decision.", tool: "ask_user", args: { question: "Which region should the bucket go in?", options: [{ label: "eu-west-1", description: "Closest to the team" }, { label: "us-east-1", description: "Where the rest of the data lives" }] } },
     { text: "Thanks, going with that." },

@@ -125,14 +125,12 @@ What runs where:
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
-### Changes pane: git on the host, over folders the agent can write
+### Changes pane: diffs from the sandbox
 
-The Changes pane runs git on the host, against read-write folders the sandbox can write to. A diff
-made inside the sandbox could be forged by the agent, so it isn't. To keep the host safe, git gets a
-private git dir per conversation (`~/.swan/changes`), so the folder's own `.git` is never read; no
-system or global config, so no filter, diff driver or hook has anything to run; and an environment
-built by Swan with no secrets. Symlinks are stored as links. `changes.test.ts` proves each of these
-against a tampered folder. Only file contents reach git, as data, never as arguments.
+The Changes pane shows diffs the agent chooses to show, with `show_diff`. The command runs in the
+sandbox under the persona's rules for commands (`permissionView`), and Swan only parses its output as
+text. No git runs on the host. So a diff shows what the agent says changed, and the agent could
+forge it: it is for reading, and review of anything important belongs where the change lands.
 
 ## Credential flow
 

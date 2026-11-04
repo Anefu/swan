@@ -22,7 +22,8 @@ import { TRACKER_TOOLS, trackerTools } from "./tracker-tools.js";
 import { SCHEDULE_TOOLS, triggerTools } from "./trigger-tools.js";
 import { ASK_USER, askUserTool, questionResult, type AskInput } from "./ask-user.js";
 import type { TrackerStore } from "../tracker.js";
-import type { ChangeTracker } from "../changes.js";
+import type { DiffStore } from "../diffs.js";
+import { CLEAR_DIFFS, diffTools, permissionView } from "./diff-tools.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
 import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
@@ -48,7 +49,7 @@ export interface SessionDeps {
   providers: ProviderRegistry;
   memory: MemoryStore;
   tracker: TrackerStore;
-  changes: ChangeTracker;
+  diffs: DiffStore;
   usage: UsageLedger;
   attachments: AttachmentStore;
   catalog: ModelCatalog;
@@ -126,6 +127,7 @@ function systemPrompt(o: {
     "- When you need the user to choose before you can go on, use ask_user: it shows a card with options and waits for the answer.",
     "- Use schedule for reminders (\"remind me at 17:00\") and recurring checks, and watch to follow an API for new items.",
     "- Use track for the merge requests, tickets, docs and deploys you create or are asked to follow, and keep their status current (tracker_list shows what is open).",
+    "- After changing files, use show_diff so the user can review what changed. Show as many diffs as there are things to review.",
     "- The user may send a new message while you work; it arrives with your tool results. Take it into account before your next step.",
     "",
     "# Working in parallel",
@@ -197,7 +199,6 @@ export class Session {
   private restarting: Promise<void> | null = null;
   private queue: { text: string | ContentBlockParam[]; receiptId?: string; files?: { meta: AttachmentMeta; data: Buffer }[]; fromAgent?: boolean; trigger?: string }[] = [];
   private unattended = false; // the turn running was started by a watcher or schedule
-  private changesTimer: NodeJS.Timeout | null = null;
   private lastActivity: { preview: string; reason?: string } | null = null; // the latest tool call, to explain a network request
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
@@ -639,7 +640,7 @@ export class Session {
       ...builtinTools(),
       ...(cfg.skills.length || connectionSkills.length ? [skillTool()] : []),
       ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }),
-      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(),
+      ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(), ...this.diffTools(),
       ...this.creds.tools(),
       ...(await this.agentTools()),
       ...(await this.mcp.tools()),
@@ -961,24 +962,6 @@ export class Session {
     }
   }
 
-  /** What the folders hold as this turn starts, for the Changes pane. A huge folder doesn't hold the turn up for long. */
-  private async snapshotFolders() {
-    const folders = (this.deps.personas.get(this.personaId)?.folders ?? []).filter((f) => f.mode === "rw").map((f) => f.hostPath);
-    if (!folders.length) return;
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<void>((r) => (timer = setTimeout(r, 30_000)));
-    await Promise.race([this.deps.changes.snapshot(this.id, folders), late]);
-    clearTimeout(timer);
-  }
-
-  /** Files may have changed: tell the app, at most every couple of seconds. */
-  private changesTouched() {
-    this.changesTimer ??= setTimeout(() => {
-      this.changesTimer = null;
-      this.deps.broadcast({ type: "changes.updated", personaId: this.personaId });
-    }, 2000);
-  }
-
   /** A turn from a watcher or schedule: queued behind any running turn, and run unattended. */
   trigger(label: string, prompt: string) {
     this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: prompt, trigger: label });
@@ -1077,7 +1060,6 @@ export class Session {
         this.touch();
         await this.prepareEpoch();
         await this.placeFiles(q.files);
-        if (!q.fromAgent) await this.snapshotFolders();
         this.pushUser(q.text);
         this.unattended = !!q.trigger;
         try {
@@ -1098,7 +1080,6 @@ export class Session {
       this.loopRunning = false;
       this.abort = null;
       this.touch();
-      this.deps.broadcast({ type: "changes.updated", personaId: this.personaId });
       await this.restartIfDue();
       await this.persist();
     }
@@ -1269,6 +1250,10 @@ export class Session {
   }
 
   // ---------- tools ----------
+
+  private diffTools() {
+    return diffTools({ diffs: this.deps.diffs, sessionId: this.id, changed: () => this.deps.broadcast({ type: "changes.updated", personaId: this.personaId }) });
+  }
 
   private unavailableTool(f: FrozenTool): ToolDef {
     return {
@@ -1624,12 +1609,14 @@ export class Session {
     if (typeof why === "string" && why.trim()) item.reason = why.trim();
     this.lastActivity = { preview: item.inputPreview, reason: item.reason };
 
-    let perm = policy.evaluate(tool, v.value);
+    const gated = permissionView(tool);
+    let perm = policy.evaluate(gated, v.value);
     // Memory and history reads are allowed unless a rule says otherwise.
     if (perm.rule.startsWith("default") && MEMORY_READ_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "memory read" };
     if (perm.rule.startsWith("default") && TRACKER_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "tracker" };
     if (perm.rule.startsWith("default") && SCHEDULE_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "schedule" };
     if (perm.rule.startsWith("default") && tool.name === ASK_USER) perm = { mode: "allow", rule: "question" };
+    if (perm.rule.startsWith("default") && tool.name === CLEAR_DIFFS) perm = { mode: "allow", rule: "changes pane" };
     // Connection status and sign-in requests only show the user a card: allowed by default.
     if (perm.rule.startsWith("default") && CONNECTION_TOOLS.has(tool.name)) perm = { mode: "allow", rule: "connection tool" };
     // Delegating is allowed by default: every call the sub-agent makes is still checked on its own.
@@ -1648,7 +1635,7 @@ export class Session {
     }
     // Nobody is there to answer in a triggered turn: only what the persona allows unattended goes ahead.
     if (perm.mode === "ask" && this.unattended) {
-      const u = this.unattendedPolicy().evaluate(tool, v.value);
+      const u = this.unattendedPolicy().evaluate(gated, v.value);
       if (u.mode !== "allow")
         return finish("denied", { text: `Not allowed in an unattended run (${perm.rule}). Don't retry: leave it for the user and say what you would do and why.`, isError: true }, { denyReason: `unattended run: ${perm.rule}` });
       perm = u;
@@ -1676,7 +1663,7 @@ export class Session {
         const why = decision.reason?.trim();
         return finish("denied", { text: `The user denied this tool call${why ? `: ${why}` : "."}`, isError: true }, { denyReason: why || "denied by user" });
       }
-      if (decision.decision !== "allow") await this.rememberApproval(decision.decision, perm, tool, v.value);
+      if (decision.decision !== "allow") await this.rememberApproval(decision.decision, perm, gated, v.value);
       item.status = "running";
       item.approvalReason = undefined;
     }
@@ -1690,7 +1677,6 @@ export class Session {
       out = { text: `Tool failed: ${errMsg(e)}`, isError: true };
     }
     const durationMs = Date.now() - started;
-    if (tool.name === "bash" || tool.name === "write_file" || tool.name === "edit_file") this.changesTouched();
     if (signal.aborted) return finish("interrupted", { text: truncateMiddle(`${out.text}\n[interrupted by the user]`, this.deps.settings.toolOutputLimit), isError: true }, { durationMs });
     return finish(out.isError ? "error" : "done", out, { durationMs });
   }
@@ -1745,9 +1731,9 @@ export class Session {
     const cfg = this.deps.personas.get(this.personaId)?.config;
     const defs = this.liveTools.size
       ? [...this.liveTools.values()]
-      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(), ...this.creds.tools()];
-    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || SCHEDULE_TOOLS.has(n) || n === ASK_USER || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
-    return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(t) !== "deny" ? "allow" : policy.describe(t) }));
+      : [...builtinTools(), ...(cfg?.skills.length ? [skillTool()] : []), ...memoryTools({ memory: this.deps.memory, personaId: this.personaId, items: () => this.items }), ...trackerTools({ tracker: this.deps.tracker, personaId: this.personaId }), ...triggerTools({ personas: this.deps.personas, personaId: this.personaId }), askUserTool(), ...this.diffTools(), ...this.creds.tools()];
+    const byDefault = (n: string) => MEMORY_READ_TOOLS.has(n) || TRACKER_TOOLS.has(n) || SCHEDULE_TOOLS.has(n) || n === ASK_USER || n === CLEAR_DIFFS || CONNECTION_TOOLS.has(n) || AGENT_TOOLS.has(n) || n === "ask_parent";
+    return defs.map((t) => ({ name: t.name, source: t.source, server: t.server, description: t.description, permission: byDefault(t.name) && policy.describe(permissionView(t)) !== "deny" ? "allow" : policy.describe(permissionView(t)) }));
   }
 
   get isActive() {
@@ -1822,7 +1808,7 @@ export class SessionManager {
     if (!s) return;
     await s.stop();
     await s.deleteFile();
-    await this.deps.changes.removeSession(id);
+    await this.deps.diffs.removeSession(id);
     await this.deps.attachments.removeSession(id);
     this.sessions.delete(id);
     this.deps.broadcast({ type: "session.deleted", sessionId: id });

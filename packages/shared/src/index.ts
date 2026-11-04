@@ -703,8 +703,6 @@ export interface WatcherTestResult {
 
 // ---------- What the agent changed ----------
 
-export type ChangeScope = "conversation" | "turn";
-
 export interface ChangeLine {
   kind: "add" | "del" | "ctx";
   old?: number;
@@ -713,8 +711,7 @@ export interface ChangeLine {
 }
 
 export interface ChangedFile {
-  folder: string; // the folder's name in the sandbox
-  path: string; // inside that folder
+  path: string;
   oldPath?: string;
   status: "modified" | "added" | "deleted" | "renamed";
   additions: number;
@@ -724,10 +721,17 @@ export interface ChangedFile {
   hunks: { header: string; lines: ChangeLine[] }[];
 }
 
-export interface ChangesReport {
-  scope: ChangeScope;
-  files: ChangedFile[];
+/** A diff the agent put in the Changes pane. */
+export interface DiffSummary {
+  id: string;
+  title: string;
+  command: string; // what printed it, in the sandbox
+  ts: string;
+  fileCount: number;
   additions: number;
   deletions: number;
-  problems: string[];
+}
+
+export interface DiffView extends Omit<DiffSummary, "fileCount"> {
+  files: ChangedFile[];
 }

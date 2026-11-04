@@ -21,8 +21,8 @@ export function Rail() {
   const settingsLabel = `Settings${settingsDirty ? " (unsaved changes)" : ""}`;
   const persona = state.selectedPersonaId;
   const changesOn = dock === "changes";
-  const { data: changes } = useLoad(() => (persona ? api.changes(persona, "conversation") : Promise.resolve(undefined)), [persona, state.changesRev[persona ?? ""] ?? 0]);
-  const changed = changes && changes.additions + changes.deletions > 0;
+  const { data: diffs } = useLoad(() => (persona ? api.diffs(persona) : Promise.resolve(undefined)), [persona, state.changesRev[persona ?? ""] ?? 0]);
+  const changes = diffs?.[0]; // the newest
   return (
     <nav className="header-tools" aria-label="Panels">
       {approvals.length > 0 && (
@@ -37,13 +37,13 @@ export function Rail() {
           <span className="rail-count">{approvals.length}</span>
         </button>
       )}
-      {(changed || changesOn) && (
+      {(changes || changesOn) && (
         <button
           type="button"
           id="trigger-changes"
           className={cls("rail-btn rail-changes", changesOn && "is-on")}
           aria-pressed={changesOn}
-          aria-label={`Changes: ${changes?.additions ?? 0} lines added, ${changes?.deletions ?? 0} removed`}
+          aria-label={changes ? `Changes: ${changes.title}, ${changes.additions} lines added, ${changes.deletions} removed` : "Changes"}
           title="Changes"
           onClick={() => actions.openDock(changesOn ? null : "changes")}
         >

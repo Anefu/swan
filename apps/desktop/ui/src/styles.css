@@ -1484,6 +1484,11 @@ button.line:focus-visible .chev,
   background: color-mix(in srgb, var(--diff-del) 30%, transparent);
   border-radius: 2px;
 }
+.change-command {
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
 .change-note {
   margin: 0;
   padding: 8px 12px;

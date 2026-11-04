@@ -135,6 +135,8 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
       const o = str(item.input, ["old_string"]) ?? "";
       return { verb: "Edited", target: basename(p), result: editCounts(o, n), icon: "pencil" };
     }
+    case "show_diff":
+      return { verb: "Showed diff", target: str(item.input, ["title"]) ?? item.inputPreview, result: item.inputPreview.split(" · ")[1] ?? null, icon: "pencil" };
     case "load_skill":
       return { verb: "Loaded skill", target: str(item.input, ["name"]) ?? item.inputPreview, result: null, icon: "sparkles" };
     case "memory_search":

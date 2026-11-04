@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { ChangedFile, ChangeLine, ChangeScope } from "@ph/shared";
+import type { ChangedFile, ChangeLine } from "@ph/shared";
 import { api } from "../api";
 import { useSelectedPersona, useStore } from "../store";
 import { cls } from "../util";
@@ -82,16 +82,15 @@ function Hunk({ hunk }: { hunk: ChangedFile["hunks"][number] }) {
   );
 }
 
-function FileChanges({ file, showFolder }: { file: ChangedFile; showFolder: boolean }) {
+function FileChanges({ file }: { file: ChangedFile }) {
   const [open, setOpen] = useState(file.additions + file.deletions <= FOLD_OVER);
-  const name = (p: string) => (showFolder ? `${file.folder}/${p}` : p);
   return (
     <section className="change-file">
       <button type="button" className="change-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-        <span className="change-path" title={name(file.path)}>
-          {file.oldPath && `${name(file.oldPath)} → `}
-          {name(file.path)}
+        <span className="change-path" title={file.path}>
+          {file.oldPath && `${file.oldPath} → `}
+          {file.path}
         </span>
         {file.status === "added" && <span className="muted small">new</span>}
         {file.status === "deleted" && <span className="muted small">deleted</span>}
@@ -111,53 +110,51 @@ function FileChanges({ file, showFolder }: { file: ChangedFile; showFolder: bool
   );
 }
 
-/** Every file the agent changed in the persona's read-write folders, stacked and foldable. */
+/** The diffs the agent chose to show, newest first; the pane follows the newest unless another is picked. */
 export function ChangesPane({ onClose }: { onClose: () => void }) {
   const persona = useSelectedPersona();
   const { state } = useStore();
   const id = persona?.id ?? "";
-  const [scope, setScope] = useState<ChangeScope>("conversation");
+  const [picked, setPicked] = useState<string | null>(null);
   const rev = state.changesRev[id] ?? 0;
-  const { data, error } = useLoad(() => api.changes(id, scope), [id, scope, rev]);
-  const report = data?.scope === scope ? data : undefined;
-  const folders = new Set(report?.files.map((f) => f.folder));
+  const list = useLoad(() => api.diffs(id), [id, rev]);
+  const diffs = list.data;
+  const current = diffs?.find((d) => d.id === picked) ?? diffs?.[0];
+  const loaded = useLoad(() => (current ? api.diff(id, current.id) : Promise.resolve(undefined)), [id, current?.id]);
+  const view = loaded.data?.id === current?.id ? loaded.data : undefined;
+  const error = list.error ?? loaded.error;
   return (
     <div className="pane">
       <PaneHead
         title="Changes"
-        sub={
-          report?.files.length ? (
-            <>
-              {report.files.length} {report.files.length === 1 ? "file" : "files"} <Counts additions={report.additions} deletions={report.deletions} />
-            </>
-          ) : undefined
-        }
+        sub={current ? <Counts additions={current.additions} deletions={current.deletions} /> : undefined}
         onClose={onClose}
         closeLabel="Close changes"
       >
-        <label className="mini-select">
-          <span className="sr-only">Compare with</span>
-          <select value={scope} onChange={(e) => setScope(e.target.value as ChangeScope)}>
-            <option value="conversation">Since this conversation began</option>
-            <option value="turn">Since the last message</option>
-          </select>
-        </label>
+        {!!diffs?.length && (
+          <label className="mini-select">
+            <span className="sr-only">Diff to show</span>
+            <select value={current?.id} onChange={(e) => setPicked(e.target.value)}>
+              {diffs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </PaneHead>
       <div className="pane-body changes-body">
         {error && <p className="foot-error">{error}</p>}
-        {!report && !error && <Spinner />}
-        {report?.problems.map((p) => (
-          <p key={p} className="small tone-attention">
-            {p}
-          </p>
-        ))}
-        {report && !report.files.length && !report.problems.length && (
-          <Empty title="No changes yet">
-            <p className="small muted">Files the agent changes in this persona's read-write folders appear here.</p>
+        {!error && (!diffs || (current && !view)) && <Spinner />}
+        {diffs && !diffs.length && !error && (
+          <Empty title="No diffs yet">
+            <p className="small muted">Diffs the agent shows you appear here.</p>
           </Empty>
         )}
-        {report?.files.map((f) => (
-          <FileChanges key={`${f.folder}/${f.path}`} file={f} showFolder={folders.size > 1} />
+        {view && <p className="small muted change-command">{view.command}</p>}
+        {view?.files.map((f) => (
+          <FileChanges key={f.path} file={f} />
         ))}
       </div>
     </div>
