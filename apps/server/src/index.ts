@@ -103,6 +103,7 @@ async function main() {
   tracker.on("changed", (personaId) => hub.broadcast({ type: "tracker.updated", personaId }));
   const triggers = new TriggerManager({ personas, tracker, target: (id) => sessions.triggerTarget(id) });
   triggers.on("changed", (personaId) => hub.broadcast({ type: "triggers.updated", personaId }));
+  sessions.spendTurn = (id) => triggers.spendTurn(id);
 
   const personaSummaries = () => personas.list().map((p) => personas.summary(p));
   secrets.on("status", (error) => hub.broadcast({ type: "secrets.status", error }));

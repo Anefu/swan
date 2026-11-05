@@ -127,6 +127,14 @@ What runs where:
 
 ### Changes pane: diffs from the sandbox
 
+Conversations of one persona can pass messages with the `conversations` tool, never across personas.
+A message may quote outside text, so the agent there is told it isn't from the user, and it never
+joins a running turn: it waits for its own turn, which is unattended and refuses what would ask,
+and which first clears the conversation's temporary allowances so what the user allowed for their
+own turns can't be used. It can't send further, so conversations can't keep waking each other, and
+each one spends a turn of `unattended.maxTurnsPerDay`. Renaming or deleting a conversation the user
+started asks first (renaming the one the agent is in doesn't). Sub-agents don't get the tool.
+
 The Changes pane shows diffs the agent chooses to show, with `show_diff`. The command runs in the
 sandbox under the persona's rules for commands (`permissionView`), and Swan only parses its output as
 text. No git runs on the host. So a diff shows what the agent says changed, and the agent could

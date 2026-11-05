@@ -336,6 +336,18 @@ export class TriggerManager extends EventEmitter {
     await this.check(personaId, w);
   }
 
+  /** A turn started by another conversation shares the persona's pause and daily limit. Returns why it can't start. */
+  async spendTurn(personaId: string): Promise<string | null> {
+    const st = await this.load(personaId);
+    if (st.paused) return "Not sent: this persona's schedules and watchers are paused, and so are turns between its conversations.";
+    if (st.day !== today()) Object.assign(st, { day: today(), turnsToday: 0 });
+    const max = this.max(personaId);
+    if (st.turnsToday >= max) return `Not sent: this persona reached its ${max} unattended turns for today (unattended.maxTurnsPerDay).`;
+    st.turnsToday++;
+    await this.save(personaId);
+    return null;
+  }
+
   async setPaused(personaId: string, paused: boolean) {
     (await this.load(personaId)).paused = paused;
     await this.save(personaId);

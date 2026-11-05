@@ -113,6 +113,9 @@ to use one of the persona's skills.
   starts new ones (⌘N). Each keeps working in the background with its own sandbox, and shows its
   status there. They share the persona's folders, so Swan warns when two are at work in them. Each
   run of a schedule or watcher gets its own conversation, and its sandbox stops when the run ends.
+  Agents can manage them with the `conversations` tool: list, rename and delete them, and send a
+  result to another one. A run that found nothing can delete itself. Changing a conversation you
+  started asks you first, so an unattended run can't.
 - **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
   Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
   can't ask.
@@ -128,6 +131,12 @@ persona's Settings under **Schedules and watchers** (with GitLab, GitHub and Jir
 starting points), or in its YAML. A watcher checks an API every so often from the persona's sandbox,
 so its requests use the persona's allowed hosts and credentials like the agent's own; it remembers
 what it has seen (the first check only records), and starts one turn for everything new.
+
+A run keeps its own conversation unless the agent passes the result on. Sending to another
+conversation starts a turn there, once it is free. That agent is told the message came from the
+tool, not from you; the turn runs under the same unattended rules, can't send further, counts toward
+`maxTurnsPerDay`, and clears anything you had allowed there "until stopped". To route results, say so in
+the prompt ("if this affects the release, send it to the conversation called Release work").
 
 ```yaml
 schedules:

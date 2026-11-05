@@ -77,6 +77,19 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "show_diff", args: { title: "Two loose files", command: "diff -u /tmp/a /tmp/b" } },
     { text: "Both diffs are in the pane." },
   ],
+  "conv-send": [
+    { tool: "conversations", args: { action: "list" } },
+    { tool: "conversations", args: { action: "send", conversation: "Release work", text: "conv-wake: the nightly build failed on main." } },
+    { text: "Passed that on." },
+  ],
+  "conv-wake": [
+    { tool: "conversations", args: { action: "send", conversation: "schedule morning", text: "Got it." } },
+    { tool: "bash", args: { command: "date" } },
+    { text: "Noted: this came from the conversations tool, not the user." },
+  ],
+  "conv-slow": [{ tool: "bash", args: { command: "sleep 15; echo slept" } }, { text: "Finished the slow step." }],
+  "conv-empty": [{ tool: "conversations", args: { action: "delete" } }, { text: "Nothing new." }],
+  "conv-rude": [{ tool: "conversations", args: { action: "delete", conversation: "Release work" } }, { text: "Left it alone." }],
   "ask-demo": [
     { text: "I need one decision.", tool: "ask_user", args: { question: "Which region should the bucket go in?", options: [{ label: "eu-west-1", description: "Closest to the team" }, { label: "us-east-1", description: "Where the rest of the data lives" }] } },
     { text: "Thanks, going with that." },

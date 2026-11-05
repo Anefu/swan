@@ -94,3 +94,19 @@ describe("reminders", () => {
     expect(() => PersonaSchema.parse({ name: "R", schedules: [{ name: "x", once: "5pm", prompt: "p" }] })).toThrow(/local date and time/);
   });
 });
+
+describe("turns between conversations", () => {
+  it("share the persona's pause and daily limit", async () => {
+    await fs.rm(path.join(paths.home, "triggers"), { recursive: true, force: true });
+    const cfg = PersonaSchema.parse({ name: "W", unattended: { maxTurnsPerDay: 1 } });
+    const personas = { get: () => ({ id: "w", config: cfg }), list: () => [{ id: "w", config: cfg }] } as unknown as PersonaStore;
+    const target: TriggerTarget = { trigger: () => {}, pollExec: async () => ({ code: 0, stdout: "", stderr: "" }) };
+    const m = new TriggerManager({ personas, tracker: new TrackerStore(), target: () => target });
+    await m.setPaused("w", true);
+    expect(await m.spendTurn("w")).toContain("paused");
+    await m.setPaused("w", false);
+    expect(await m.spendTurn("w")).toBeNull();
+    expect(await m.spendTurn("w")).toContain("maxTurnsPerDay");
+    expect((await m.info("w")).turnsToday).toBe(1);
+  });
+});
