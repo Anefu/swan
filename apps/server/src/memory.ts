@@ -167,8 +167,15 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     await this.save(personaId);
   }
 
-  async latestCheckpoint(personaId: string): Promise<Checkpoint | null> {
-    return (await this.load(personaId)).checkpoints.at(-1) ?? null;
+  /**
+   * The latest checkpoint, of one conversation when sessionId is given. Checkpoints from before a
+   * persona could have several conversations have no sessionId: one belongs to the conversation
+   * that holds its sources, since event ids are unique across conversations.
+   */
+  async latestCheckpoint(personaId: string, sessionId?: string, hasEvent?: (id: string) => boolean): Promise<Checkpoint | null> {
+    const all = (await this.load(personaId)).checkpoints;
+    if (!sessionId) return all.at(-1) ?? null;
+    return all.findLast((c) => c.sessionId === sessionId || (!c.sessionId && !!hasEvent && c.sources.some(hasEvent))) ?? null;
   }
 
   async dreamState(personaId: string) {

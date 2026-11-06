@@ -840,7 +840,8 @@ export class Session {
   private async rollover(reason: string) {
     const old = this.epoch!;
     const r = this.receipt("rollover", "New context", `Condensing earlier context (${reason})…`);
-    const prev = await this.deps.memory.latestCheckpoint(this.personaId);
+    const own = new Set(this.items.map((it) => it.id));
+    const prev = await this.deps.memory.latestCheckpoint(this.personaId, this.id, (id) => own.has(id));
     const since = old.startedAt;
     const epochItems = this.items.filter((it) => it.ts >= since);
     const transcript = truncateMiddle(epochItems.map(itemLine).filter(Boolean).join("\n\n"), 150_000);
@@ -860,6 +861,7 @@ export class Session {
         const j = parseJson(text);
         if (j && typeof j.objective === "string" && typeof j.nextAction === "string") {
           cp = {
+            sessionId: this.id,
             epoch: old.n,
             createdAt: nowIso(),
             objective: j.objective,
