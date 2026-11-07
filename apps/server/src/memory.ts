@@ -12,7 +12,6 @@ interface PersonaMemory {
   records: MemoryRecord[];
   changes: MemoryChange[];
   checkpoints: Checkpoint[];
-  lastDreamAt: string | null;
 }
 
 /**
@@ -31,7 +30,7 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
   private async load(personaId: string): Promise<PersonaMemory> {
     const hit = this.cache.get(personaId);
     if (hit) return hit;
-    let data: PersonaMemory = { records: [], changes: [], checkpoints: [], lastDreamAt: null };
+    let data: PersonaMemory = { records: [], changes: [], checkpoints: [] };
     if (await exists(this.file(personaId))) data = { ...data, ...JSON.parse(await fs.readFile(this.file(personaId), "utf8")) };
     this.cache.set(personaId, data);
     return data;
@@ -178,10 +177,6 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     return all.findLast((c) => c.sessionId === sessionId || (!c.sessionId && !!hasEvent && c.sources.some(hasEvent))) ?? null;
   }
 
-  async dreamState(personaId: string) {
-    return (await this.load(personaId)).lastDreamAt;
-  }
-
   /** Apply a consolidation result atomically. Archived and forgotten records are never revived. */
   async applyDream(
     personaId: string,
@@ -239,7 +234,6 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
       this.log(m, { recordId: id, action: "archived", summary: r.content.slice(0, 120), by: "dream" });
       changed++;
     }
-    m.lastDreamAt = ts;
     await this.save(personaId);
     return changed;
   }

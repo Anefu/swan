@@ -89,6 +89,7 @@ interface Persisted {
   carry: string | null; // checkpoint text waiting to open the next user message of a new epoch
   placeholders: Record<string, string>; // credential ref (or ref.field) -> placeholder seen inside the sandbox
   proxyToken: string;
+  dreamedThrough?: string; // id of the last event /dream has read in this conversation
 }
 
 const MAX_TURNS_PER_MESSAGE = 200;
@@ -192,6 +193,7 @@ export class Session {
   private carry: string | null;
   private placeholders: Record<string, string>;
   private proxyToken: string;
+  private dreamedThrough: string | null;
 
   private container: string | null = null;
   private mcp: SessionMcp | null = null;
@@ -232,6 +234,7 @@ export class Session {
     this.carry = data.carry;
     this.placeholders = data.placeholders ?? {};
     this.proxyToken = data.proxyToken;
+    this.dreamedThrough = data.dreamedThrough ?? null;
     this.creds = new SessionCredentials(
       {
         id: this.summary.id,
@@ -337,6 +340,7 @@ export class Session {
       carry: this.carry,
       placeholders: this.placeholders,
       proxyToken: this.proxyToken,
+      ...(this.dreamedThrough ? { dreamedThrough: this.dreamedThrough } : {}),
     };
     try {
       await writeFileAtomic(this.file, JSON.stringify(data), 0o600);
@@ -1290,14 +1294,27 @@ export class Session {
 
   // ---------- /dream ----------
 
+  /**
+   * Where this conversation's unconsolidated events start: after the last event /dream read here.
+   * A conversation from before the bookmark was kept per conversation starts after its own last
+   * successful /dream, never after one that ran in another conversation of the persona.
+   */
+  private dreamedFrom(): number {
+    if (this.dreamedThrough) {
+      const i = this.items.findIndex((it) => it.id === this.dreamedThrough);
+      if (i >= 0) return i + 1;
+    }
+    return this.items.findLastIndex((it) => it.kind === "receipt" && it.action === "dream" && it.status === "done") + 1;
+  }
+
   async dream() {
     if (this.dreaming) return this.notice("info", "/dream is already running.");
     this.dreaming = true;
     const r = this.receipt("dream", "/dream", "Consolidating memory…");
     try {
       const recs = (await this.deps.memory.list(this.personaId)).filter((x) => x.status === "active" || x.status === "tentative").slice(0, 200);
-      const last = await this.deps.memory.dreamState(this.personaId);
-      const fresh = this.items.filter((it) => !last || it.ts > last);
+      const upTo = this.items.length;
+      const fresh = this.items.slice(this.dreamedFrom(), upTo);
       const events = truncateMiddle(fresh.map(itemLine).filter(Boolean).join("\n\n"), 80_000);
       const { text, result } = await this.auxCall(
         "You maintain a persona's long-term memory. Output only one JSON object, no prose.",
@@ -1311,6 +1328,7 @@ export class Session {
         merge: (Array.isArray(j.merge) ? j.merge : []) as never,
         archive: strs(j.archive),
       });
+      if (upTo) this.dreamedThrough = this.items[upTo - 1].id;
       const credits = (result as TurnResult & { credits?: number }).credits;
       const tokens = result.usage.inputTokens + result.usage.outputTokens;
       const cost = credits !== undefined ? `${credits.toFixed(2)} credits` : tokens > 0 ? `${Math.max(0.1, Math.round(tokens / 100) / 10)}k tokens` : "usage not reported";
