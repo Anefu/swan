@@ -495,7 +495,7 @@ export interface PersonaConfigView {
   permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
   skills: string[];
   mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON
-  memory: { autoBrief: boolean; briefTokens: number };
+  memory: { autoBrief: boolean; briefTokens: number; autoDream?: boolean }; // autoDream absent from servers before 0.2.11
   subagents: SubagentsConfig;
   schedules?: ScheduleView[]; // absent from servers before 0.2.1
   watchers?: WatcherView[];
@@ -558,6 +558,7 @@ export interface MemoryRecord {
   sources: string[]; // chat item ids or "user"
   createdAt: string;
   updatedAt: string;
+  checkedAt?: string; // when /dream last reread the events it came from
 }
 
 export interface MemoryChange {

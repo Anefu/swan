@@ -6,7 +6,9 @@ import type { ChatItem, Checkpoint } from "@ph/shared";
 import { MemoryStore } from "../memory.js";
 import { paths } from "../settings.js";
 import { nowIso } from "../util.js";
-import { Session, SessionManager, type SessionDeps } from "./session.js";
+import { memoryTools } from "./memory-tools.js";
+import { IDLE_DREAM_MS, Session, SessionManager, type SessionDeps } from "./session.js";
+import type { ToolContext } from "./tools.js";
 
 const cp = (objective: string, extra: Partial<Checkpoint> = {}): Checkpoint => ({
   epoch: 1,
@@ -47,9 +49,13 @@ describe("checkpoints per conversation", () => {
   });
 });
 
-function setup() {
+let personas = 0;
+
+/** A SessionManager over one persona of its own, with a model that records every prompt. */
+function setup(o: { autoDream?: boolean; autoBrief?: boolean } = {}) {
+  const pid = `pc${++personas}`;
   const persona = {
-    id: "p3",
+    id: pid,
     folders: [],
     errors: [],
     config: {
@@ -59,14 +65,16 @@ function setup() {
       model: undefined,
       connections: {},
       network: { allow: [] },
-      memory: { autoBrief: false, briefTokens: 0 },
+      memory: { autoBrief: !!o.autoBrief, briefTokens: o.autoBrief ? 1500 : 0, autoDream: !!o.autoDream },
       permissions: { default: "ask", allow: [], ask: [], deny: [] },
     },
   };
   const prompts: string[] = [];
+  const systems: string[] = [];
+  let reply: ((system: string, prompt: string) => string | undefined) | undefined;
   let n = 0;
   const deps = {
-    personas: { get: (id: string) => (id === "p3" ? persona : undefined), namedRefs: () => [] },
+    personas: { get: (id: string) => (id === pid ? persona : undefined), namedRefs: () => [] },
     skills: { get: () => undefined },
     settings: { defaultModel: { provider: "fake", id: "m" }, providers: {}, rolloverStrategy: "full", contextLimitTokens: 200_000 },
     memory: new MemoryStore(),
@@ -77,9 +85,10 @@ function setup() {
     onApprovalsChanged: vi.fn(),
     providers: {
       releaseSession: vi.fn(),
-      runTurn: vi.fn(async (_provider: string, r: { messages: { content: string }[] }) => {
+      runTurn: vi.fn(async (_provider: string, r: { system: string; messages: { content: string }[] }) => {
         prompts.push(r.messages[0].content);
-        const text = JSON.stringify({ objective: `goal ${++n}`, nextAction: "go on", sources: [] });
+        systems.push(r.system);
+        const text = reply?.(r.system, r.messages[0].content) ?? JSON.stringify({ objective: `goal ${++n}`, nextAction: "go on", sources: [] });
         return { content: [{ type: "text", text }], toolUses: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } };
       }),
     },
@@ -87,40 +96,76 @@ function setup() {
     diffs: { removeSession: vi.fn(async () => {}) },
     attachments: { removeSession: vi.fn(async () => {}) },
   } as unknown as SessionDeps;
-  return { m: new SessionManager(deps), deps, prompts };
+  const m = new SessionManager(deps);
+  return {
+    m,
+    deps,
+    pid,
+    prompts,
+    systems,
+    respond: (f: typeof reply) => void (reply = f),
+    done: async () => {
+      for (const s of m.list(pid)) await m.remove(s.id);
+    },
+  };
 }
 
-type Internals = { openEpoch(): Promise<void>; rollover(reason: string): Promise<void>; addItem(it: ChatItem): void };
-const say = (s: Session, text: string, ts = nowIso()) => (s as unknown as Internals).addItem({ kind: "user", id: `it_${text}`, ts, text });
+type Internals = {
+  openEpoch(): Promise<void>;
+  rollover(reason: string): Promise<void>;
+  addItem(it: ChatItem): void;
+  dreamIfQuiet(): Promise<void>;
+  scheduleIdleDream(): void;
+  epoch: { frozen: { system: string } };
+};
+const x = (s: Session) => s as unknown as Internals;
+const say = (s: Session, text: string, id = `it_${text}`, ts = nowIso()) => x(s).addItem({ kind: "user", id, ts, text });
+const roll = async (s: Session, text: string) => {
+  await x(s).openEpoch();
+  say(s, text);
+  await x(s).rollover("test");
+};
+const isDream = (system: string) => system.includes("long-term memory");
 
 describe("a rollover", () => {
-  const roll = async (s: Session, text: string) => {
-    await (s as unknown as Internals).openEpoch();
-    say(s, text);
-    await (s as unknown as Internals).rollover("test");
-  };
-
   it("starts from its own conversation's checkpoint, not another conversation's", async () => {
-    const { m, deps, prompts } = setup();
-    const a = m.create("p3", "A");
-    const b = m.create("p3", "B");
+    const { m, deps, pid, prompts, done } = setup();
+    const a = m.create(pid, "A");
+    const b = m.create(pid, "B");
     await roll(a, "task-a");
     await roll(b, "task-b");
     expect(prompts[1]).toContain("Previous checkpoint (may be null):\nnull");
     expect(prompts[1]).not.toContain("goal 1");
-    expect(await deps.memory.latestCheckpoint("p3", b.id)).toMatchObject({ sessionId: b.id, objective: "goal 2" });
+    expect(await deps.memory.latestCheckpoint(pid, b.id)).toMatchObject({ sessionId: b.id, objective: "goal 2" });
     await roll(a, "more-a");
     expect(prompts[2]).toContain('"objective":"goal 1"');
-    for (const s of m.list("p3")) await m.remove(s.id);
+    await done();
+  });
+
+  it("runs /dream alongside the checkpoint, so the new context's brief has what it saved", async () => {
+    const { m, pid, systems, respond, done } = setup({ autoDream: true, autoBrief: true });
+    respond((sys) => (isDream(sys) ? JSON.stringify({ add: [{ type: "preference", content: "The user wants tabs, not spaces.", origin: "user", sources: ["it_tabs"] }] }) : undefined));
+    const a = m.create(pid, "A");
+    await roll(a, "tabs");
+    expect(systems.filter(isDream)).toHaveLength(1);
+    expect(x(a).epoch.frozen.system).toContain("The user wants tabs, not spaces.");
+    await done();
+  });
+
+  it("doesn't run /dream when the persona turns it off", async () => {
+    const { m, pid, systems, done } = setup({ autoDream: false });
+    await roll(m.create(pid, "A"), "task");
+    expect(systems.filter(isDream)).toHaveLength(0);
+    await done();
   });
 });
 
 describe("/dream", () => {
   it("reads its own conversation's events since its own last run", async () => {
-    const { m, prompts } = setup();
-    const a = m.create("p3", "A");
-    const b = m.create("p3", "B");
-    say(b, "task-b", "2026-01-01T00:00:00.000Z"); // written before /dream runs in A
+    const { m, pid, prompts, done } = setup();
+    const a = m.create(pid, "A");
+    const b = m.create(pid, "B");
+    say(b, "task-b", "it_task-b", "2026-01-01T00:00:00.000Z"); // written before /dream runs in A
     say(a, "task-a");
     await a.dream();
     expect(prompts[0]).toContain("task-a");
@@ -132,13 +177,13 @@ describe("/dream", () => {
     await a.dream();
     expect(prompts[2]).toContain("more-a");
     expect(prompts[2]).not.toContain("task-a");
-    for (const s of m.list("p3")) await m.remove(s.id);
+    await done();
   });
 
   it("keeps its place across a restart", async () => {
-    const { m, deps, prompts } = setup();
+    const { m, deps, pid, prompts, done } = setup();
     await fs.mkdir(paths.sessions, { recursive: true }); // made at startup
-    const a = m.create("p3", "A");
+    const a = m.create(pid, "A");
     say(a, "before-restart");
     await a.dream();
     const reopened = await Session.load(deps, path.join(paths.sessions, `${a.id}.json`));
@@ -146,18 +191,142 @@ describe("/dream", () => {
     await reopened.dream();
     expect(prompts[1]).toContain("after-restart");
     expect(prompts[1]).not.toContain("before-restart");
-    await m.remove(a.id);
+    await done();
   });
 
   it("starts a conversation from before the per-conversation bookmark after its own last /dream", async () => {
-    const { m, prompts } = setup();
-    const a = m.create("p3", "A");
+    const { m, pid, prompts, done } = setup();
+    const a = m.create(pid, "A");
     say(a, "old-a");
-    (a as unknown as Internals).addItem({ kind: "receipt", id: "it_dreamt", ts: nowIso(), action: "dream", title: "/dream", detail: "Consolidated memory", status: "done" });
+    x(a).addItem({ kind: "receipt", id: "it_dreamt", ts: nowIso(), action: "dream", title: "/dream", detail: "Consolidated memory", status: "done" });
     say(a, "new-a");
     await a.dream();
     expect(prompts[0]).toContain("new-a");
     expect(prompts[0]).not.toContain("old-a");
-    await m.remove(a.id);
+    await done();
+  });
+
+  it("reads the oldest events first and leaves the rest for the next run", async () => {
+    const { m, pid, prompts, done } = setup();
+    const a = m.create(pid, "A");
+    say(a, `first ${"x".repeat(50_000)}`, "it_first");
+    say(a, `second ${"y".repeat(50_000)}`, "it_second");
+    await a.dream();
+    expect(prompts[0]).toContain("[it_first]");
+    expect(prompts[0]).not.toContain("[it_second]");
+    expect(a.items.findLast((it) => it.kind === "receipt")).toMatchObject({ status: "done", detail: expect.stringContaining("newer events next time") });
+    await a.dream();
+    expect(prompts[1]).toContain("[it_second]");
+    expect(prompts[1]).not.toContain("[it_first]");
+    await done();
+  });
+
+  it("rereads saved memories against their events, in any of the persona's conversations, and corrects them", async () => {
+    const { m, deps, pid, prompts, respond, done } = setup();
+    const a = m.create(pid, "A");
+    const b = m.create(pid, "B");
+    say(a, "We use npm here, not pnpm.", "it_npm");
+    const rec = await deps.memory.add(pid, { content: "The project uses pnpm.", type: "preference", origin: "user", sources: ["it_npm"], by: "agent" });
+    respond((sys) => (isDream(sys) ? JSON.stringify({ revise: [{ id: rec.id, content: "The project uses npm, not pnpm.", reason: "the user said npm", sources: ["it_npm"] }] }) : undefined));
+    say(b, "hello");
+    await b.dream();
+    expect(prompts[0]).toContain("Records to recheck");
+    expect(prompts[0]).toContain("We use npm here, not pnpm.");
+    const after = await deps.memory.get(pid, rec.id);
+    expect(after).toMatchObject({ content: "The project uses npm, not pnpm.", version: 2, status: "active", origin: "user" });
+    expect(after?.checkedAt).toBeTruthy();
+    expect((await deps.memory.history(pid))[0]).toMatchObject({ action: "edited", by: "dream", summary: "Corrected: the user said npm" });
+    await done();
+  });
+});
+
+describe("automatic /dream when a conversation goes quiet", () => {
+  it("runs when the user wrote something new, and not for a scheduled run alone", async () => {
+    const { m, pid, prompts, done } = setup({ autoDream: true });
+    const a = m.create(pid, "A");
+    x(a).addItem({ kind: "user", id: "it_sched", ts: nowIso(), text: "check the queue", trigger: "schedule nightly" });
+    await x(a).dreamIfQuiet();
+    expect(prompts).toHaveLength(0);
+    say(a, "I review pull requests on Mondays.");
+    await x(a).dreamIfQuiet();
+    expect(prompts).toHaveLength(1);
+    await x(a).dreamIfQuiet();
+    expect(prompts).toHaveLength(1); // nothing new since
+    await done();
+  });
+
+  it("waits until the conversation has been quiet long enough", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { m, pid, prompts, done } = setup({ autoDream: true });
+      const a = m.create(pid, "A");
+      say(a, "hello");
+      x(a).scheduleIdleDream();
+      await vi.advanceTimersByTimeAsync(IDLE_DREAM_MS - 1000);
+      expect(prompts).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      await done();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't run when the persona turns it off", async () => {
+    const { m, pid, prompts, done } = setup({ autoDream: false });
+    const a = m.create(pid, "A");
+    say(a, "hello");
+    await x(a).dreamIfQuiet();
+    expect(prompts).toHaveLength(0);
+    await done();
+  });
+});
+
+describe("correcting memories", () => {
+  it("revises a record, says why, and keeps its status in step with its origin", async () => {
+    const m = new MemoryStore();
+    const r = await m.add("pr1", { content: "Deploys run on Fridays.", type: "observation", origin: "inference", sources: ["it_a"], by: "agent" });
+    expect(r.status).toBe("tentative");
+    const v = await m.revise("pr1", r.id, { content: "Deploys run on Thursdays.", origin: "observation", sources: ["it_b"], reason: "the deploy log says Thursday" }, "agent");
+    expect(v).toMatchObject({ content: "Deploys run on Thursdays.", origin: "observation", status: "active", version: 2, sources: ["it_a", "it_b"] });
+    expect((await m.history("pr1"))[0]).toMatchObject({ action: "edited", by: "agent", summary: "Corrected: the deploy log says Thursday", before: "Deploys run on Fridays." });
+    await m.act("pr1", r.id, "archive");
+    await expect(m.revise("pr1", r.id, { content: "x" }, "agent")).rejects.toThrow();
+  });
+
+  it("rechecks tentative memories first, then the longest unchecked, and only those that cite events", async () => {
+    const m = new MemoryStore();
+    const old = await m.add("pr2", { content: "old", type: "observation", origin: "observation", sources: ["it_1"], by: "agent" });
+    await m.add("pr2", { content: "guess", type: "observation", origin: "inference", sources: ["it_2"], by: "agent" });
+    await m.add("pr2", { content: "typed by the user", type: "preference", origin: "user", sources: ["user"], by: "user" });
+    await m.add("pr2", { content: "fresh", type: "observation", origin: "observation", sources: ["it_3"], by: "agent" });
+    await m.applyDream("pr2", { add: [], merge: [], archive: [], checked: [old.id] });
+    expect((await m.dueForRecheck("pr2", 10)).map((r) => r.content)).toEqual(["guess", "fresh", "old"]);
+  });
+});
+
+describe("the agent's memory tools", () => {
+  const memory = new MemoryStore();
+  const tool = (name: string) => memoryTools({ memory, personaId: "pt", items: () => [] }).find((t) => t.name === name)!;
+  const run = (name: string, input: Record<string, unknown>) => tool(name).run(input, {} as ToolContext);
+
+  it("update a saved memory instead of adding a second one", async () => {
+    const r = await memory.add("pt", { content: "Tests run with jest.", type: "procedure", origin: "observation", sources: ["it_1"], by: "agent" });
+    const out = await run("memory_update", { id: r.id, content: "Tests run with vitest.", origin: "observation", sources: ["it_2"], reason: "package.json moved to vitest" });
+    expect(out.text).toContain(`Updated ${r.id}`);
+    expect(await memory.get("pt", r.id)).toMatchObject({ content: "Tests run with vitest.", version: 2 });
+    expect((await memory.list("pt")).filter((x) => x.status === "active")).toHaveLength(1);
+  });
+
+  it("archive the agent's own memories, but not what the user said or pinned", async () => {
+    const mine = await memory.add("pt", { content: "The staging API is slow.", type: "observation", origin: "observation", sources: [], by: "agent" });
+    const said = await memory.add("pt", { content: "Use British spelling.", type: "preference", origin: "user", sources: [], by: "agent" });
+    const pinned = await memory.add("pt", { content: "Deploy needs approval.", type: "decision", origin: "observation", sources: [], pinned: true, by: "user" });
+    expect((await run("memory_archive", { id: mine.id, reason: "fixed last week" })).text).toBe(`Archived ${mine.id}.`);
+    expect((await memory.get("pt", mine.id))?.status).toBe("archived");
+    expect((await memory.history("pt"))[0].summary).toContain("fixed last week");
+    expect((await run("memory_archive", { id: said.id, reason: "x" })).isError).toBe(true);
+    expect((await run("memory_archive", { id: pinned.id, reason: "x" })).isError).toBe(true);
+    expect((await run("memory_update", { id: mine.id, content: "x", origin: "observation", sources: [] })).isError).toBe(true); // archived
   });
 });

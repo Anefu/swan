@@ -54,6 +54,7 @@ export interface SessionDeps {
   diffs: DiffStore;
   siblingAtWork?: (sessionId: string, personaId: string) => boolean; // set by SessionManager
   conversations?: ConversationAccess; // set by SessionManager
+  findEvents?: (personaId: string, ids: string[]) => ChatItem[]; // in any of the persona's conversations; set by SessionManager
   usage: UsageLedger;
   attachments: AttachmentStore;
   catalog: ModelCatalog;
@@ -93,6 +94,9 @@ interface Persisted {
 }
 
 const MAX_TURNS_PER_MESSAGE = 200;
+const DREAM_EVENT_CHARS = 80_000; // events one /dream reads; later ones wait for the next run
+const DREAM_RECHECK = 8; // saved memories one /dream rereads against their sources
+export const IDLE_DREAM_MS = 10 * 60_000; // a conversation the user wrote in dreams once it has been quiet this long
 const DEFAULT_MAX_TOKENS = 64_000;
 const SWAN_COMMANDS: SlashCommand[] = [
   { name: "dream", description: "Consolidate memory now", source: "swan" },
@@ -140,7 +144,7 @@ function systemPrompt(o: {
     "Keep this conversation for the user: understanding what they want, decisions, and reporting results. Hand off substantial work (multi-step investigation, implementation, long builds or checks) to sub-agents, with background: true when the user may want to talk to you meanwhile, and tell the user what you started.",
     "",
     "# Memory",
-    "The user may have other conversations with this persona; you see only this one, and share memory with them. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. When the user states a lasting preference or the project makes a decision worth keeping, save it with memory_propose, citing event ids.",
+    "The user may have other conversations with this persona; you see only this one, and share memory with them. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. Memory is how this persona gets better at its work: a later conversation, and this one after its context rolls over, starts out knowing only what was saved. Save what would help then and can't simply be read again from files or tools, citing event ids, and keep it right: when a saved memory turns out wrong or out of date, fix it with memory_update or retire it with memory_archive.",
   );
   if (o.epoch > 1) lines.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
   if (o.brief) lines.push("", "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
@@ -216,6 +220,7 @@ export class Session {
   private agents = new Map<string, AgentEntry>();
   private loopRunning = false;
   private dreaming = false;
+  private idleDream: ReturnType<typeof setTimeout> | null = null;
   private abort: AbortController | null = null;
   private approvals = new Map<string, { resolve: (d: ApprovalBody) => void; info: PendingApproval }>();
   private netPending = new Map<string, Promise<boolean>>(); // host -> decision in flight
@@ -351,6 +356,7 @@ export class Session {
 
   async deleteFile() {
     this.deleted = true;
+    this.cancelIdleDream();
     if (await exists(this.file)) await fs.rm(this.file);
   }
 
@@ -844,6 +850,8 @@ export class Session {
   private async rollover(reason: string) {
     const old = this.epoch!;
     const r = this.receipt("rollover", "New context", `Condensing earlier context (${reason})…`);
+    // Alongside the checkpoint, so what it saves is in the new context's memory brief.
+    const dreamt = this.autoDream() ? this.dream("rollover") : Promise.resolve();
     const own = new Set(this.items.map((it) => it.id));
     const prev = await this.deps.memory.latestCheckpoint(this.personaId, this.id, (id) => own.has(id));
     const since = old.startedAt;
@@ -913,6 +921,7 @@ export class Session {
       );
     } else parts.push("## Most recent events", tail, "Earlier details (rationale, attempts, tool output) are in history: use history_search / history_read rather than guessing.", "[End of carried-over context.]");
     this.carry = parts.filter(Boolean).join("\n\n");
+    await dreamt;
     await this.openEpoch();
     r.done(
       strategy === "retrieval" ? `Context ${old.n + 1}: history pointer only (${reason})` : cp ? `Context ${old.n + 1}: ${strategy} checkpoint saved (${reason})` : `Context ${old.n + 1}: recent events carried over (${reason})`,
@@ -1108,6 +1117,7 @@ export class Session {
 
   private async runLoop() {
     this.loopRunning = true;
+    this.cancelIdleDream();
     try {
       try {
         await this.restartIfDue(); // a change that waited for the last turn, or for a sub-agent
@@ -1154,6 +1164,7 @@ export class Session {
       await this.restartIfDue();
       await this.stopIfTriggerDone();
       await this.persist();
+      this.scheduleIdleDream();
     }
   }
 
@@ -1307,18 +1318,83 @@ export class Session {
     return this.items.findLastIndex((it) => it.kind === "receipt" && it.action === "dream" && it.status === "done") + 1;
   }
 
-  async dream() {
-    if (this.dreaming) return this.notice("info", "/dream is already running.");
+  private autoDream() {
+    const cfg = this.deps.personas.get(this.personaId)?.config;
+    return !!cfg && cfg.memory.autoDream !== false;
+  }
+
+  private cancelIdleDream() {
+    if (this.idleDream) clearTimeout(this.idleDream);
+    this.idleDream = null;
+  }
+
+  /** Once the conversation has been quiet for a while, consolidate what the user said in it. */
+  private scheduleIdleDream() {
+    this.cancelIdleDream();
+    if (this.deleted || !this.autoDream()) return;
+    const t = setTimeout(() => {
+      this.idleDream = null;
+      void this.dreamIfQuiet();
+    }, IDLE_DREAM_MS);
+    t.unref?.();
+    this.idleDream = t;
+  }
+
+  /** Scheduled runs and messages from other conversations dream only at a rollover, or on /dream. */
+  private async dreamIfQuiet() {
+    if (this.deleted || this.loopRunning || this.dreaming || this.approvals.size || !this.autoDream()) return;
+    if (!this.items.slice(this.dreamedFrom()).some((it) => it.kind === "user" && !it.trigger)) return;
+    await this.dream("quiet");
+  }
+
+  /** The events behind saved memories, from any of this persona's conversations. */
+  private findEvents(ids: string[]): ChatItem[] {
+    if (this.deps.findEvents) return this.deps.findEvents(this.personaId, ids);
+    const want = new Set(ids);
+    return this.items.filter((it) => want.has(it.id));
+  }
+
+  /**
+   * Consolidate memory: read this conversation's events since the last run (oldest first, up to a
+   * budget; the rest wait for the next run), reread a few saved memories against the events they
+   * came from, and apply what the model proposes under MemoryStore's rules.
+   */
+  async dream(auto?: "rollover" | "quiet") {
+    if (this.dreaming) return auto ? undefined : this.notice("info", "/dream is already running.");
     this.dreaming = true;
-    const r = this.receipt("dream", "/dream", "Consolidating memory…");
+    const r = this.receipt("dream", "/dream", auto ? `Tidying memory (${auto === "rollover" ? "new context" : "conversation went quiet"})…` : "Consolidating memory…");
     try {
       const recs = (await this.deps.memory.list(this.personaId)).filter((x) => x.status === "active" || x.status === "tentative").slice(0, 200);
-      const upTo = this.items.length;
-      const fresh = this.items.slice(this.dreamedFrom(), upTo);
-      const events = truncateMiddle(fresh.map(itemLine).filter(Boolean).join("\n\n"), 80_000);
+      const recheck: { id: string; content: string; sourceEvents: string[] }[] = [];
+      const checked: string[] = [];
+      for (const rec of await this.deps.memory.dueForRecheck(this.personaId, DREAM_RECHECK * 3)) {
+        if (recheck.length >= DREAM_RECHECK) break;
+        checked.push(rec.id); // also when its events are gone, so it moves to the back of the queue
+        const found = this.findEvents(rec.sources).slice(0, 3);
+        if (found.length) recheck.push({ id: rec.id, content: rec.content, sourceEvents: found.map((it) => truncateMiddle(itemLine(it), 1000)) });
+      }
+      const from = this.dreamedFrom();
+      const lines: string[] = [];
+      let used = 0;
+      let upTo = from;
+      for (; upTo < this.items.length; upTo++) {
+        const line = itemLine(this.items[upTo]);
+        if (!line) continue;
+        if (lines.length && used + line.length > DREAM_EVENT_CHARS) break;
+        const l = truncateMiddle(line, DREAM_EVENT_CHARS);
+        lines.push(l);
+        used += l.length + 2;
+      }
+      const later = upTo < this.items.length;
       const { text, result } = await this.auxCall(
         "You maintain a persona's long-term memory. Output only one JSON object, no prose.",
-        `Current memory records:\n${JSON.stringify(recs.map((x) => ({ id: x.id, type: x.type, origin: x.origin, status: x.status, pinned: x.pinned, content: x.content })))}\n\nConversation events since the last consolidation (ids in brackets):\n${events || "(none)"}\n\nReturn JSON {"add": [{"type": "preference|decision|observation|procedure|episode", "content": "...", "origin": "user|observation|inference", "sources": ["event ids"]}], "merge": [{"keep": "record id", "remove": ["duplicate record ids"], "content": "merged text"}], "archive": ["ids of records about completed work that no longer matter"]}. Only add durable facts: stated preferences (origin user), decisions with rationale, verified observations, procedures that worked. Never re-add archived or forgotten facts. Use origin "inference" for anything the user did not say or the tools did not show.`,
+        [
+          "Memory is how this persona gets better at its work: later conversations, and this one after its context rolls over, start out knowing only what is saved. Keep what would help then and can't simply be read again from files or tools, and keep it correct.",
+          `Current memory records:\n${JSON.stringify(recs.map((x) => ({ id: x.id, type: x.type, origin: x.origin, status: x.status, pinned: x.pinned, content: x.content })))}`,
+          `Records to recheck against the events they were saved from (a record can be wrong from the start, or out of date since):\n${recheck.length ? JSON.stringify(recheck) : "(none)"}`,
+          `Conversation events since the last consolidation (ids in brackets):\n${lines.join("\n\n") || "(none)"}`,
+          `Return JSON {"add": [{"type": "preference|decision|observation|procedure|episode", "content": "...", "origin": "user|observation|inference", "sources": ["event ids"]}], "revise": [{"id": "record id", "content": "the corrected text", "reason": "what was wrong", "origin": "user|observation|inference", "sources": ["event ids"]}], "merge": [{"keep": "record id", "remove": ["duplicate record ids"], "content": "merged text"}], "archive": ["ids of records that no longer matter"]}. Revise a record when the events show it is wrong, out of date or incomplete. Origin "user" is for what the user said, "observation" for what tools showed, "inference" for anything else. Cite event ids as sources. Never re-add archived or forgotten facts.`,
+        ].join("\n\n"),
         "dream",
       );
       const j = parseJson(text);
@@ -1327,12 +1403,15 @@ export class Session {
         add: (Array.isArray(j.add) ? j.add : []) as never,
         merge: (Array.isArray(j.merge) ? j.merge : []) as never,
         archive: strs(j.archive),
+        revise: (Array.isArray(j.revise) ? j.revise : []) as never,
+        checked,
       });
-      if (upTo) this.dreamedThrough = this.items[upTo - 1].id;
+      if (upTo > from) this.dreamedThrough = this.items[upTo - 1].id;
       const credits = (result as TurnResult & { credits?: number }).credits;
       const tokens = result.usage.inputTokens + result.usage.outputTokens;
       const cost = credits !== undefined ? `${credits.toFixed(2)} credits` : tokens > 0 ? `${Math.max(0.1, Math.round(tokens / 100) / 10)}k tokens` : "usage not reported";
-      r.done(`Consolidated memory · ${changed} record${changed === 1 ? "" : "s"} updated · ${cost}`);
+      const parts = [`${changed} record${changed === 1 ? "" : "s"} updated`, recheck.length ? `${recheck.length} rechecked` : "", later ? "newer events next time" : "", cost];
+      r.done(`Consolidated memory · ${parts.filter(Boolean).join(" · ")}`);
       this.deps.broadcast({ type: "usage.updated", personaId: this.personaId });
     } catch (e) {
       r.done(`Memory unchanged: ${e instanceof ProviderError ? e.message : errMsg(e)}`, "error");
@@ -1859,6 +1938,10 @@ export class SessionManager {
         to.deliver(from.summary, text);
         return null;
       },
+    };
+    deps.findEvents = (personaId, ids) => {
+      const want = new Set(ids);
+      return [...this.sessions.values()].filter((s) => s.personaId === personaId).flatMap((s) => s.items.filter((it) => want.has(it.id)));
     };
     deps.siblingAtWork = (id, personaId) => [...this.sessions.values()].some((s) => s.id !== id && s.personaId === personaId && (s.summary.status === "running" || s.summary.status === "awaiting_approval"));
     deps.proxy.asker = async (ps, host, port) => this.sessions.get(ps.sessionId)?.requestNetwork(host, port) ?? false;

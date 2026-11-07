@@ -147,6 +147,10 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
       return { verb: "Read", target: `${tool === "memory_read" ? "memory" : "history"} ${item.inputPreview}`, result: null, icon: "file" };
     case "memory_propose":
       return { verb: "Proposed memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
+    case "memory_update":
+      return { verb: "Updated memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
+    case "memory_archive":
+      return { verb: "Archived memory", target: firstLine(str(item.input, ["reason"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
     default:
       return { verb: "Used", target: `${tool}${item.inputPreview ? ` ${firstLine(item.inputPreview, 70)}` : ""}`, result: null, icon: "tool" };
   }

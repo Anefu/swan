@@ -274,6 +274,13 @@ effort: command rules decide what asks, the sandbox and credential rules are the
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with
   "interrupted" results so the transcript stays valid.
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
+- Memory: the agent saves, corrects and retires a persona's memory records with `memory_propose`,
+  `memory_update` and `memory_archive` (it can't archive what the user said, or pinned records).
+  `/dream` consolidates: it reads the conversation's events since its last run in that
+  conversation, rereads a few saved records against the events they cite (in any of the persona's
+  conversations), and adds, corrects, merges or archives records. It runs on `/dream`, alongside
+  each rollover's checkpoint, and once a conversation the user wrote in has been quiet for 10
+  minutes (`memory.autoDream`, on by default).
 - Sessions persist to `~/.swan/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
 - A container keeps what it was started with: folders, skills, MCP servers, `env`, `sandbox` and
