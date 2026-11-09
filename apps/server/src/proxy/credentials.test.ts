@@ -8,6 +8,7 @@ import type net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import { CloudWatchLogsClient, FilterLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
@@ -40,6 +41,8 @@ let session: ProxySession;
 const asked: Verdict[] = [];
 const denied: Verdict[] = [];
 let askAnswer = true;
+let echoPort = 0;
+let echoServer: https.Server;
 
 const rules = (): Rule[] => [
   { credential: "aws", api: "aws", allow: ["sts:GetCallerIdentity", "s3:Get*", "s3:List*", "logs:*"], ask: [], deny: ["iam:*"] },
@@ -49,6 +52,21 @@ const rules = (): Rule[] => [
 beforeAll(async () => {
   const stubTls = makeTls(["*.aws.test", "*.k8s.aws.test"]);
   stub = await startStub({ tls: stubTls, autoApprove: true });
+  // An upstream that echoes the Authorization header back in every way a server might.
+  echoServer = https.createServer({ key: stubTls.key, cert: stubTls.cert }, (req, res) => {
+    const auth = req.headers.authorization ?? "";
+    const value = auth.replace(/^(Bearer|Basic) /, "");
+    const mode = new URL(req.url ?? "/", "https://x").searchParams.get("mode");
+    const headers: Record<string, string> = { location: `/next?access_token=${encodeURIComponent(value)}`, link: `</p2?t=${value}>; rel="next"` };
+    if (mode === "binary") return void res.writeHead(200, { ...headers, "content-type": "application/octet-stream" }).end(Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(auth)]));
+    if (mode === "gzip") return void res.writeHead(200, { ...headers, "content-type": "application/json", "content-encoding": "gzip" }).end(zlib.gzipSync(JSON.stringify({ auth })));
+    if (mode === "zstd") return void res.writeHead(200, { ...headers, "content-type": "application/json", "content-encoding": "zstd" }).end("x");
+    if (mode === "escaped") return void res.writeHead(200, { ...headers, "content-type": "text/plain" }).end(`${encodeURIComponent(value)} ${Buffer.from(value).toString("base64")}`);
+    if (req.method === "HEAD") return void res.writeHead(200, { ...headers, "content-type": "text/plain", "content-length": "1234" }).end();
+    res.writeHead(200, { ...headers, "content-type": "message/http" }).end(`${req.method} ${req.url}\r\nAuthorization: ${auth}\r\n`);
+  });
+  await new Promise<void>((r) => echoServer.listen(0, "127.0.0.1", r));
+  echoPort = (echoServer.address() as net.AddressInfo).port;
   // The wrapper runs on the host and talks to the stub directly.
   process.env.NODE_EXTRA_CA_CERTS = stubTls.caFile;
   await fs.mkdir(paths.connections, { recursive: true });
@@ -94,6 +112,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  echoServer?.close();
   proxy?.close();
   await stub?.close();
 });
@@ -118,6 +137,7 @@ function sandboxAgent(port = proxyPort): https.Agent {
 
 const sdk = { endpoint: AWS_URL, region: "us-east-1", credentials: async () => placeholderCreds(), requestHandler: () => new NodeHttpHandler({ httpsAgent: sandboxAgent() }) };
 
+const requestVia = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string; port?: number } = {}) => request(url, init);
 function request(url: string, init: { method?: string; headers?: Record<string, string>; body?: string; port?: number } = {}) {
   return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((resolve, reject) => {
     const req = https.request(url, { method: init.method ?? "GET", headers: init.headers, agent: sandboxAgent(init.port) }, (res) => {
@@ -355,5 +375,65 @@ describe("proxy chained through a company proxy", () => {
       refusing.close();
       strict.close();
     }
+  });
+});
+
+describe("values echoed back by a server", () => {
+  // A second proxy whose cluster host reaches the echo server, with the same session.
+  let echoProxy: EgressProxy;
+  let echoProxyPort = 0;
+  beforeAll(async () => {
+    echoProxy = new EgressProxy(m, ca, { resolve: async () => ({ address: "127.0.0.1", port: echoPort }) });
+    echoProxyPort = await echoProxy.listen(0);
+    echoProxy.register(session);
+  });
+  afterAll(() => echoProxy?.close());
+  const ECHO = `${CLUSTER_URL}/api/v1/namespaces/payments/pods`;
+  const request = (url: string, init: Parameters<typeof requestVia>[1] = {}) => requestVia(url, { ...init, port: echoProxyPort });
+  const real = () => m.usable("stub/eks")!.value!;
+  const clean = (r: { headers: http.IncomingHttpHeaders; body: string }) => {
+    const all = JSON.stringify(r.headers) + r.body;
+    for (const form of [real(), encodeURIComponent(real()), Buffer.from(real()).toString("base64")]) expect(all).not.toContain(form);
+  };
+
+  it("are rewritten to placeholders in headers and in a body of any type", async () => {
+    const auth = { authorization: `Bearer ${ph("stub/eks")}` };
+    const plain = await request(ECHO, { headers: auth });
+    expect(plain.status).toBe(200);
+    expect(echoProxy.events("s1").at(-1)).toMatchObject({ decision: "injected" });
+    expect(plain.body).toContain(ph("stub/eks"));
+    expect(plain.headers.location).toContain(encodeURIComponent(ph("stub/eks")));
+    expect(plain.headers.link).toContain(ph("stub/eks"));
+    clean(plain);
+    for (const mode of ["binary", "escaped"]) clean(await request(`${ECHO}?mode=${mode}`, { headers: auth }));
+  });
+
+  it("are rewritten in a compressed body, which arrives decoded", async () => {
+    const r = await request(`${ECHO}?mode=gzip`, { headers: { authorization: `Bearer ${ph("stub/eks")}` } });
+    expect(r.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(r.body).auth).toBe(`Bearer ${ph("stub/eks")}`);
+    clean(r);
+  });
+
+  it("are rewritten in a Basic header echoed as sent", async () => {
+    const basic = `Basic ${Buffer.from(`user:${ph("stub/eks")}`).toString("base64")}`;
+    const r = await request(ECHO, { headers: { authorization: basic } });
+    expect(echoProxy.events("s1").at(-1)).toMatchObject({ decision: "injected" });
+    expect(r.body).toContain(basic);
+    expect(r.body).not.toContain(Buffer.from(`user:${real()}`).toString("base64"));
+    clean(r);
+  });
+
+  it("refuses an encoding it can't read, and TRACE", async () => {
+    const zstd = await request(`${ECHO}?mode=zstd`, { headers: { authorization: `Bearer ${ph("stub/eks")}` } });
+    expect(zstd.status).toBe(502);
+    expect(zstd.body).toMatch(/encoded as zstd/);
+    const trace = await request(ECHO, { method: "TRACE", headers: { authorization: `Bearer ${ph("stub/eks")}` } });
+    expect(trace.status).toBe(405);
+  });
+
+  it("keeps Content-Length on a HEAD response", async () => {
+    const r = await request(ECHO, { method: "HEAD", headers: { authorization: `Bearer ${ph("stub/eks")}` } });
+    expect(r.headers["content-length"]).toBe("1234");
   });
 });
