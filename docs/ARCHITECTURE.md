@@ -274,6 +274,10 @@ effort: command rules decide what asks, the sandbox and credential rules are the
   checkpoint note and memory brief). A new context reads the tools and first part from the cache
   instead of writing them again, and a sub-agent, which gets the parent's tools and system prompt,
   reads both parts. With the automatic cache point on the conversation that is 3 of the API's 4.
+  Checkpoint and `/dream` requests are one-off, so they set no cache points (`cache: false`).
+- A new context opens with the checkpoint and as many recent events as fit in half the room left
+  below the rollover point (after its prompt, tools and checkpoint), so it has room to work before
+  it rolls over again. Characters per token come from the conversation's last measured request.
 - Each assistant turn: stream → validate tool inputs → permission check (ask → UI approval) →
   execute approved calls concurrently → one user message with all `tool_result`s.
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with

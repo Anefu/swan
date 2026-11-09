@@ -77,7 +77,7 @@ function setup(o: { autoDream?: boolean; autoBrief?: boolean } = {}) {
   const deps = {
     personas: { get: (id: string) => (id === pid ? persona : undefined), namedRefs: () => [] },
     skills: { get: () => undefined },
-    settings: { defaultModel: { provider: "fake", id: "m" }, providers: {}, rolloverStrategy: "full", contextLimitTokens: 200_000 },
+    settings: { defaultModel: { provider: "fake", id: "m" }, providers: {}, rolloverStrategy: "full", contextLimitTokens: 200_000, rolloverAt: 0.75 },
     memory: new MemoryStore(),
     usage: { record: vi.fn(), setContext: vi.fn() },
     proxy: { register: vi.fn(), unregister: vi.fn() },
@@ -118,6 +118,7 @@ type Internals = {
   dreamIfQuiet(): Promise<void>;
   scheduleIdleDream(): void;
   epoch: { frozen: { system: SystemPrompt } };
+  carry: string | null;
 };
 const x = (s: Session) => s as unknown as Internals;
 const say = (s: Session, text: string, id = `it_${text}`, ts = nowIso()) => x(s).addItem({ kind: "user", id, ts, text });
@@ -157,6 +158,64 @@ describe("a rollover", () => {
     const { m, pid, systems, done } = setup({ autoDream: false });
     await roll(m.create(pid, "A"), "task");
     expect(systems.filter(isDream)).toHaveLength(0);
+    await done();
+  });
+});
+
+describe("a new context", () => {
+  /** A persona whose prompt fills most of a small window, as the tools do in a 16k one. */
+  const tight = async () => {
+    const t = setup();
+    t.deps.personas.get(t.pid)!.config!.instructions = "Follow the house style. ".repeat(700); // ~17k characters
+    Object.assign(t.deps.settings, { contextLimitTokens: 10_000, rolloverAt: 0.75 });
+    const a = t.m.create(t.pid, "A");
+    await x(a).openEpoch();
+    say(a, `cat output: ${"line of a long file\n".repeat(3_000)}`, "it_big");
+    return { ...t, a };
+  };
+  // Characters per token when no request was measured, as the session assumes.
+  const tokens = (a: Session) => (systemText(x(a).epoch.frozen.system).length + (x(a).carry ?? "").length) / 3.5;
+
+  it("carries only as many recent events as leave it half its room, so it doesn't roll over again at once", async () => {
+    const { a, done } = await tight();
+    await x(a).rollover("test");
+    const fixed = systemText(x(a).epoch.frozen.system).length / 3.5;
+    const threshold = 10_000 * 0.75;
+    expect(x(a).carry).toContain("## Most recent events");
+    expect(tokens(a)).toBeLessThan(threshold);
+    expect(threshold - tokens(a)).toBeGreaterThan((threshold - fixed) * 0.45);
+    await done();
+  });
+
+  it("carries the usual recent events when the window has room for them", async () => {
+    const { m, pid, done } = setup();
+    const a = m.create(pid, "A");
+    await x(a).openEpoch();
+    say(a, `cat output: ${"line of a long file\n".repeat(3_000)}`, "it_big");
+    await x(a).rollover("test");
+    expect(x(a).carry!.length).toBeGreaterThan(16_000);
+    await done();
+  });
+
+  it("still carries recent events when the checkpoint fails", async () => {
+    const { a, respond, done } = await tight();
+    respond(() => "not a checkpoint");
+    await x(a).rollover("test");
+    expect(x(a).carry).not.toContain("## Checkpoint");
+    expect(x(a).carry).toContain("line of a long file");
+    expect(x(a).carry!.length).toBeGreaterThan(4_000);
+    await done();
+  });
+});
+
+describe("checkpoint and /dream requests", () => {
+  it("are not written to the prompt cache: nothing reads them back", async () => {
+    const { m, deps, pid, systems, done } = setup({ autoDream: true });
+    await roll(m.create(pid, "A"), "task");
+    const calls = vi.mocked(deps.providers.runTurn).mock.calls as unknown as [string, { cache?: boolean }][];
+    expect(systems.filter(isDream)).toHaveLength(1);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls.every(([, r]) => r.cache === false)).toBe(true);
     await done();
   });
 });

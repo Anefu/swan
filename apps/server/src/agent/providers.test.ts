@@ -10,6 +10,13 @@ describe("the system prompt sent to Anthropic", () => {
     expect(systemBlocks("one text")).toEqual([{ type: "text", text: "one text", cache_control: { type: "ephemeral" } }]);
   });
 
+  it("has no cache points on a request that is not cached", () => {
+    expect(systemBlocks(["fixed", "per context"], false)).toEqual([
+      { type: "text", text: "fixed" },
+      { type: "text", text: "per context" },
+    ]);
+  });
+
   it("uses at most 3 cache points, leaving one for the conversation", () => {
     expect(systemBlocks(["a", "b", "c", "d", ""]).map((b) => b.text)).toEqual(["a\n\nb", "c", "d"]);
   });

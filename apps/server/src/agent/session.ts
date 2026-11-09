@@ -798,7 +798,7 @@ export class Session {
     return null;
   }
 
-  /** One model call outside the conversation (checkpoint, /dream). Usage is recorded under its purpose. */
+  /** One model call outside the conversation (checkpoint, /dream), not cached: nothing reads it back. Usage is recorded under its purpose. */
   private async auxCall(system: string, prompt: string, purpose: UsagePurpose): Promise<{ text: string; result: TurnResult }> {
     const m = this.currentModel();
     const auxId = `${this.id}:${purpose}`;
@@ -809,7 +809,7 @@ export class Session {
     try {
       const result = await this.deps.providers.runTurn(
         m.provider,
-        { model: m.id, system, tools: [], messages: [{ role: "user", content: prompt }], maxTokens: 16_000, effort: "medium", signal: ac.signal, sessionId: auxId },
+        { model: m.id, system, tools: [], messages: [{ role: "user", content: prompt }], maxTokens: 16_000, effort: "medium", signal: ac.signal, sessionId: auxId, cache: false },
         { onBlockStart: () => {}, onDelta: (_i, kind, t) => kind === "text" && (text += t), onBlockStop: () => {} },
       );
       if (!text) text = result.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
@@ -902,9 +902,6 @@ export class Session {
     if (cp) await this.deps.memory.addCheckpoint(this.personaId, cp);
     else if (strategy !== "retrieval") this.notice("warn", "Could not write a structured checkpoint; the new context carries the recent conversation instead. Earlier turns stay searchable with history_search.");
 
-    // The carried tail gets at most a quarter of the context (about 3.5 characters per token).
-    const tailChars = Math.min(strategy === "full" ? 16_000 : 4_000, Math.floor(this.deps.settings.contextLimitTokens * 0.25 * 3.5));
-    const tail = truncateMiddle(this.items.slice(strategy === "full" ? -24 : -6).map(itemLine).filter(Boolean).join("\n\n"), tailChars);
     const parts = [`[Carried over from earlier in this conversation — context ${old.n + 1} starts here (${reason}).]`];
     if (cp) {
       const list = (h: string, xs: string[]) => (xs.length ? `${h}:\n${xs.map((x) => `- ${x}`).join("\n")}` : "");
@@ -927,15 +924,40 @@ export class Session {
         lastUser ? `The latest user message is event ${lastUser.id}.` : "",
         "[End of carried-over context.]",
       );
-    } else parts.push("## Most recent events", tail, "Earlier details (rationale, attempts, tool output) are in history: use history_search / history_read rather than guessing.", "[End of carried-over context.]");
-    this.carry = parts.filter(Boolean).join("\n\n");
+    }
+    // The new context's prompt depends on what /dream saved, so the room for recent events is known only once it is open.
     await dreamt;
     await this.openEpoch();
+    if (strategy !== "retrieval") {
+      const closing = ["Earlier details (rationale, attempts, tool output) are in history: use history_search / history_read rather than guessing.", "[End of carried-over context.]"];
+      // Without a checkpoint the recent events are all the new context gets, so some go even when room is short.
+      const room = this.tailRoom(old, this.epoch!, [...parts, "## Most recent events", ...closing].join("\n\n").length + 100);
+      const chars = Math.min(strategy === "full" ? 16_000 : 4_000, cp ? room : Math.max(room, 4_000));
+      const tail = truncateMiddle(this.items.slice(strategy === "full" ? -24 : -6).map(itemLine).filter(Boolean).join("\n\n"), chars);
+      if (chars >= 500 && tail) parts.push("## Most recent events", tail);
+      parts.push(...closing);
+    }
+    this.carry = parts.filter(Boolean).join("\n\n");
     r.done(
       strategy === "retrieval" ? `Context ${old.n + 1}: history pointer only (${reason})` : cp ? `Context ${old.n + 1}: ${strategy} checkpoint saved (${reason})` : `Context ${old.n + 1}: recent events carried over (${reason})`,
       cp || strategy === "retrieval" ? "done" : "error",
     );
     await this.persist();
+  }
+
+  /**
+   * Characters of recent events a new context can carry: half the room left below the rollover point
+   * once its prompt, tools, checkpoint and the lines around the events are in. Carrying more makes it start nearly full and roll
+   * over again after a call or two, writing a checkpoint each time. Tokens are converted with the
+   * characters per token of the last measured request (about 3.5 when there is none).
+   */
+  private tailRoom(old: Epoch, next: Epoch, carriedChars: number): number {
+    const fixed = (e: Epoch) => systemText(e.frozen.system).length + JSON.stringify(e.frozen.tools).length;
+    const measured = old.contextTokens ? (fixed(old) + JSON.stringify(old.messages).length) / old.contextTokens : 3.5;
+    const perToken = Math.min(6, Math.max(2, measured));
+    const { contextLimitTokens, rolloverAt } = this.deps.settings;
+    const room = contextLimitTokens * rolloverAt - (fixed(next) + carriedChars) / perToken;
+    return Math.max(0, Math.floor((room / 2) * perToken));
   }
 
   /** Append user content to the epoch, opening it with any carried-over checkpoint. */
