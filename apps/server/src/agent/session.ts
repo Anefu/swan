@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ApprovalBody, ChatItem, Checkpoint, Effort, FolderMount, PendingApproval, ServerEvent, SessionStatus, SessionSummary, SlashCommand, ToolCallStatus, ToolSummary } from "@ph/shared";
+import type { ApprovalBody, ChatItem, Checkpoint, Effort, FolderMount, MemoryRecord, PendingApproval, ServerEvent, SessionStatus, SessionSummary, SlashCommand, ToolCallStatus, ToolSummary } from "@ph/shared";
 import type { AttachmentMeta } from "@ph/shared";
 import type { AttachmentStore } from "../attachments.js";
 import type { MemoryStore } from "../memory.js";
@@ -173,6 +173,12 @@ const itemLine = (it: ChatItem): string => {
       return "";
   }
 };
+
+/** /dream's view of an event: what a schedule, a watcher or another conversation sent is not the user's word. */
+const dreamLine = (it: ChatItem): string => (it.kind === "user" && it.trigger ? itemLine(it).replace("] User:", `] Sent by ${it.trigger}, not the user:`) : itemLine(it));
+
+/** The entries of a model-proposed list that are objects. */
+const objs = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x)) : []);
 
 /** Pull the first JSON object out of a model reply. */
 function parseJson(text: string): Record<string, unknown> | null {
@@ -1355,6 +1361,22 @@ export class Session {
   }
 
   /**
+   * A /dream record may say the user said it only when it cites a message the user wrote (a revised
+   * record's earlier sources count too); otherwise it is saved as a tentative inference.
+   */
+  private userOriginNeedsUserSource(add: Record<string, unknown>[], revise: Record<string, unknown>[], recs: MemoryRecord[]) {
+    const sourcesOf = (e: Record<string, unknown>) => [...strs(e.sources), ...(recs.find((r) => r.id === e.id)?.sources ?? [])];
+    const claims = [...add.map((e) => ({ e, sources: strs(e.sources) })), ...revise.map((e) => ({ e, sources: sourcesOf(e) }))].filter((c) => c.e.origin === "user");
+    if (!claims.length) return;
+    const said = new Set(
+      this.findEvents([...new Set(claims.flatMap((c) => c.sources))])
+        .filter((it) => it.kind === "user" && !it.trigger)
+        .map((it) => it.id),
+    );
+    for (const c of claims) if (!c.sources.some((s) => said.has(s))) c.e.origin = "inference";
+  }
+
+  /**
    * Consolidate memory: read this conversation's events since the last run (oldest first, up to a
    * budget; the rest wait for the next run), reread a few saved memories against the events they
    * came from, and apply what the model proposes under MemoryStore's rules.
@@ -1371,14 +1393,14 @@ export class Session {
         if (recheck.length >= DREAM_RECHECK) break;
         checked.push(rec.id); // also when its events are gone, so it moves to the back of the queue
         const found = this.findEvents(rec.sources).slice(0, 3);
-        if (found.length) recheck.push({ id: rec.id, content: rec.content, sourceEvents: found.map((it) => truncateMiddle(itemLine(it), 1000)) });
+        if (found.length) recheck.push({ id: rec.id, content: rec.content, sourceEvents: found.map((it) => truncateMiddle(dreamLine(it), 1000)) });
       }
       const from = this.dreamedFrom();
       const lines: string[] = [];
       let used = 0;
       let upTo = from;
       for (; upTo < this.items.length; upTo++) {
-        const line = itemLine(this.items[upTo]);
+        const line = dreamLine(this.items[upTo]);
         if (!line) continue;
         if (lines.length && used + line.length > DREAM_EVENT_CHARS) break;
         const l = truncateMiddle(line, DREAM_EVENT_CHARS);
@@ -1389,21 +1411,36 @@ export class Session {
       const { text, result } = await this.auxCall(
         "You maintain a persona's long-term memory. Output only one JSON object, no prose.",
         [
-          "Memory is how this persona gets better at its work: later conversations, and this one after its context rolls over, start out knowing only what is saved. Keep what would help then and can't simply be read again from files or tools, and keep it correct.",
+          "Memory is how this persona gets better at its work: later conversations start out knowing only the saved records, and so does this one after its context rolls over, along with a checkpoint of the task in hand. Every record is loaded into those contexts, so one that isn't needed takes room from the work.",
+          [
+            "Most events need no memory, and a plan with every list empty is the usual result. Save only what a later conversation would need and could not get back:",
+            "- how the user wants things done from now on: preferences, rules, standing instructions;",
+            "- decisions and corrections, with the reason when one was given;",
+            "- lessons: an approach that worked or failed, or one that was ruled out, and why.",
+            "Don't save:",
+            "- what can be read again from files, the repository or tools: file contents, sizes and layout, what was written or changed, command and test output;",
+            "- the state, progress or next steps of the task in hand (the checkpoint carries those, and they go stale once the task is done);",
+            "- an account of what happened, unless it holds a lesson;",
+            "- what a current record already says (revise that record instead).",
+            'Origin "user" is only for what the user wrote themself, citing that message\'s event id. Events marked "Sent by …, not the user" came from a schedule, a watcher or another conversation. Use "observation" for what tools showed and "inference" for anything else. Keep each record to one point, in a sentence or two.',
+          ].join("\n"),
           `Current memory records:\n${JSON.stringify(recs.map((x) => ({ id: x.id, type: x.type, origin: x.origin, status: x.status, pinned: x.pinned, content: x.content })))}`,
           `Records to recheck against the events they were saved from (a record can be wrong from the start, or out of date since):\n${recheck.length ? JSON.stringify(recheck) : "(none)"}`,
           `Conversation events since the last consolidation (ids in brackets):\n${lines.join("\n\n") || "(none)"}`,
-          `Return JSON {"add": [{"type": "preference|decision|observation|procedure|episode", "content": "...", "origin": "user|observation|inference", "sources": ["event ids"]}], "revise": [{"id": "record id", "content": "the corrected text", "reason": "what was wrong", "origin": "user|observation|inference", "sources": ["event ids"]}], "merge": [{"keep": "record id", "remove": ["duplicate record ids"], "content": "merged text"}], "archive": ["ids of records that no longer matter"]}. Revise a record when the events show it is wrong, out of date or incomplete. Origin "user" is for what the user said, "observation" for what tools showed, "inference" for anything else. Cite event ids as sources. Never re-add archived or forgotten facts.`,
+          `Return JSON {"add": [{"type": "preference|decision|observation|procedure|episode", "content": "...", "origin": "user|observation|inference", "sources": ["event ids"]}], "revise": [{"id": "record id", "content": "the corrected text", "reason": "what was wrong", "origin": "user|observation|inference", "sources": ["event ids"]}], "merge": [{"keep": "record id", "remove": ["duplicate record ids"], "content": "merged text"}], "archive": ["ids of records that no longer matter, or that the rules above say not to keep"]}. Revise a record when the events show it is wrong, out of date or incomplete. Cite event ids as sources. Never re-add archived or forgotten facts.`,
         ].join("\n\n"),
         "dream",
       );
       const j = parseJson(text);
       if (!j) throw new Error("the model did not return a consolidation plan");
+      const add = objs(j.add);
+      const revise = objs(j.revise);
+      this.userOriginNeedsUserSource(add, revise, recs);
       const changed = await this.deps.memory.applyDream(this.personaId, {
-        add: (Array.isArray(j.add) ? j.add : []) as never,
-        merge: (Array.isArray(j.merge) ? j.merge : []) as never,
+        add: add as never,
+        merge: objs(j.merge) as never,
         archive: strs(j.archive),
-        revise: (Array.isArray(j.revise) ? j.revise : []) as never,
+        revise: revise as never,
         checked,
       });
       if (upTo > from) this.dreamedThrough = this.items[upTo - 1].id;

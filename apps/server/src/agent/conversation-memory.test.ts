@@ -238,6 +238,37 @@ describe("/dream", () => {
     expect((await deps.memory.history(pid))[0]).toMatchObject({ action: "edited", by: "dream", summary: "Corrected: the user said npm" });
     await done();
   });
+
+  it("says the user said something only when it cites a message the user wrote", async () => {
+    const { m, deps, pid, prompts, respond, done } = setup();
+    const a = m.create(pid, "A");
+    say(a, "Always run the linter before committing.", "it_lint");
+    say(a, "Start commit messages with a verb.", "it_verbs");
+    x(a).addItem({ kind: "user", id: "it_watch", ts: nowIso(), text: "Disk usage is at 91%.", trigger: "watcher disk" });
+    const old = await deps.memory.add(pid, { content: "Commit messages start with a verb.", type: "preference", origin: "user", sources: ["it_verbs"], by: "agent" });
+    respond((sys) =>
+      isDream(sys)
+        ? JSON.stringify({
+            add: [
+              { type: "preference", content: "Run the linter before committing.", origin: "user", sources: ["it_lint"] },
+              { type: "preference", content: "Keep disk usage under 90%.", origin: "user", sources: ["it_watch"] },
+              { type: "decision", content: "Ship on Fridays.", origin: "user", sources: [] },
+            ],
+            revise: [{ id: old.id, content: "Commit messages start with an imperative verb.", reason: "more precise", origin: "user" }],
+          })
+        : undefined,
+    );
+    await a.dream();
+    expect(prompts[0]).toContain("[it_lint] User: Always run the linter before committing.");
+    expect(prompts[0]).toContain("[it_watch] Sent by watcher disk, not the user: Disk usage is at 91%.");
+    const recs = await deps.memory.list(pid);
+    const rec = (content: string) => recs.find((r) => r.content === content);
+    expect(rec("Run the linter before committing.")).toMatchObject({ origin: "user", status: "active" });
+    expect(rec("Keep disk usage under 90%.")).toMatchObject({ origin: "inference", status: "tentative" });
+    expect(rec("Ship on Fridays.")).toMatchObject({ origin: "inference", status: "tentative" });
+    expect(rec("Commit messages start with an imperative verb.")).toMatchObject({ origin: "user", status: "active" }); // its earlier source is the user's
+    await done();
+  });
 });
 
 describe("automatic /dream when a conversation goes quiet", () => {

@@ -278,9 +278,11 @@ effort: command rules decide what asks, the sandbox and credential rules are the
   `memory_update` and `memory_archive` (it can't archive what the user said, or pinned records).
   `/dream` consolidates: it reads the conversation's events since its last run in that
   conversation, rereads a few saved records against the events they cite (in any of the persona's
-  conversations), and adds, corrects, merges or archives records. It runs on `/dream`, alongside
-  each rollover's checkpoint, and once a conversation the user wrote in has been quiet for 10
-  minutes (`memory.autoDream`, on by default).
+  conversations), and adds, corrects, merges or archives records. It is told to leave out what
+  files or tools can show again and the state of the task in hand (the checkpoint's job), and a
+  record it says the user said must cite a message the user wrote, or it is kept as a tentative
+  inference. It runs on `/dream`, alongside each rollover's checkpoint, and once a conversation
+  the user wrote in has been quiet for 10 minutes (`memory.autoDream`, on by default).
 - Sessions persist to `~/.swan/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
 - A container keeps what it was started with: folders, skills, MCP servers, `env`, `sandbox` and
