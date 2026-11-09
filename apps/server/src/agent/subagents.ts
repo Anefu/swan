@@ -3,7 +3,7 @@
 import type { AgentRun, Effort } from "@ph/shared";
 import { z } from "zod";
 import { errMsg, nowIso, truncateMiddle } from "../util.js";
-import { ProviderError, type ContentBlockParam, type MessageParam, type ToolUse, type TurnResult } from "./providers.js";
+import { ProviderError, type ContentBlockParam, type MessageParam, type SystemPrompt, type ToolUse, type TurnResult } from "./providers.js";
 import { zodTool, type ToolDef, type ToolOutput } from "./tools.js";
 
 export type Outcome =
@@ -14,7 +14,7 @@ export type Outcome =
 
 export interface SubAgentHost {
   /** One model call for this agent (usage is recorded by the host). */
-  runTurn(req: { model: { provider: string; id: string; effort?: Effort }; system: string; tools: ToolDef[]; messages: MessageParam[]; signal: AbortSignal; sessionId: string }): Promise<TurnResult>;
+  runTurn(req: { model: { provider: string; id: string; effort?: Effort }; system: SystemPrompt; tools: ToolDef[]; messages: MessageParam[]; signal: AbortSignal; sessionId: string }): Promise<TurnResult>;
   /** Run tool calls through the parent's permission rules, nested under the agent's call. */
   runTools(toolUses: ToolUse[], signal: AbortSignal, tools: Map<string, ToolDef>): Promise<ContentBlockParam[]>;
   release(sessionId: string): void;
@@ -58,7 +58,7 @@ export class SubAgent {
   constructor(
     init: Omit<AgentRun, "turns" | "state" | "startedAt">,
     private host: SubAgentHost,
-    private system: string,
+    private system: SystemPrompt,
     private toolDefs: ToolDef[],
     private messages: MessageParam[],
     private sessionKey: string,

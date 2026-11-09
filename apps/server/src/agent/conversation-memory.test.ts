@@ -7,6 +7,7 @@ import { MemoryStore } from "../memory.js";
 import { paths } from "../settings.js";
 import { nowIso } from "../util.js";
 import { memoryTools } from "./memory-tools.js";
+import { systemText, type SystemPrompt } from "./providers.js";
 import { IDLE_DREAM_MS, Session, SessionManager, type SessionDeps } from "./session.js";
 import type { ToolContext } from "./tools.js";
 
@@ -85,10 +86,10 @@ function setup(o: { autoDream?: boolean; autoBrief?: boolean } = {}) {
     onApprovalsChanged: vi.fn(),
     providers: {
       releaseSession: vi.fn(),
-      runTurn: vi.fn(async (_provider: string, r: { system: string; messages: { content: string }[] }) => {
+      runTurn: vi.fn(async (_provider: string, r: { system: SystemPrompt; messages: { content: string }[] }) => {
         prompts.push(r.messages[0].content);
-        systems.push(r.system);
-        const text = reply?.(r.system, r.messages[0].content) ?? JSON.stringify({ objective: `goal ${++n}`, nextAction: "go on", sources: [] });
+        systems.push(systemText(r.system));
+        const text = reply?.(systemText(r.system), r.messages[0].content) ?? JSON.stringify({ objective: `goal ${++n}`, nextAction: "go on", sources: [] });
         return { content: [{ type: "text", text }], toolUses: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } };
       }),
     },
@@ -116,7 +117,7 @@ type Internals = {
   addItem(it: ChatItem): void;
   dreamIfQuiet(): Promise<void>;
   scheduleIdleDream(): void;
-  epoch: { frozen: { system: string } };
+  epoch: { frozen: { system: SystemPrompt } };
 };
 const x = (s: Session) => s as unknown as Internals;
 const say = (s: Session, text: string, id = `it_${text}`, ts = nowIso()) => x(s).addItem({ kind: "user", id, ts, text });
@@ -148,7 +149,7 @@ describe("a rollover", () => {
     const a = m.create(pid, "A");
     await roll(a, "tabs");
     expect(systems.filter(isDream)).toHaveLength(1);
-    expect(x(a).epoch.frozen.system).toContain("The user wants tabs, not spaces.");
+    expect(systemText(x(a).epoch.frozen.system)).toContain("The user wants tabs, not spaces.");
     await done();
   });
 
@@ -156,6 +157,26 @@ describe("a rollover", () => {
     const { m, pid, systems, done } = setup({ autoDream: false });
     await roll(m.create(pid, "A"), "task");
     expect(systems.filter(isDream)).toHaveLength(0);
+    await done();
+  });
+});
+
+describe("the system prompt", () => {
+  it("keeps what stays the same between contexts in its own part, so a new context reads it from the cache", async () => {
+    const { m, deps, pid, done } = setup({ autoBrief: true });
+    await deps.memory.add(pid, { content: "The user wants tabs, not spaces.", type: "preference", origin: "user", sources: [], by: "agent" });
+    const a = m.create(pid, "A");
+    await x(a).openEpoch();
+    const first = x(a).epoch.frozen.system as string[];
+    say(a, "task");
+    await x(a).rollover("test");
+    const second = x(a).epoch.frozen.system as string[];
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toContain("The user wants tabs");
+    expect(first[1]).toContain("The user wants tabs, not spaces.");
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).toContain("condensed into a checkpoint");
+    expect(second[1]).toContain("The user wants tabs, not spaces.");
     await done();
   });
 });

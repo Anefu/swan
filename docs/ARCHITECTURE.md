@@ -269,6 +269,11 @@ effort: command rules decide what asks, the sandbox and credential rules are the
   caching, Swan context epochs with checkpoints (not provider compaction), and server-side refusal fallbacks
   (`fallbacks: "default"`, `server-side-fallback-2026-07-01`) for models that support them.
 - Tools are frozen at session start (deterministic order) so the prefix stays cacheable.
+- The system prompt has two parts, each ending at a cache point: what stays the same across a
+  conversation's contexts (instructions, environment, skills), then the per-context lines (the
+  checkpoint note and memory brief). A new context reads the tools and first part from the cache
+  instead of writing them again, and a sub-agent, which gets the parent's tools and system prompt,
+  reads both parts. With the automatic cache point on the conversation that is 3 of the API's 4.
 - Each assistant turn: stream → validate tool inputs → permission check (ask → UI approval) →
   execute approved calls concurrently → one user message with all `tool_result`s.
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with

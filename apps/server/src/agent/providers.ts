@@ -11,9 +11,27 @@ import type { ToolDef } from "./tools.js";
 export type MessageParam = Anthropic.Beta.BetaMessageParam;
 export type ContentBlockParam = Anthropic.Beta.BetaContentBlockParam;
 
+/**
+ * A system prompt: one text, or parts in order from most to least stable (the part that stays the
+ * same across a conversation's contexts first). Providers without prompt caching join the parts.
+ */
+export type SystemPrompt = string | string[];
+export const systemText = (s: SystemPrompt): string => (typeof s === "string" ? s : s.join("\n\n"));
+
+/**
+ * Anthropic system blocks with a cache point after each part, so a new context reads the unchanging
+ * part from the cache and a sub-agent with the parent's prompt reads all of it. With the request's
+ * automatic cache point that is at most 3 of the API's 4.
+ */
+export function systemBlocks(s: SystemPrompt): Anthropic.Beta.BetaTextBlockParam[] {
+  const parts = (typeof s === "string" ? [s] : s).filter((p) => p.length > 0);
+  while (parts.length > 3) parts.splice(0, 2, `${parts[0]}\n\n${parts[1]}`);
+  return parts.map((text) => ({ type: "text", text, cache_control: { type: "ephemeral" } }));
+}
+
 export interface TurnRequest {
   model: string;
-  system: string;
+  system: SystemPrompt;
   tools: ToolDef[];
   messages: MessageParam[];
   maxTokens: number;
@@ -81,7 +99,7 @@ class AnthropicProvider implements Provider {
       model: req.model,
       max_tokens: req.maxTokens,
       stream: true,
-      system: [{ type: "text", text: req.system }],
+      system: systemBlocks(req.system),
       tools: req.tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -202,7 +220,7 @@ class OpenAIProvider implements Provider {
       stream = await client.chat.completions.create(
         {
           model: req.model,
-          messages: this.toOpenAI(req.system, req.messages),
+          messages: this.toOpenAI(systemText(req.system), req.messages),
           tools: req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
           stream: true,
           ...(isOpenAI ? { stream_options: { include_usage: true }, max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),

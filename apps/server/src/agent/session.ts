@@ -27,7 +27,7 @@ import { CLEAR_DIFFS, diffTools, permissionView } from "./diff-tools.js";
 import { CONVERSATIONS, conversationAsks, conversationTools, type ConversationAccess } from "./conversation-tools.js";
 import { hasTools } from "../sandbox/image.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
-import { ProviderError, type ContentBlockParam, type MessageParam, type ProviderRegistry, type ToolUse, type TurnResult } from "./providers.js";
+import { ProviderError, systemText, type ContentBlockParam, type MessageParam, type ProviderRegistry, type SystemPrompt, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
 import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
 
@@ -76,7 +76,7 @@ interface FrozenTool {
 interface Epoch {
   n: number;
   model: { provider: string; id: string };
-  frozen: { system: string; tools: FrozenTool[] };
+  frozen: { system: SystemPrompt; tools: FrozenTool[] }; // a string in sessions saved before the prompt had parts
   messages: MessageParam[];
   startedAt: string;
   contextTokens?: number; // input context of the latest request in this epoch
@@ -115,7 +115,7 @@ function systemPrompt(o: {
   skills: { name: string; description: string }[];
   brief: string;
   epoch: number;
-}): string {
+}): string[] {
   const lines: string[] = [];
   lines.push(`You are an autonomous agent working as the persona "${o.name}" inside Swan.`);
   if (o.instructions.trim()) lines.push("", o.instructions.trim());
@@ -146,8 +146,6 @@ function systemPrompt(o: {
     "# Memory",
     "The user may have other conversations with this persona; you see only this one, and share memory with them. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. Memory is how this persona gets better at its work: a later conversation, and this one after its context rolls over, starts out knowing only what was saved. Save what would help then and can't simply be read again from files or tools, citing event ids, and keep it right: when a saved memory turns out wrong or out of date, fix it with memory_update or retire it with memory_archive.",
   );
-  if (o.epoch > 1) lines.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
-  if (o.brief) lines.push("", "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
   if (o.skills.length) {
     lines.push(
       "",
@@ -156,7 +154,11 @@ function systemPrompt(o: {
       ...o.skills.map((s) => `- ${s.name}: ${s.description}`),
     );
   }
-  return lines.join("\n");
+  // What changes from one context to the next goes in a second part, so the first stays cached.
+  const context: string[] = [];
+  if (o.epoch > 1) context.push("Earlier context was condensed into a checkpoint that opens this part of the conversation; verify consequential details against history before relying on them.");
+  if (o.brief) context.push(...(context.length ? [""] : []), "Saved memories (brief; tentative ones are unconfirmed guesses):", o.brief);
+  return context.length ? [lines.join("\n"), context.join("\n")] : [lines.join("\n")];
 }
 
 const itemLine = (it: ChatItem): string => {
@@ -1269,7 +1271,7 @@ export class Session {
       const reported = this.providerType(e.model.provider) === "anthropic" ? u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens : u.inputTokens;
       // Providers that report no usage (some local servers) fall back to a conservative estimate.
       const estimated = reported <= 0;
-      e.contextTokens = estimated ? Math.ceil((e.frozen.system.length + JSON.stringify(e.messages).length) / 3.5) : reported;
+      e.contextTokens = estimated ? Math.ceil((systemText(e.frozen.system).length + JSON.stringify(e.messages).length) / 3.5) : reported;
       this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: this.deps.settings.contextLimitTokens, estimated, epoch: e.n });
       this.deps.broadcast({ type: "usage.updated", personaId: this.personaId });
 

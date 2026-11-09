@@ -5,7 +5,7 @@ import type { Effort, ProviderModel, Usage } from "@ph/shared";
 import { paths, type ProviderConfig } from "../settings.js";
 import { networkEnv } from "../network.js";
 import { errMsg, log, randomId, sha256Hex } from "../util.js";
-import { ProviderError, type ContentBlockParam, type MessageParam, type ToolUse, type TurnCallbacks, type TurnRequest, type TurnResult } from "./providers.js";
+import { ProviderError, systemText, type ContentBlockParam, type MessageParam, type ToolUse, type TurnCallbacks, type TurnRequest, type TurnResult } from "./providers.js";
 
 /*
  * GitHub Copilot as a model provider, through the official Copilot SDK (the only sanctioned way
@@ -367,7 +367,7 @@ export class CopilotProvider {
       return await entry.client.createSession({
         model: req.model,
         ...(effort ? { reasoningEffort: effort } : {}),
-        systemMessage: { mode: "replace", content: req.system },
+        systemMessage: { mode: "replace", content: systemText(req.system) },
         // Declaration-only: no handler, so the runtime hands every call back to us.
         tools: req.tools.map((t) => ({
           name: t.name,
@@ -414,7 +414,7 @@ export class CopilotProvider {
     const id = req.sessionId!;
     const entry = await this.client();
     this.checkCurrent(req, gen);
-    const configKey = hashOf({ key: entry.key, model: req.model, effort: req.effort, system: req.system, tools: req.tools.map((t) => [t.name, t.description, t.inputSchema]) });
+    const configKey = hashOf({ key: entry.key, model: req.model, effort: req.effort, system: systemText(req.system), tools: req.tools.map((t) => [t.name, t.description, t.inputSchema]) });
     const msgs = req.messages;
     let st = this.sessions.get(id);
     const notices: string[] = [];
