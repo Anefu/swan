@@ -127,6 +127,12 @@ What runs where:
 
 ### Changes pane: diffs from the sandbox
 
+An unattended turn's rules outlast it: a background agent it starts keeps them (its tool calls are
+refused what would ask, and while it works the sandbox's new hosts and asking credentials are
+refused too, since the proxy can't tell who asked), and its report runs as an unattended turn of
+its own rather than joining one the user is in. Unattended turns never use what the user allowed
+"until stopped".
+
 Conversations of one persona can pass messages with the `conversations` tool, never across personas.
 A message may quote outside text, so the agent there is told it isn't from the user, and it never
 joins a running turn: it waits for its own turn, which is unattended and refuses what would ask,
