@@ -33,15 +33,16 @@ export async function resolveUiFile(root: string, urlPath: string): Promise<stri
 
 /**
  * The UI page's policy: its own scripts only, no plugins or frames, and network access only to
- * itself (the API comes through swan://app) and the server's WebSocket. Images may come from
- * the web, as they do in a browser tab.
+ * itself (the API comes through swan://app) and the server's WebSocket. Images only from the
+ * app and the server: a remote image in a reply would be fetched from this Mac's network, outside
+ * the egress proxy, with whatever the agent put in its URL.
  */
 export function appCsp(port: string): string {
   return [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob:",
     "font-src 'self' data:",
     `connect-src 'self' ws://127.0.0.1:${port}`,
     "object-src 'none'",
