@@ -14,7 +14,7 @@ import type { SkillRegistry } from "../skills.js";
 import type { UsageLedger, UsagePurpose } from "../usage.js";
 import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeFileAtomic } from "../util.js";
 import type { ModelCatalog } from "../catalog.js";
-import { SessionMcp } from "./mcp.js";
+import { SessionMcp, credentialValues, scrubValues, type McpCredentials } from "./mcp.js";
 import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./subagents.js";
 import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
@@ -647,7 +647,12 @@ export class Session {
 
       for (const p of await this.creds.writeMaterials()) this.notice("warn", p);
       const named = new Set(this.creds.namedRefs());
-      this.mcp = new SessionMcp(runtime, (t) => connections.resolveHost(t, named), settings, this.container, this.workdir, this.renderPlaceholders);
+      const mcpCreds: McpCredentials = {
+        resolve: (t) => connections.resolveHost(t, named),
+        hosts: (ref) => connections.resolve(ref)?.hosts ?? [],
+        scrub: (text, refs) => scrubValues(text, refs.flatMap((ref) => credentialValues(connections.resolve(ref)).map((secret) => ({ secret, placeholder: `[credential ${ref}]` })))),
+      };
+      this.mcp = new SessionMcp(runtime, mcpCreds, settings, this.container, this.workdir, this.renderPlaceholders);
       const problems = await this.mcp.start(cfg.mcpServers, (msg) => this.setStatus("starting", msg));
       for (const p of problems) this.notice("warn", p);
     } catch (e) {

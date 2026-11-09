@@ -3,10 +3,12 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { ResolvedCredential } from "../connections/manager.js";
 import { isHttpMcp, type McpHttpConfig, type McpStdioConfig } from "../personas.js";
+import { Redactor } from "../proxy/egress.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
 import type { Settings } from "../settings.js";
-import { errMsg, log, truncateMiddle } from "../util.js";
+import { errMsg, hostMatches, log, truncateMiddle } from "../util.js";
 import { mcpTool, type ToolDef, type ToolOutput } from "./tools.js";
 
 const sanitize = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "_");
@@ -19,6 +21,47 @@ interface Conn {
   credentialRefs: string[]; // refs its http headers use
 }
 
+/** What http MCP servers need from the session's credentials, on the host. */
+export interface McpCredentials {
+  resolve(template: string): { text: string; used: string[] };
+  hosts(ref: string): string[];
+  /** Real values in a server's output, rewritten before the agent sees them. */
+  scrub(text: string, refs: string[]): string;
+}
+
+/** A credential's real values long enough to recognise. */
+export function credentialValues(c: ResolvedCredential | undefined): string[] {
+  if (!c) return [];
+  return [c.value, c.aws?.accessKeyId, c.aws?.secretAccessKey, c.aws?.sessionToken].filter((v): v is string => !!v && v.length >= 6);
+}
+
+/** Text with each value, raw or encoded, replaced by its label. */
+export function scrubValues(text: string, values: { secret: string; placeholder: string }[]): string {
+  return values.length ? new Redactor(Redactor.pairs(values)).text(text) : text;
+}
+
+/**
+ * The headers to send an http MCP server. A credential goes only over HTTPS, only to one of its
+ * own hosts, and never follows a redirect: the same terms the egress proxy gives it.
+ */
+export function httpMcpHeaders(cfg: McpHttpConfig, creds: McpCredentials): { url: URL; headers: Record<string, string>; refs: string[] } {
+  const url = new URL(cfg.url);
+  const headers: Record<string, string> = {};
+  const refs = new Set<string>();
+  for (const [k, v] of Object.entries(cfg.headers)) {
+    const r = creds.resolve(v);
+    for (const ref of r.used) refs.add(ref);
+    headers[k] = r.text;
+  }
+  for (const ref of refs) {
+    if (url.protocol !== "https:") throw new Error(`credential ${ref} is only sent over HTTPS, and ${url.origin} isn't`);
+    const hosts = creds.hosts(ref);
+    if (!hosts.some((p) => hostMatches(url.hostname, p)))
+      throw new Error(`credential ${ref} is only sent to its own hosts (${hosts.join(", ") || "none"}), and ${url.hostname} isn't one of them`);
+  }
+  return { url, headers, refs: [...refs] };
+}
+
 /**
  * MCP servers for one session. stdio servers run inside the session container through
  * `podman exec -i` and only ever see placeholders; http servers are called from the host
@@ -29,7 +72,7 @@ export class SessionMcp {
 
   constructor(
     private runtime: PodmanRuntime,
-    private resolveHost: (template: string) => { text: string; used: string[] },
+    private creds: McpCredentials,
     private settings: Settings,
     private container: string,
     private workdir: string,
@@ -42,14 +85,14 @@ export class SessionMcp {
       Object.entries(servers)
         .filter(([, cfg]) => cfg.enabled)
         .map(async ([name, cfg]) => {
-          const refs = isHttpMcp(cfg) ? Object.values(cfg.headers).flatMap((v) => this.resolveHost(v).used) : [];
+          const refs = isHttpMcp(cfg) ? [...new Set(Object.values(cfg.headers).flatMap((v) => this.creds.resolve(v).used))] : [];
           const conn: Conn = { name, cfg, client: null, error: null, credentialRefs: refs };
           this.conns.set(name, conn);
           onProgress(`starting MCP server ${name}`);
           try {
             await this.connect(conn);
           } catch (e) {
-            conn.error = errMsg(e);
+            conn.error = this.creds.scrub(errMsg(e), refs);
             problems.push(`MCP server "${name}" failed to start: ${conn.error}`);
             log.warn("mcp", `${name}: ${conn.error}`);
           }
@@ -63,15 +106,16 @@ export class SessionMcp {
     const timeout = isHttpMcp(conn.cfg) ? 30_000 : 180_000; // npx/uvx installs can be slow on first run
     let transport: Transport;
     if (isHttpMcp(conn.cfg)) {
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(conn.cfg.headers)) headers[k] = this.resolveHost(v).text;
-      const url = new URL(conn.cfg.url);
+      const { url, headers } = httpMcpHeaders(conn.cfg, this.creds);
       try {
-        transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
+        transport = new StreamableHTTPClientTransport(url, { requestInit: { headers, redirect: "error" } });
         await withTimeout(client.connect(transport), timeout, "connect");
       } catch (e) {
         log.info("mcp", `${conn.name}: streamable HTTP failed (${errMsg(e)}), trying SSE`);
-        transport = new SSEClientTransport(url, { requestInit: { headers }, eventSourceInit: { fetch: (u, init) => fetch(u, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } }) } });
+        transport = new SSEClientTransport(url, {
+          requestInit: { headers, redirect: "error" },
+          eventSourceInit: { fetch: (u, init) => fetch(u, { ...init, redirect: "error", headers: { ...headers, ...(init?.headers ?? {}) } }) },
+        });
         await withTimeout(client.connect(transport), timeout, "connect");
       }
     } else {
@@ -142,7 +186,7 @@ export class SessionMcp {
       try {
         await this.connect(conn);
       } catch (e) {
-        return { text: `MCP server ${server} is unavailable: ${errMsg(e)}`, isError: true };
+        return { text: `MCP server ${server} is unavailable: ${this.creds.scrub(errMsg(e), conn.credentialRefs)}`, isError: true };
       }
     }
     try {
@@ -159,12 +203,12 @@ export class SessionMcp {
       }
       if (texts.length === 0 && res.structuredContent) texts.push(JSON.stringify(res.structuredContent, null, 2));
       return {
-        text: truncateMiddle(texts.join("\n") || "(no content)", this.settings.toolOutputLimit),
+        text: truncateMiddle(this.creds.scrub(texts.join("\n"), conn.credentialRefs) || "(no content)", this.settings.toolOutputLimit),
         isError: !!res.isError,
         images: images.length ? images : undefined,
       };
     } catch (e) {
-      return { text: `MCP call failed: ${errMsg(e)}`, isError: true };
+      return { text: `MCP call failed: ${this.creds.scrub(errMsg(e), conn.credentialRefs)}`, isError: true };
     }
   }
 

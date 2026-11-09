@@ -50,3 +50,13 @@ describe("persona permissions", () => {
     expect(store.parse("perm-test", await fs.readFile(`${paths.personas}/perm-test.yaml`, "utf8")).config!.permissions.allow).toContain("npm test *");
   });
 });
+
+describe("http MCP servers", () => {
+  const urlErrors = (yaml: string) => store.parse("p", yaml).errors.filter((e) => e.includes(".url"));
+  it("must use https when a header uses a credential", () => {
+    const srv = (url: string, auth: string) => `name: P\nmcpServers:\n  gh:\n    url: ${url}\n    headers: { Authorization: "${auth}" }\n`;
+    expect(urlErrors(srv("http://mcp.example.com/mcp", "Bearer {{credential:github/token}}"))).toEqual(["mcpServers.gh.url: a server whose headers use a credential must use https://"]);
+    expect(urlErrors(srv("https://mcp.example.com/mcp", "Bearer {{credential:github/token}}"))).toEqual([]);
+    expect(urlErrors(srv("http://localhost:3000/mcp", "Bearer static"))).toEqual([]);
+  });
+});

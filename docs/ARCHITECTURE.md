@@ -119,7 +119,7 @@ What runs where:
 | Copilot SDK runtime (copilot provider) | host child process, own dir under PH_HOME, minimal env | yes (its GitHub token only) |
 | Built-in tools (bash, read/write/edit, glob, grep) | session container via `podman exec` | no |
 | stdio MCP servers | session container via `podman exec -i` | no — env holds placeholders |
-| http MCP servers | host (harness) | yes — headers resolved host-side |
+| http MCP servers | host (harness) | yes — headers resolved host-side, sent only over HTTPS to the credential's own hosts, no redirects; real values in their output are rewritten |
 | Connection wrappers | host, as the user | yes — they produce the values |
 | Skills | mounted read-only at `/skills/<name>` | no |
 | Egress proxy | host (harness) | yes — substitutes at egress |
