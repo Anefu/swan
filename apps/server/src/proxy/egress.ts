@@ -12,7 +12,7 @@ import { describeAuth, sign, verify } from "@ph/aws-sigv4";
 import type { EgressEvent } from "@ph/shared";
 import type { Rule } from "../connections/config.js";
 import type { ConnectionManager, ResolvedCredential } from "../connections/manager.js";
-import { evaluate, ruleKey, type RequestFacts, type Verdict } from "../connections/rules.js";
+import { evaluate, ruleKey, rulePath, type RequestFacts, type Verdict } from "../connections/rules.js";
 import { paths } from "../settings.js";
 import { TypedEmitter, errMsg, hostMatches, hostMatchesAny, log, nowIso, randomId } from "../util.js";
 import type { CertAuthority } from "./ca.js";
@@ -556,6 +556,11 @@ export class EgressProxy extends TypedEmitter<Events> {
     const usableRefs = new Set(creds.map((c) => c.ref));
     const plan: CredentialPlan = { permitted: new Set(), denied: [], aws: null, refuse: null, stale: [] };
     const rawPath = req.url ?? "/";
+    const checked = rulePath(rawPath);
+    if ("error" in checked) {
+      plan.refuse = { status: 400, message: `Swan did not forward this request: ${checked.error}.` };
+      return plan;
+    }
 
     if (!s.otherCredentials?.some((p) => hostMatches(ctx.host, p))) {
       const awsKeyIds = new Set([...s.placeholders].filter(([, v]) => v.field === "accessKeyId").map(([ph]) => ph));
@@ -605,7 +610,7 @@ export class EgressProxy extends TypedEmitter<Events> {
     if (!candidates.size) return plan;
 
     const u = new URL(rawPath, `https://${ctx.host}`);
-    const facts: RequestFacts = { method: req.method ?? "GET", host: ctx.host, path: u.pathname, query: u.searchParams, headers: req.headers, awsService };
+    const facts: RequestFacts = { method: req.method ?? "GET", host: ctx.host, path: checked.path, query: u.searchParams, headers: req.headers, awsService };
     // The query protocol names the action in a form body; other bodies are only read to re-sign.
     const form = /x-www-form-urlencoded/i.test(first(req.headers["content-type"]) ?? "");
     if (plan.aws && (!plan.aws.declaredPayload || (form && !PASSTHROUGH_PAYLOAD.has(plan.aws.declaredPayload)))) facts.body = await body();

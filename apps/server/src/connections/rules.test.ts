@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule } from "./config.js";
-import { classifyAws, classifyKubernetes, evaluate, patternError, ruleKey, type RequestFacts } from "./rules.js";
+import { classifyAws, rulePath, classifyKubernetes, evaluate, patternError, ruleKey, type RequestFacts } from "./rules.js";
 
 const req = (method: string, url: string, extra: Partial<RequestFacts> = {}): RequestFacts => {
   const u = new URL(url, "https://example.test");
@@ -62,6 +62,24 @@ describe("kubernetes rules", () => {
 describe("aws rules", () => {
   const aws = (method: string, url: string, service: string, extra: Partial<RequestFacts> = {}) => req(method, url, { awsService: service, ...extra });
 
+  it("names an S3 or EKS action by the request's shape only, whatever a header or parameter says", () => {
+    const fake = { headers: { "x-amz-target": "x.GetObject", "content-type": "application/x-www-form-urlencoded" }, body: Buffer.from("Action=GetObject") };
+    expect(classifyAws(aws("DELETE", "/b/k?Action=GetObject", "s3", fake)).action).toBe("DeleteObject");
+    expect(classifyAws(aws("DELETE", "/clusters/prod", "eks", { headers: { "x-amz-target": "x.DescribeCluster" } })).action).toBe("DeleteCluster");
+    const ro = rule({ api: "aws", allow: ["*:Get*", "*:List*", "*:Describe*"] });
+    expect(evaluate("prod-aws", [ro], aws("DELETE", "/b/k?Action=GetObject", "s3", fake)).mode).toBe("deny");
+  });
+
+  it("leaves a request unclassified when its action sources disagree", () => {
+    const form = { "content-type": "application/x-www-form-urlencoded" };
+    const op = classifyAws(aws("POST", "/", "ec2", { headers: { ...form, "x-amz-target": "x.DescribeInstances" }, body: Buffer.from("Action=TerminateInstances") }));
+    expect(op).toMatchObject({ classified: false, action: null });
+    expect(classifyAws(aws("POST", "/?Action=DescribeInstances", "ec2", { headers: form, body: Buffer.from("Action=TerminateInstances") })).classified).toBe(false);
+    expect(classifyAws(aws("GET", "/?Action=DescribeInstances&Action=TerminateInstances", "ec2")).classified).toBe(false);
+    expect(classifyAws(aws("POST", "/?Action=DescribeInstances", "ec2", { headers: form, body: Buffer.from("Action=DescribeInstances") })).action).toBe("DescribeInstances");
+    expect(evaluate("prod-aws", [rule({ api: "aws", allow: ["ec2:Describe*"] })], aws("POST", "/", "ec2", { headers: { ...form, "x-amz-target": "x.DescribeInstances" }, body: Buffer.from("Action=TerminateInstances") })).mode).toBe("deny");
+  });
+
   it("reads the action from X-Amz-Target, the Action parameter or the S3 request form", () => {
     expect(classifyAws(aws("POST", "/", "logs", { headers: { "x-amz-target": "Logs_20140328.FilterLogEvents" } }))).toMatchObject({ service: "logs", action: "FilterLogEvents" });
     expect(classifyAws(aws("POST", "/", "sts", { headers: { "content-type": "application/x-www-form-urlencoded" }, body: Buffer.from("Action=GetCallerIdentity&Version=2011-06-15") })).action).toBe("GetCallerIdentity");
@@ -111,5 +129,20 @@ describe("pattern validation", () => {
     expect(patternError("aws", "s3 GetObject")).toMatch(/service:Action/);
     expect(patternError("http", "GET repos")).toMatch(/METHOD \/path/);
     expect(patternError("http", "* /**")).toBeNull();
+  });
+});
+
+describe("the path rules see", () => {
+  it("decodes escaped unreserved characters, so an escape can't step round a rule", () => {
+    expect(rulePath("/%61dmin/users?x=%61")).toEqual({ path: "/admin/users" });
+    expect(rulePath("/a%2fb/%7euser/%20x")).toEqual({ path: "/a%2Fb/~user/%20x" });
+    const r = rule({ api: "http", allow: ["* /**"], deny: ["* /admin/**"] });
+    const p = rulePath("/%61dmin/users");
+    expect("path" in p && evaluate("c", [r], req("GET", p.path)).mode).toBe("deny");
+  });
+
+  it("refuses targets that servers could resolve differently", () => {
+    for (const t of ["//admin/users", "https://other.example/x", "*", "admin", "/a/../admin", "/a/%2e%2e/admin", "/./admin", "/a/%2E/b"]) expect("error" in rulePath(t), t).toBe(true);
+    expect(rulePath("/a/..b/.c")).toEqual({ path: "/a/..b/.c" });
   });
 });

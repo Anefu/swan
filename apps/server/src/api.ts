@@ -3,7 +3,7 @@ import { promises as fs, realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { AttachmentMeta, ApprovalBody, ClientMessage, CredentialUpsert, Effort, FileEntry, MemoryType, PersonaConfigView, PersonaImportChoices, ServerEvent, TrackStatus } from "@ph/shared";
 import type { AttachmentStore } from "./attachments.js";
@@ -67,6 +67,28 @@ export const hostAllowed = (host: string | undefined) => LOCAL_HOST.test(host ??
 /** CSRF guard: browsers send Origin, and only Swan's own pages may call the API. */
 export const originAllowed = (origin: string | undefined) => origin === undefined || LOCAL_ORIGIN.test(origin);
 
+/**
+ * DNS-rebinding and CSRF guard, and the token for everything except the plain notice at "/".
+ * The router decodes the path before matching (`/%61pi/…` is `/api/…`), so the token check can't
+ * look at the raw URL to decide what is API: it applies to every request but one.
+ */
+export function requestGuard(token: string) {
+  const want = Buffer.from(token);
+  const tokenOk = (t: unknown) => {
+    if (typeof t !== "string") return false;
+    const got = Buffer.from(t);
+    return got.length === want.length && timingSafeEqual(got, want);
+  };
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hostAllowed(req.headers.host)) return reply.code(403).send({ error: "forbidden host" });
+    if (!originAllowed(req.headers.origin)) return reply.code(403).send({ error: "forbidden origin" });
+    const [pathname, query = ""] = req.url.split("?", 2);
+    if (req.method === "GET" && pathname === "/") return;
+    const t = req.headers["x-ph-token"] ?? new URLSearchParams(query).get("token");
+    if (!tokenOk(t)) return reply.code(401).send({ error: "missing or invalid token" });
+  };
+}
+
 /** Fans server events out to WebSocket clients; item-level events only to subscribers. */
 export class Hub {
   private clients = new Set<{ ws: WebSocket; subs: Set<string> }>();
@@ -100,18 +122,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     }
   });
 
-  const tokenBuf = Buffer.from(d.token);
-  const tokenOk = (t: unknown) => typeof t === "string" && t.length === d.token.length && timingSafeEqual(Buffer.from(t), tokenBuf);
-
-  // DNS-rebinding and CSRF guard for everything, token for the API.
-  app.addHook("onRequest", async (req, reply) => {
-    if (!hostAllowed(req.headers.host)) return reply.code(403).send({ error: "forbidden host" });
-    if (!originAllowed(req.headers.origin)) return reply.code(403).send({ error: "forbidden origin" });
-    if (req.url.startsWith("/api/")) {
-      const t = req.headers["x-ph-token"] ?? new URL(req.url, "http://x").searchParams.get("token");
-      if (!tokenOk(t)) return reply.code(401).send({ error: "missing or invalid token" });
-    }
-  });
+  app.addHook("onRequest", requestGuard(d.token));
 
   app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
     const code = err.statusCode && err.statusCode >= 400 ? err.statusCode : 400;
@@ -534,6 +545,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
       } catch {
         return;
       }
+      if (!msg || typeof msg !== "object" || typeof msg.sessionId !== "string") return;
       if (msg.type === "subscribe") {
         const s = d.sessions.get(msg.sessionId);
         if (!s) return;

@@ -156,6 +156,35 @@ describe("proxy with a command connection", () => {
     expect(proxy.events("s1").at(-1)).toMatchObject({ decision: "inspected", credentials: [], denied: [{ credential: "stub/aws", rule: null }] });
   });
 
+  it("judges an S3 request by its shape, not by a header that names another action", async () => {
+    const target = `${AWS_URL}/swan-demo/README.txt?Action=GetObject`;
+    const headers = sign({ method: "DELETE", url: target, headers: { host: "api.aws.test", "x-amz-target": "x.GetObject", "x-amz-content-sha256": "UNSIGNED-PAYLOAD" } }, placeholderCreds(), { service: "s3", region: "us-east-1" });
+    const before = denied.length;
+    const r = await request(target, { method: "DELETE", headers });
+    expect(r.status).toBe(403); // the placeholder signature went upstream
+    expect(denied.slice(before).map((v) => v.op.description)).toEqual(["s3:DeleteObject swan-demo/README.txt"]);
+  });
+
+  it("checks rules against the decoded path, and refuses targets that aren't a plain path", async () => {
+    const auth = { authorization: `Bearer ${ph("stub/eks")}` };
+    const escaped = await request(`${CLUSTER_URL}/api/v1/namespaces/payments/%73ecrets`, { headers: auth });
+    expect(escaped.status).toBe(401);
+    expect(escaped.headers["x-swan-denied"]).toBe('stub/eks: rule "* secrets"');
+    for (const p of ["//api/v1/namespaces/payments/secrets", "/api/v1/namespaces/payments/pods/../secrets"]) {
+      const r = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = https.request({ host: "swan-dev.k8s.aws.test", port: 443, path: p, headers: auth, agent: sandboxAgent() }, (res) => {
+          let body = "";
+          res.on("data", (c) => (body += c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+        req.on("error", reject);
+        req.end();
+      });
+      expect(r.status, p).toBe(400);
+      expect(r.body).toMatch(/did not forward/);
+    }
+  });
+
   it("refuses presigned URLs and signatures that do not match the placeholder keys", async () => {
     const url = presign("GET", `${AWS_URL}/swan-demo/README.txt`, placeholderCreds(), { service: "s3", region: "us-east-1", expiresIn: 60 });
     const r = await request(url);
