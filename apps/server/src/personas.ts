@@ -313,7 +313,11 @@ export class PersonaStore extends TypedEmitter<Events> {
     for (const [k, v] of Object.entries(cfg.env)) checkRefs(`env.${k}`, v);
     for (const [name, srv] of Object.entries(cfg.mcpServers)) {
       if (!/^[a-z0-9_-]{1,32}$/.test(name)) errors.push(`MCP server name "${name}" must be [a-z0-9_-]`);
-      if (isHttpMcp(srv)) for (const [k, v] of Object.entries(srv.headers)) checkRefs(`mcpServers.${name}.headers.${k}`, v);
+      if (isHttpMcp(srv)) {
+        for (const [k, v] of Object.entries(srv.headers)) checkRefs(`mcpServers.${name}.headers.${k}`, v);
+        if (Object.values(srv.headers).some((v) => credentialRefs(v).length) && !srv.url.startsWith("https://"))
+          errors.push(`mcpServers.${name}.url: a server whose headers use a credential must use https://`);
+      }
       else for (const [k, v] of Object.entries(srv.env)) checkRefs(`mcpServers.${name}.env.${k}`, v);
     }
     for (const list of ["allow", "internal", "otherCredentials"] as const)

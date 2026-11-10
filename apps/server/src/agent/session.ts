@@ -14,7 +14,7 @@ import type { SkillRegistry } from "../skills.js";
 import type { UsageLedger, UsagePurpose } from "../usage.js";
 import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeFileAtomic } from "../util.js";
 import type { ModelCatalog } from "../catalog.js";
-import { SessionMcp } from "./mcp.js";
+import { SessionMcp, credentialValues, scrubValues, type McpCredentials } from "./mcp.js";
 import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./subagents.js";
 import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
@@ -35,10 +35,17 @@ const DEFAULT_SUBAGENT_TURNS = 60;
 // Tools that manage sub-agents: allowed by default for the main agent, refused inside a sub-agent.
 const AGENT_TOOLS = new Set(["agent", "agent_message", "agent_status", "agent_stop"]);
 
+/** Who a turn or a sub-agent works for: an unattended run keeps its rules after its turn ends. */
+interface Origin {
+  unattended: boolean; // started by a schedule, a watcher or another conversation
+  delivered: boolean; // started by another conversation, so it can't send further
+}
+
 interface AgentEntry {
   sub: SubAgent;
   toolUseId: string; // the `agent` call that started it
   description: string;
+  origin: Origin;
 }
 
 export interface SessionDeps {
@@ -462,7 +469,7 @@ export class Session {
    */
   requestNetwork(host: string, port: number): Promise<boolean> {
     if (this.netDenied.has(host)) return Promise.resolve(false);
-    if (this.unattended) {
+    if (this.unattendedNow()) {
       this.netDenied.add(host);
       this.notice("warn", `Blocked ${host}: it isn't in this persona's allowed hosts, and new hosts are never allowed in an unattended run.`);
       return Promise.resolve(false);
@@ -538,7 +545,7 @@ export class Session {
   }
 
   requestCredentialUse(ref: string, v: Verdict) {
-    if (this.unattended) {
+    if (this.unattendedNow()) {
       const ok = !!v.rule && (this.deps.personas.get(this.personaId)?.config?.unattended.credentials[ref] ?? []).includes(v.rule);
       if (!ok) this.notice("warn", `${v.op.description} went out without ${ref}: rule "${v.rule}" asks, and it isn't allowed in unattended runs.`);
       return Promise.resolve(ok);
@@ -690,7 +697,12 @@ export class Session {
 
       for (const p of await this.creds.writeMaterials()) this.notice("warn", p);
       const named = new Set(this.creds.namedRefs());
-      this.mcp = new SessionMcp(runtime, (t) => connections.resolveHost(t, named), settings, this.container, this.workdir, this.renderPlaceholders);
+      const mcpCreds: McpCredentials = {
+        resolve: (t) => connections.resolveHost(t, named),
+        hosts: (ref) => connections.resolve(ref)?.hosts ?? [],
+        scrub: (text, refs) => scrubValues(text, refs.flatMap((ref) => credentialValues(connections.resolve(ref)).map((secret) => ({ secret, placeholder: `[credential ${ref}]` })))),
+      };
+      this.mcp = new SessionMcp(runtime, mcpCreds, settings, this.container, this.workdir, this.renderPlaceholders);
       const problems = await this.mcp.start(cfg.mcpServers, (msg) => this.setStatus("starting", msg));
       for (const p of problems) this.notice("warn", p);
     } catch (e) {
@@ -1226,11 +1238,23 @@ export class Session {
     }
   }
 
-  /** What joins the running turn. A message from another conversation waits for its own unattended turn. */
+  /**
+   * What joins the running turn. Anything from an unattended origin (another conversation, a
+   * run's background agent) waits for an unattended turn of its own.
+   */
   private takeSteering() {
-    const steer = this.queue.filter((q) => !q.delivered);
-    this.queue = this.queue.filter((q) => q.delivered);
+    const own = (q: (typeof this.queue)[number]) => !!q.delivered || !!q.trigger;
+    const steer = this.queue.filter((q) => !own(q));
+    this.queue = this.queue.filter(own);
     return steer;
+  }
+
+  /**
+   * The sandbox's network and credential requests can't be told apart by who made them, so they
+   * get the unattended rules while the turn is unattended or any unattended run's agent is at work.
+   */
+  private unattendedNow() {
+    return this.unattended || [...this.agents.values()].some((a) => a.sub.active && a.origin.unattended);
   }
 
   private async agentTurns() {
@@ -1657,6 +1681,8 @@ export class Session {
     }
 
     const id = randomId("ag_", 3);
+    // The sub-agent keeps the rules of the turn that started it, also after that turn ends.
+    const origin: Origin = { unattended: this.unattended, delivered: this.deliveredTurn };
     // A context opened before agent_message existed cannot answer, so its sub-agents get no ask_parent.
     const canAsk = e.frozen.tools.some((t) => t.name === "agent_message");
     const brief = `${PREAMBLE(!!i.background, canAsk)}\n\n# Your task\n${i.prompt}`;
@@ -1681,7 +1707,7 @@ export class Session {
           this.persistSoon();
           return res;
         },
-        runTools: (uses, signal, tools) => this.runTools(uses, signal, ctx.toolUseId, tools),
+        runTools: (uses, signal, tools) => this.runTools(uses, signal, ctx.toolUseId, tools, origin),
         release: (key) => this.deps.providers.releaseSession(key),
         outputLimit: this.deps.settings.toolOutputLimit,
       },
@@ -1691,7 +1717,7 @@ export class Session {
       `${this.id}:sub:${id}`,
       canAsk,
     );
-    const entry: AgentEntry = { sub, toolUseId: ctx.toolUseId, description: i.description };
+    const entry: AgentEntry = { sub, toolUseId: ctx.toolUseId, description: i.description, origin };
     this.agents.set(id, entry);
     sub.onChange = () => this.patchAgentItem(entry, { agent: { ...sub.run } });
     sub.start();
@@ -1745,7 +1771,13 @@ export class Session {
       const detail = `${entry.description} · ${fmtElapsed(Date.now() - Date.parse(run.startedAt))} · ${uses} tool ${uses === 1 ? "use" : "uses"}`;
       this.receipt("agent", title, detail, o.kind === "error" ? "error" : "done");
       const state = o.kind === "report" ? "finished" : o.kind === "question" ? "asked a question" : "failed";
-      this.queue.push({ text: `[Background agent ${run.id} ("${entry.description}") ${state}]\n${entry.sub.describe(o, entry.description)}`, fromAgent: true });
+      // A run's agent reports into an unattended turn of its own, under the run's rules.
+      this.queue.push({
+        text: `[Background agent ${run.id} ("${entry.description}") ${state}]\n${entry.sub.describe(o, entry.description)}`,
+        fromAgent: true,
+        ...(entry.origin.unattended ? { trigger: "background agent" } : {}),
+        ...(entry.origin.delivered ? { delivered: true } : {}),
+      });
       this.touch();
       if (!this.loopRunning) void this.runLoop();
       if (o.kind !== "question") return;
@@ -1795,9 +1827,9 @@ export class Session {
     return new PermissionPolicy({ default: "deny", allow, ask: [], deny: [] }, []);
   }
 
-  private policy() {
+  private policy(withAllowances = true) {
     const cfg = this.deps.personas.get(this.personaId)?.config;
-    return new PermissionPolicy(cfg?.permissions ?? { default: "ask", allow: [], ask: [], deny: [] }, this.summary.allowances);
+    return new PermissionPolicy(cfg?.permissions ?? { default: "ask", allow: [], ask: [], deny: [] }, withAllowances ? this.summary.allowances : []);
   }
 
   /**
@@ -1819,12 +1851,14 @@ export class Session {
     if (added.length) this.setAllowances([...this.summary.allowances, ...added]);
   }
 
-  private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>) {
-    const policy = this.policy();
-    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, parentId, tools)));
+  private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>, origin?: Origin) {
+    const unattended = origin ? origin.unattended : this.unattended;
+    // What the user allowed "until stopped" is for their own turns.
+    const policy = this.policy(!unattended);
+    return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, unattended, parentId, tools)));
   }
 
-  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>): Promise<ContentBlockParam> {
+  private async runOne(tu: ToolUse, policy: PermissionPolicy, signal: AbortSignal, unattended: boolean, parentId?: string, tools?: Map<string, ToolDef>): Promise<ContentBlockParam> {
     const frozenDef = this.epoch?.frozen.tools.find((t) => t.name === tu.name);
     const tool = (tools ?? this.liveTools).get(tu.name) ?? (frozenDef ? this.unavailableTool(frozenDef) : undefined);
     const item: Extract<ChatItem, { kind: "tool_call" }> = {
@@ -1893,7 +1927,7 @@ export class Session {
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
     // A question pauses the turn like an approval, and the card is the answer. Sub-agents get a refusal instead.
     if (tool.name === ASK_USER && !parentId) {
-      if (this.unattended) return finish("error", { text: "The user isn't here in an unattended run, so nobody can answer. Choose what you reasonably can, or leave the question in your report.", isError: true });
+      if (unattended) return finish("error", { text: "The user isn't here in an unattended run, so nobody can answer. Choose what you reasonably can, or leave the question in your report.", isError: true });
       item.status = "pending_approval";
       show();
       const d = await this.waitForApproval(tu.id, signal, { sessionId: this.id, personaId: this.personaId, toolUseId: tu.id, name: tool.name, inputPreview: item.inputPreview, rule: "question", since: nowIso() });
@@ -1903,7 +1937,7 @@ export class Session {
       return finish("done", { text: r.text }, { answer: r.answer });
     }
     // Nobody is there to answer in a triggered turn: only what the persona allows unattended goes ahead.
-    if (perm.mode === "ask" && this.unattended) {
+    if (perm.mode === "ask" && unattended) {
       const u = this.unattendedPolicy().evaluate(gated, v.value);
       if (u.mode !== "allow")
         return finish("denied", { text: `Not allowed in an unattended run (${perm.rule}). Don't retry: leave it for the user and say what you would do and why.`, isError: true }, { denyReason: `unattended run: ${perm.rule}` });

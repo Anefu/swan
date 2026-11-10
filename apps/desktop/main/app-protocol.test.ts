@@ -50,4 +50,9 @@ describe("appCsp", () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).not.toContain("unsafe-eval");
   });
+
+  it("loads no image from the web, so a reply can't send data out through one", () => {
+    const img = appCsp("4317").split("; ").find((d) => d.startsWith("img-src"));
+    expect(img).toBe("img-src 'self' data: blob:");
+  });
 });

@@ -119,13 +119,19 @@ What runs where:
 | Copilot SDK runtime (copilot provider) | host child process, own dir under PH_HOME, minimal env | yes (its GitHub token only) |
 | Built-in tools (bash, read/write/edit, glob, grep) | session container via `podman exec` | no |
 | stdio MCP servers | session container via `podman exec -i` | no — env holds placeholders |
-| http MCP servers | host (harness) | yes — headers resolved host-side |
+| http MCP servers | host (harness) | yes — headers resolved host-side, sent only over HTTPS to the credential's own hosts, no redirects; real values in their output are rewritten |
 | Connection wrappers | host, as the user | yes — they produce the values |
 | Skills | mounted read-only at `/skills/<name>` | no |
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
 ### Changes pane: diffs from the sandbox
+
+An unattended turn's rules outlast it: a background agent it starts keeps them (its tool calls are
+refused what would ask, and while it works the sandbox's new hosts and asking credentials are
+refused too, since the proxy can't tell who asked), and its report runs as an unattended turn of
+its own rather than joining one the user is in. Unattended turns never use what the user allowed
+"until stopped".
 
 Conversations can pass messages with the `conversations` tool, in one persona or to another. Sending
 to another persona asks the user first (an explicit allow rule for `conversations` skips that), since

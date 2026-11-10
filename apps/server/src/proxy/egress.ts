@@ -8,11 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import { type Duplex, Transform, type TransformCallback } from "node:stream";
 import tls from "node:tls";
+import zlib from "node:zlib";
 import { describeAuth, sign, verify } from "@ph/aws-sigv4";
 import type { EgressEvent } from "@ph/shared";
 import type { Rule } from "../connections/config.js";
 import type { ConnectionManager, ResolvedCredential } from "../connections/manager.js";
-import { evaluate, ruleKey, type RequestFacts, type Verdict } from "../connections/rules.js";
+import { evaluate, ruleKey, rulePath, type RequestFacts, type Verdict } from "../connections/rules.js";
 import { paths } from "../settings.js";
 import { TypedEmitter, errMsg, hostMatches, hostMatchesAny, log, nowIso, randomId } from "../util.js";
 import type { CertAuthority } from "./ca.js";
@@ -247,13 +248,30 @@ export function foreignCredential(
 }
 
 /** Streams a body through, rewriting real secret values back to placeholders. */
-class Redactor extends Transform {
+export class Redactor extends Transform {
   private pending: Buffer = Buffer.alloc(0);
   private keep: number;
   constructor(private pairs: { secret: Buffer; placeholder: Buffer }[]) {
     super();
     this.keep = Math.max(0, ...pairs.map((p) => p.secret.length - 1));
   }
+
+  /**
+   * Each value as sent, and as a server might echo it: percent-encoded, JSON-escaped and base64.
+   * `exact` adds pairs seen in this request (a Basic header as sent). Longest first.
+   */
+  static pairs(values: { secret: string; placeholder: string }[], exact: { secret: string; placeholder: string }[] = []) {
+    const forms = [(v: string) => v, encodeURIComponent, (v: string) => JSON.stringify(v).slice(1, -1), (v: string) => Buffer.from(v).toString("base64")];
+    const out = new Map<string, string>();
+    for (const { secret, placeholder } of values) for (const f of forms) if (!out.has(f(secret))) out.set(f(secret), f(placeholder));
+    for (const e of exact) out.set(e.secret, e.placeholder);
+    return [...out].sort((a, b) => b[0].length - a[0].length).map(([secret, placeholder]) => ({ secret: Buffer.from(secret), placeholder: Buffer.from(placeholder) }));
+  }
+
+  text(value: string): string {
+    return this.replaceAll(Buffer.from(value)).toString();
+  }
+
   private replaceAll(buf: Buffer): Buffer {
     for (const { secret, placeholder } of this.pairs) {
       let idx = buf.indexOf(secret);
@@ -295,6 +313,16 @@ interface CredentialPlan {
   aws: { ref: string; real: NonNullable<ResolvedCredential["aws"]>; service: string; region: string; declaredPayload?: string } | null;
   refuse: { status: number; message: string } | null;
   stale: string[]; // placeholders of credentials that expired or lost their value
+  echoes: { secret: string; placeholder: string }[]; // values as sent in this request, to scrub from echoes
+}
+
+/** A decoder for a response encoding, so it can be scanned; null when Swan can't read it. */
+function decoder(encoding: string): Transform | null {
+  const e = encoding.trim().toLowerCase();
+  if (e === "gzip" || e === "x-gzip") return zlib.createGunzip();
+  if (e === "deflate") return zlib.createInflate();
+  if (e === "br") return zlib.createBrotliDecompress();
+  return null;
 }
 
 type Events = { event: [EgressEvent] };
@@ -554,8 +582,18 @@ export class EgressProxy extends TypedEmitter<Events> {
     const s = ctx.session;
     const creds = this.credsFor(s, ctx.host);
     const usableRefs = new Set(creds.map((c) => c.ref));
-    const plan: CredentialPlan = { permitted: new Set(), denied: [], aws: null, refuse: null, stale: [] };
+    const plan: CredentialPlan = { permitted: new Set(), denied: [], aws: null, refuse: null, stale: [], echoes: [] };
     const rawPath = req.url ?? "/";
+    // TRACE echoes the request, credentials included, back to the sandbox.
+    if (/^(TRACE|TRACK)$/i.test(req.method ?? "")) {
+      plan.refuse = { status: 405, message: `Swan did not forward this request: ${req.method} isn't allowed to hosts that get credentials.` };
+      return plan;
+    }
+    const checked = rulePath(rawPath);
+    if ("error" in checked) {
+      plan.refuse = { status: 400, message: `Swan did not forward this request: ${checked.error}.` };
+      return plan;
+    }
 
     if (!s.otherCredentials?.some((p) => hostMatches(ctx.host, p))) {
       const awsKeyIds = new Set([...s.placeholders].filter(([, v]) => v.field === "accessKeyId").map(([ph]) => ph));
@@ -605,7 +643,7 @@ export class EgressProxy extends TypedEmitter<Events> {
     if (!candidates.size) return plan;
 
     const u = new URL(rawPath, `https://${ctx.host}`);
-    const facts: RequestFacts = { method: req.method ?? "GET", host: ctx.host, path: u.pathname, query: u.searchParams, headers: req.headers, awsService };
+    const facts: RequestFacts = { method: req.method ?? "GET", host: ctx.host, path: checked.path, query: u.searchParams, headers: req.headers, awsService };
     // The query protocol names the action in a form body; other bodies are only read to re-sign.
     const form = /x-www-form-urlencoded/i.test(first(req.headers["content-type"]) ?? "");
     if (plan.aws && (!plan.aws.declaredPayload || (form && !PASSTHROUGH_PAYLOAD.has(plan.aws.declaredPayload)))) facts.body = await body();
@@ -649,7 +687,10 @@ export class EgressProxy extends TypedEmitter<Events> {
         if (k === "authorization" && /^basic /i.test(val)) {
           const decoded = Buffer.from(val.slice(6).trim(), "base64").toString("utf8");
           const sub = this.substitute(decoded, ctx.session, plan, used);
-          return sub === decoded ? val : `Basic ${Buffer.from(sub, "utf8").toString("base64")}`;
+          if (sub === decoded) return val;
+          const sent = Buffer.from(sub, "utf8").toString("base64");
+          plan.echoes.push({ secret: sent, placeholder: val.slice(6).trim() });
+          return `Basic ${sent}`;
         }
         return this.substitute(val, ctx.session, plan, used);
       });
@@ -707,14 +748,24 @@ export class EgressProxy extends TypedEmitter<Events> {
     };
   }
 
-  private redactor(s: ProxySession): Redactor | null {
-    const pairs: { secret: Buffer; placeholder: Buffer }[] = [];
+  private redactor(s: ProxySession, echoes: CredentialPlan["echoes"] = []): Redactor | null {
+    const values: { secret: string; placeholder: string }[] = [];
     for (const [ph, { ref, field }] of s.placeholders) {
       const c = this.connections.resolve(ref);
       const v = field && c?.aws ? c.aws[field as keyof typeof c.aws] : c?.value;
-      if (v && v.length >= 6) pairs.push({ secret: Buffer.from(v), placeholder: Buffer.from(ph) });
+      if (v && v.length >= 6) values.push({ secret: v, placeholder: ph });
     }
-    return pairs.length ? new Redactor(pairs) : null;
+    return values.length || echoes.length ? new Redactor(Redactor.pairs(values, echoes)) : null;
+  }
+
+  /** Response headers with real values rewritten to placeholders (a Location or Link can echo a query token). */
+  private scrubHeaders(h: http.IncomingHttpHeaders, red: Redactor | null): http.OutgoingHttpHeaders {
+    const out: http.OutgoingHttpHeaders = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (v === undefined || HOP_BY_HOP.has(k)) continue;
+      out[k] = !red ? v : Array.isArray(v) ? v.map((x) => red.text(x)) : red.text(v);
+    }
+    return out;
   }
 
   private deniedHeader(plan: CredentialPlan) {
@@ -783,16 +834,31 @@ export class EgressProxy extends TypedEmitter<Events> {
     req.on("data", (c: Buffer) => (bytesUp += c.length));
 
     const upstream = https.request(this.upstreamOptions(ctx, req, headers, pathAndQuery), (up) => {
-      const respHeaders: http.OutgoingHttpHeaders = {};
-      for (const [k, v] of Object.entries(up.headers)) if (v !== undefined && !HOP_BY_HOP.has(k)) respHeaders[k] = v;
+      // Every response is scanned, whatever its type: an echo can come back as anything.
+      const red = this.redactor(ctx.session, plan.echoes);
+      const respHeaders = this.scrubHeaders(up.headers, red);
       if (plan.denied.length) respHeaders["x-swan-denied"] = this.deniedHeader(plan);
-      const ct = String(up.headers["content-type"] ?? "");
-      const textual = !ct || /json|text|xml|javascript|form-urlencoded|event-stream|graphql/i.test(ct);
-      const red = textual && !up.headers["content-encoding"] ? this.redactor(ctx.session) : null;
-      if (red) delete respHeaders["content-length"];
+      let stream: NodeJS.ReadableStream = up;
+      const encoding = String(up.headers["content-encoding"] ?? "identity");
+      if (red && encoding.toLowerCase() !== "identity") {
+        const dec = decoder(encoding);
+        if (!dec) {
+          up.destroy();
+          const problem = `the response is encoded as ${encoding}, which Swan can't check for credential values`;
+          res.writeHead(502, { "content-type": "text/plain" }).end(`Swan did not pass on this response: ${problem}.\n`);
+          this.record({ ...base, status: 502, decision: "blocked", credentials: [...used], denied: plan.denied, reason: problem, durationMs: Date.now() - started });
+          return;
+        }
+        dec.on("error", () => res.destroy());
+        delete respHeaders["content-encoding"];
+        stream = up.pipe(dec);
+      }
+      // A HEAD, 204 or 304 has no body, so its Content-Length describes the resource and stays.
+      const bodiless = req.method === "HEAD" || up.statusCode === 204 || up.statusCode === 304;
+      if (red && !bodiless) delete respHeaders["content-length"];
       res.writeHead(up.statusCode ?? 502, up.statusMessage, respHeaders);
       up.on("data", (c: Buffer) => (bytesDown += c.length));
-      (red ? up.pipe(red) : up).pipe(res);
+      (red ? stream.pipe(red) : stream).pipe(res);
       if ((up.statusCode === 401 || up.statusCode === 403) && used.size)
         for (const ref of used) this.connections.authFailed(ref.slice(0, ref.indexOf("/")));
       up.on("end", () =>
@@ -861,12 +927,18 @@ export class EgressProxy extends TypedEmitter<Events> {
     const agent = via ? new TunnelAgent(via, { keepAlive: false }) : false;
     const upstream = https.request({ ...this.upstreamOptions(ctx, req, headers, this.substitute(req.url ?? "/", ctx.session, plan, used)), agent });
     upstream.on("upgrade", (up, upSocket, upHead) => {
+      const red = this.redactor(ctx.session, plan.echoes);
+      const scrub = (v: string) => (red ? red.text(v) : v);
       const lines = [`HTTP/1.1 ${up.statusCode} ${up.statusMessage}`];
-      for (let i = 0; i < up.rawHeaders.length; i += 2) lines.push(`${up.rawHeaders[i]}: ${up.rawHeaders[i + 1]}`);
+      for (let i = 0; i < up.rawHeaders.length; i += 2) lines.push(`${up.rawHeaders[i]}: ${scrub(up.rawHeaders[i + 1]!)}`);
       socket.write(lines.join("\r\n") + "\r\n\r\n");
-      if (upHead.length) socket.write(upHead);
       if (head.length) upSocket.write(head);
-      upSocket.pipe(socket).pipe(upSocket);
+      socket.pipe(upSocket);
+      // The upgraded stream is scanned too; a value in it would break a frame, but never reach the sandbox.
+      const down = red ?? new Transform({ transform: (c, _e, cb) => cb(null, c) });
+      down.pipe(socket);
+      if (upHead.length) down.write(upHead);
+      upSocket.pipe(down);
       upSocket.on("error", () => socket.destroy());
       socket.on("error", () => upSocket.destroy());
       record(up.statusCode);

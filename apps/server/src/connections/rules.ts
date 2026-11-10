@@ -257,18 +257,28 @@ function eksAction(r: RequestFacts): { action: string | null; target: string } {
   return { action: null, target };
 }
 
+/**
+ * The action, by the service's protocol. S3 and EKS are REST: the method and path are the action,
+ * and they ignore X-Amz-Target and an Action parameter, so those can't be allowed to name it.
+ * Elsewhere the action is in X-Amz-Target (JSON), or ?Action= or the form body (query); if more
+ * than one is present and they disagree, the request is unclassified rather than trusted.
+ */
 export function classifyAws(r: RequestFacts): Operation {
   const signing = r.awsService ?? "";
   const service = IAM_PREFIX[signing] ?? signing;
   let action: string | null = null;
   let target = "";
-  const amzTarget = header(r.headers, "x-amz-target");
-  if (amzTarget) action = amzTarget.slice(amzTarget.lastIndexOf(".") + 1) || null;
-  if (!action) action = r.query.get("Action");
-  const ct = header(r.headers, "content-type") ?? "";
-  if (!action && r.body?.length && /x-www-form-urlencoded/i.test(ct)) action = new URLSearchParams(r.body.toString("utf8")).get("Action");
-  if (!action && signing === "s3") ({ action, target } = s3Action(r));
-  if (!action && signing === "eks") ({ action, target } = eksAction(r));
+  if (signing === "s3") ({ action, target } = s3Action(r));
+  else if (signing === "eks") ({ action, target } = eksAction(r));
+  else {
+    const named = new Set<string>();
+    const amzTarget = header(r.headers, "x-amz-target");
+    if (amzTarget !== undefined) named.add(amzTarget.slice(amzTarget.lastIndexOf(".") + 1));
+    for (const a of r.query.getAll("Action")) named.add(a);
+    const ct = header(r.headers, "content-type") ?? "";
+    if (r.body?.length && /x-www-form-urlencoded/i.test(ct)) for (const a of new URLSearchParams(r.body.toString("utf8")).getAll("Action")) named.add(a);
+    action = named.size === 1 ? [...named][0]! || null : null;
+  }
   if (action && !/^[A-Za-z0-9]{1,128}$/.test(action)) action = null;
   return {
     api: "aws",
@@ -287,6 +297,25 @@ function matchAws(p: { service: string; action: string }, op: Operation): boolea
 }
 
 // ---------- http ----------
+
+const UNRESERVED = /[A-Za-z0-9\-._~]/;
+
+/**
+ * The path rules are checked against. Escapes of unreserved characters mean the same to every
+ * server (RFC 3986), so `/%61dmin` is checked as `/admin`; other escapes stay as sent, uppercased.
+ * A target that isn't a single-slash path, or has dot segments, is refused: servers resolve those
+ * differently, so no rule could say what it reaches.
+ */
+export function rulePath(target: string): { path: string } | { error: string } {
+  if (!target.startsWith("/") || target.startsWith("//")) return { error: "the request target must be a path starting with a single /" };
+  const raw = target.split("?", 1)[0]!;
+  const path = raw.replace(/%([0-9A-Fa-f]{2})/g, (m, h: string) => {
+    const c = String.fromCharCode(parseInt(h, 16));
+    return UNRESERVED.test(c) ? c : m.toUpperCase();
+  });
+  if (path.split("/").some((seg) => seg === "." || seg === "..")) return { error: "the path has . or .. segments" };
+  return { path };
+}
 
 function parseHttp(p: string): { method: string; path: string } | string {
   const m = /^(\S+)\s+(\/\S*)$/.exec(p.trim());

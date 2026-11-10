@@ -81,6 +81,7 @@ assert.equal(root.status, 200);
 assert.doesNotMatch(root.body, /<html|ph-token|__PH_TOKEN__/i, "the server no longer serves the UI");
 
 assert.equal((await get(port, "/api/runtime")).status, 401, "no token");
+assert.equal((await get(port, "/%61pi/runtime")).status, 401, "no token, encoded path");
 assert.equal((await get(port, "/api/runtime", { "x-ph-token": "x".repeat(token.length) })).status, 401, "wrong token");
 const runtime = await get(port, "/api/runtime", auth);
 assert.equal(runtime.status, 200);

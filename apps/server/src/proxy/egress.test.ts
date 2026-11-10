@@ -9,7 +9,7 @@ import { SecretStore } from "../secrets.js";
 import { paths, type Settings } from "../settings.js";
 import { CertAuthority } from "./ca.js";
 import { startCompanyProxy, type CompanyProxy } from "./company-proxy.fixture.js";
-import { EgressProxy, bypassesProxy, isPrivateAddress, resolveChecked, subnetList, type ProxySession } from "./egress.js";
+import { EgressProxy, Redactor, bypassesProxy, isPrivateAddress, resolveChecked, subnetList, type ProxySession } from "./egress.js";
 
 describe("isPrivateAddress", () => {
   it("blocks loopback, LAN, link-local, CGNAT, metadata and mapped addresses", () => {
@@ -305,5 +305,29 @@ describe("EgressProxy history", () => {
     } finally {
       proxy.close();
     }
+  });
+});
+
+describe("Redactor", () => {
+  const run = async (chunks: string[], values: { secret: string; placeholder: string }[]) => {
+    const r = new Redactor(Redactor.pairs(values));
+    const out: Buffer[] = [];
+    r.on("data", (c: Buffer) => out.push(c));
+    const done = new Promise((res) => r.on("end", res));
+    for (const c of chunks) r.write(c);
+    r.end();
+    await done;
+    return Buffer.concat(out).toString();
+  };
+  const v = { secret: "s3cr3t+/=value", placeholder: "phs_x_0011" };
+
+  it("rewrites a value split across chunks, and its encoded forms", async () => {
+    expect(await run(["a s3cr", "3t+/=val", "ue b"], [v])).toBe("a phs_x_0011 b");
+    expect(await run([encodeURIComponent(v.secret), " ", Buffer.from(v.secret).toString("base64")], [v])).toBe(`phs_x_0011 ${Buffer.from("phs_x_0011").toString("base64")}`);
+    expect(await run([JSON.stringify({ v: 'a"b\\c' + v.secret })], [v, { secret: 'a"b\\c', placeholder: "P" }])).toBe(JSON.stringify({ v: "P" + "phs_x_0011" }));
+  });
+
+  it("rewrites header values", () => {
+    expect(new Redactor(Redactor.pairs([v])).text(`/next?t=${encodeURIComponent(v.secret)}`)).toBe("/next?t=phs_x_0011");
   });
 });
