@@ -1,11 +1,9 @@
 import { EventEmitter } from "node:events";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { TrackerItem, TrackStatus } from "@ph/shared";
-import YAML from "yaml";
 import { z } from "zod";
+import { FileStore } from "./file-store.js";
 import { paths } from "./settings.js";
-import { errMsg, log, writeFileAtomic } from "./util.js";
 
 export const TRACK_STATUSES = ["in_progress", "waiting", "done", "dropped"] as const;
 
@@ -33,41 +31,17 @@ export interface TrackInput {
 
 /** Each persona's tracked work items, in ~/.swan/tracker/<persona>.yaml. Emits "changed" (personaId). */
 export class TrackerStore extends EventEmitter {
-  private cache = new Map<string, TrackerItem[]>();
-  private chain = new Map<string, Promise<unknown>>();
-
-  private file(personaId: string) {
-    return path.join(paths.home, "tracker", `${personaId}.yaml`);
-  }
+  private store = new FileStore({ name: "tracker", dir: () => path.join(paths.home, "tracker"), format: "yaml", schema: FileSchema, empty: () => ({ items: [] }), mode: 0o644 });
 
   async list(personaId: string): Promise<TrackerItem[]> {
-    const hit = this.cache.get(personaId);
-    if (hit) return hit;
-    let items: TrackerItem[] = [];
-    try {
-      const r = FileSchema.safeParse(YAML.parse(await fs.readFile(this.file(personaId), "utf8")) ?? {});
-      if (r.success) items = r.data.items;
-      else log.warn("tracker", `${personaId}: ${r.error.issues[0]?.path.join(".")} ${r.error.issues[0]?.message}; starting empty`);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") log.warn("tracker", `${personaId}: ${errMsg(e)}`);
-    }
-    this.cache.set(personaId, items);
-    return items;
+    return (await this.store.get(personaId)).items;
   }
 
   /** Changes run one at a time per persona, each reading the latest list. */
-  private change<T>(personaId: string, fn: (items: TrackerItem[]) => T): Promise<T> {
-    const run = (this.chain.get(personaId) ?? Promise.resolve()).then(async () => {
-      const items = [...(await this.list(personaId))];
-      const out = fn(items);
-      this.cache.set(personaId, items);
-      await fs.mkdir(path.dirname(this.file(personaId)), { recursive: true });
-      await writeFileAtomic(this.file(personaId), YAML.stringify({ items }), 0o644);
-      this.emit("changed", personaId);
-      return out;
-    });
-    this.chain.set(personaId, run.catch(() => {}));
-    return run;
+  private async change<T>(personaId: string, fn: (items: TrackerItem[]) => T): Promise<T> {
+    const out = await this.store.change(personaId, (f) => fn(f.items));
+    this.emit("changed", personaId);
+    return out;
   }
 
   /** Add an item, or update the one with the same URL. */
@@ -115,8 +89,7 @@ export class TrackerStore extends EventEmitter {
     });
   }
 
-  async removePersona(personaId: string) {
-    this.cache.delete(personaId);
-    await fs.rm(this.file(personaId), { force: true });
+  removePersona(personaId: string) {
+    return this.store.remove(personaId);
   }
 }

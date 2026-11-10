@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { TrackerItem, TriggersInfo, TriggerStatus, WatcherTestResult } from "@ph/shared";
 import { intervalMs, type PersonaConfig, type PersonaStore } from "./personas.js";
+import { z } from "zod";
+import { FileStore } from "./file-store.js";
 import { paths } from "./settings.js";
 import type { TrackerStore } from "./tracker.js";
-import { errMsg, log, truncateMiddle, writeFileAtomic } from "./util.js";
+import { errMsg, log, truncateMiddle } from "./util.js";
 
 type Schedule = PersonaConfig["schedules"][number];
 type Watcher = PersonaConfig["watchers"][number];
@@ -16,21 +17,26 @@ export interface TriggerTarget {
   pollExec(argv: string[], timeoutMs?: number): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
-interface TState {
-  lastRun: string | null;
-  failures: number;
-  lastError: string | null;
-  retryAt: string | null; // after a failure
-  day: string;
-  firedToday: number;
-  seen: Record<string, Record<string, string>>; // scope (tracker URL, or "") -> item id -> changed value
-}
-interface PState {
-  paused: boolean;
-  day: string;
-  turnsToday: number;
-  t: Record<string, TState>;
-}
+const today = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// Defaults for what files from older versions may lack.
+const TStateSchema = z.object({
+  lastRun: z.string().nullable().default(null),
+  failures: z.number().default(0),
+  lastError: z.string().nullable().default(null),
+  retryAt: z.string().nullable().default(null), // after a failure
+  day: z.string().default(() => today()),
+  firedToday: z.number().default(0),
+  seen: z.record(z.string(), z.record(z.string(), z.string())).default({}), // scope (tracker URL, or "") -> item id -> changed value
+});
+const PStateSchema = z.object({
+  paused: z.boolean().default(false),
+  day: z.string().default(() => today()),
+  turnsToday: z.number().default(0),
+  t: z.record(z.string(), TStateSchema).default({}),
+});
+type TState = z.infer<typeof TStateSchema>;
+type PState = z.infer<typeof PStateSchema>;
 
 const TICK_MS = 20_000;
 const MISSED_GRACE_MS = 2 * 3_600_000; // a schedule missed by less than this runs once on start
@@ -38,7 +44,6 @@ const SEEN_MAX = 2000;
 const BATCH_MAX = 20;
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
-const today = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /** A value at a dotted path ("fields.updated"); "" is the value itself. */
 export function lookup(v: unknown, p: string): unknown {
@@ -108,7 +113,14 @@ function scheduleSummary(s: Schedule): string {
  * The first check of anything only records what is there. Emits "changed" (personaId).
  */
 export class TriggerManager extends EventEmitter {
-  private state = new Map<string, PState>();
+  private state = new FileStore<PState>({
+    name: "triggers",
+    dir: () => path.join(paths.home, "triggers"),
+    format: "json",
+    schema: PStateSchema,
+    empty: () => ({ paused: false, day: today(), turnsToday: 0, t: {} }),
+    mode: 0o644,
+  });
   private running = new Set<string>(); // persona/name
   private timer: NodeJS.Timeout | null = null;
 
@@ -128,27 +140,12 @@ export class TriggerManager extends EventEmitter {
     if (this.timer) clearInterval(this.timer);
   }
 
-  private file(personaId: string) {
-    return path.join(paths.home, "triggers", `${personaId}.json`);
-  }
-
-  private async load(personaId: string): Promise<PState> {
-    let st = this.state.get(personaId);
-    if (st) return st;
-    try {
-      st = JSON.parse(await fs.readFile(this.file(personaId), "utf8")) as PState;
-    } catch {
-      st = { paused: false, day: today(), turnsToday: 0, t: {} };
-    }
-    this.state.set(personaId, st);
-    return st;
+  private load(personaId: string): Promise<PState> {
+    return this.state.get(personaId);
   }
 
   private async save(personaId: string) {
-    const st = this.state.get(personaId);
-    if (!st) return;
-    await fs.mkdir(path.dirname(this.file(personaId)), { recursive: true });
-    await writeFileAtomic(this.file(personaId), JSON.stringify(st), 0o644);
+    await this.state.save(personaId);
     this.emit("changed", personaId);
   }
 

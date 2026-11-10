@@ -60,3 +60,22 @@ describe("http MCP servers", () => {
     expect(urlErrors(srv("http://localhost:3000/mcp", "Bearer static"))).toEqual([]);
   });
 });
+
+describe("persona edits", () => {
+  beforeAll(() => fs.mkdir(paths.personas, { recursive: true }));
+
+  it("made at the same time all land: each runs on the latest YAML", async () => {
+    await store.save("edit-race", "# kept\nname: Race\nnetwork:\n  allow: [a.example.com]\n", { create: true });
+    await Promise.all([
+      store.addNetworkHost("edit-race", "b.example.com"),
+      store.addAllowRules("edit-race", ["npm test *"]),
+      store.addNetworkHost("edit-race", "c.example.com"),
+      store.setModel("edit-race", { provider: "none", id: "m2" }).catch(() => {}), // unknown provider: refused, and the others still land
+    ]);
+    const cfg = store.get("edit-race")!.config!;
+    expect(cfg.network.allow).toEqual(["a.example.com", "b.example.com", "c.example.com"]);
+    expect(cfg.permissions.allow).toContain("npm test *");
+    expect(await fs.readFile(`${paths.personas}/edit-race.yaml`, "utf8")).toContain("# kept");
+    await store.remove("edit-race");
+  });
+});

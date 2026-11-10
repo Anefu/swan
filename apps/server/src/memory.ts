@@ -1,8 +1,8 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { Checkpoint, MemoryChange, MemoryOrigin, MemoryRecord, MemoryStatus, MemoryType } from "@ph/shared";
+import { z } from "zod";
+import { FileStore } from "./file-store.js";
 import { paths } from "./settings.js";
-import { TypedEmitter, exists, nowIso, randomId, writeFileAtomic } from "./util.js";
+import { TypedEmitter, nowIso, randomId } from "./util.js";
 
 export const MEMORY_TYPES: MemoryType[] = ["preference", "decision", "observation", "procedure", "episode"];
 
@@ -10,11 +10,46 @@ const tokenize = (s: string) => s.toLowerCase().match(/[a-z0-9_.-]{2,}/g) ?? [];
 const ORIGINS: MemoryOrigin[] = ["user", "observation", "inference"];
 const live = (r: MemoryRecord | undefined) => !!r && (r.status === "active" || r.status === "tentative");
 
-interface PersonaMemory {
-  records: MemoryRecord[];
-  changes: MemoryChange[];
-  checkpoints: Checkpoint[];
-}
+const strings = z.array(z.string()).default([]);
+// Fields Swan doesn't know (from a newer version) are kept as written.
+const RecordSchema = z.looseObject({
+  id: z.string(),
+  version: z.number().default(1),
+  type: z.enum(MEMORY_TYPES),
+  content: z.string(),
+  origin: z.enum(ORIGINS),
+  status: z.enum(["active", "tentative", "archived", "forgotten"]),
+  pinned: z.boolean().default(false),
+  sources: strings,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  checkedAt: z.string().optional(),
+});
+const ChangeSchema = z.looseObject({
+  id: z.string(),
+  ts: z.string(),
+  recordId: z.string(),
+  action: z.enum(["added", "edited", "pinned", "unpinned", "archived", "forgotten", "merged", "dream"]),
+  summary: z.string(),
+  by: z.enum(["user", "agent", "dream"]),
+  before: z.string().optional(),
+  after: z.string().optional(),
+});
+const CheckpointSchema = z.looseObject({
+  sessionId: z.string().optional(),
+  epoch: z.number(),
+  createdAt: z.string(),
+  objective: z.string(),
+  constraints: strings,
+  decisions: strings,
+  completed: strings,
+  failures: strings,
+  openQuestions: strings,
+  nextAction: z.string(),
+  sources: strings,
+});
+const MemorySchema = z.object({ records: z.array(RecordSchema).default([]), changes: z.array(ChangeSchema).default([]), checkpoints: z.array(CheckpointSchema).default([]) });
+type PersonaMemory = { records: MemoryRecord[]; changes: MemoryChange[]; checkpoints: Checkpoint[] };
 
 /**
  * Persona-private memory: versioned records, a change log and committed checkpoints, one JSON file
@@ -22,31 +57,23 @@ interface PersonaMemory {
  * filters, ranked by term overlap, pinning and freshness.
  */
 export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
-  private cache = new Map<string, PersonaMemory>();
-  private writes = new Map<string, Promise<void>>();
+  private store = new FileStore<PersonaMemory>({
+    name: "memory",
+    dir: () => paths.memory,
+    format: "json",
+    schema: MemorySchema,
+    empty: () => ({ records: [], changes: [], checkpoints: [] }),
+    mode: 0o600,
+    dirMode: 0o700,
+  });
 
-  private file(personaId: string) {
-    return path.join(paths.memory, `${personaId}.json`);
+  private load(personaId: string): Promise<PersonaMemory> {
+    return this.store.get(personaId);
   }
 
-  private async load(personaId: string): Promise<PersonaMemory> {
-    const hit = this.cache.get(personaId);
-    if (hit) return hit;
-    let data: PersonaMemory = { records: [], changes: [], checkpoints: [] };
-    if (await exists(this.file(personaId))) data = { ...data, ...JSON.parse(await fs.readFile(this.file(personaId), "utf8")) };
-    this.cache.set(personaId, data);
-    return data;
-  }
-
-  /** Serialise writes per persona so foreground edits and /dream never interleave. */
+  /** Writes run one at a time per persona, so foreground edits and /dream never interleave. */
   private async save(personaId: string) {
-    const prev = this.writes.get(personaId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      await fs.mkdir(paths.memory, { recursive: true, mode: 0o700 });
-      await writeFileAtomic(this.file(personaId), JSON.stringify(await this.load(personaId)), 0o600);
-    });
-    this.writes.set(personaId, next.catch(() => {}));
-    await next;
+    await this.store.save(personaId);
     this.emit("changed", personaId);
   }
 
@@ -292,9 +319,8 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     return changed;
   }
 
-  async removePersona(personaId: string) {
-    this.cache.delete(personaId);
-    await fs.rm(this.file(personaId), { force: true });
+  removePersona(personaId: string) {
+    return this.store.remove(personaId);
   }
 
   status(s: MemoryStatus) {

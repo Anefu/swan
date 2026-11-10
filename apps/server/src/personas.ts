@@ -225,6 +225,7 @@ type Events = { changed: [] };
 
 export class PersonaStore extends TypedEmitter<Events> {
   private personas = new Map<string, Persona>();
+  private edits = new Map<string, Promise<unknown>>();
 
   constructor(
     private settings: Settings,
@@ -364,7 +365,26 @@ export class PersonaStore extends TypedEmitter<Events> {
     return [...this.personas.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async save(id: string, yaml: string, { create = false } = {}): Promise<Persona> {
+  /** Edits run one at a time per persona, each on the latest version, so one never undoes another. */
+  private edit<R>(id: string, fn: () => Promise<R>): Promise<R> {
+    const run = (this.edits.get(id) ?? Promise.resolve()).then(fn);
+    this.edits.set(id, run.catch(() => {}));
+    return run;
+  }
+
+  /** The persona to edit, or an error saying why it can't be. */
+  private editable(id: string, valid = true): Persona {
+    const p = this.personas.get(id);
+    if (!p) throw new Error("not found");
+    if (valid && !p.config) throw new Error("persona is invalid");
+    return p;
+  }
+
+  save(id: string, yaml: string, o: { create?: boolean } = {}): Promise<Persona> {
+    return this.edit(id, () => this.write(id, yaml, o));
+  }
+
+  private async write(id: string, yaml: string, { create = false } = {}): Promise<Persona> {
     if (!PERSONA_ID.test(id)) throw new Error("persona id must be lowercase letters, digits and dashes");
     const existing = this.personas.get(id);
     if (create && (existing || (await exists(path.join(paths.personas, `${id}.yaml`))))) throw new Error(`persona "${id}" already exists`);
@@ -402,9 +422,12 @@ export class PersonaStore extends TypedEmitter<Events> {
   }
 
   /** Apply a form edit to the persona's YAML, keeping comments and keys the form does not cover. */
-  async saveConfig(id: string, v: PersonaConfigView): Promise<SaveResult> {
-    const p = this.personas.get(id);
-    if (!p) throw new Error("not found");
+  saveConfig(id: string, v: PersonaConfigView): Promise<SaveResult> {
+    return this.edit(id, () => this.applyConfig(id, v));
+  }
+
+  private async applyConfig(id: string, v: PersonaConfigView): Promise<SaveResult> {
+    const p = this.editable(id, false);
     const before = p.config;
     const doc = YAML.parseDocument(p.yaml);
     doc.set("name", v.name);
@@ -431,7 +454,7 @@ export class PersonaStore extends TypedEmitter<Events> {
     }
     const un = v.unattended;
     if (un && (un.allow.length || Object.keys(un.credentials).length || un.maxTurnsPerDay !== 30 || doc.has("unattended"))) doc.set("unattended", doc.createNode(un));
-    const saved = await this.save(id, doc.toString());
+    const saved = await this.write(id, doc.toString());
     const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const appliedNow: string[] = [];
     const nextStart: string[] = [];
@@ -449,79 +472,85 @@ export class PersonaStore extends TypedEmitter<Events> {
   }
 
   /** "Always allow" on a network request: add the host to the persona's allowlist. */
-  async addNetworkHost(id: string, host: string) {
-    const p = this.personas.get(id);
-    if (!p?.config) throw new Error("persona is invalid");
-    if (p.config.network.allow.includes(host)) return;
-    const doc = YAML.parseDocument(p.yaml);
-    doc.setIn(["network", "allow"], doc.createNode([...p.config.network.allow, host]));
-    await this.save(id, doc.toString());
+  addNetworkHost(id: string, host: string) {
+    return this.edit(id, async () => {
+      const p = this.editable(id);
+      if (p.config!.network.allow.includes(host)) return;
+      const doc = YAML.parseDocument(p.yaml);
+      doc.setIn(["network", "allow"], doc.createNode([...p.config!.network.allow, host]));
+      await this.write(id, doc.toString());
+    });
   }
 
   /** Add or replace (by name) a schedule or watcher, or remove one (`entry` null). */
-  async setTrigger(id: string, kind: "schedules" | "watchers", name: string, entry: Record<string, unknown> | null) {
-    const p = this.personas.get(id);
-    if (!p?.config) throw new Error("persona is invalid");
-    const list = (p.config[kind] as { name: string }[]).filter((t) => t.name !== name);
-    if (entry) list.push(entry as { name: string });
-    else if (list.length === p.config[kind].length) throw new Error(`no ${kind === "schedules" ? "schedule" : "watcher"} "${name}"`);
-    const doc = YAML.parseDocument(p.yaml);
-    doc.set(kind, doc.createNode(list));
-    const r = PersonaSchema.safeParse(doc.toJS());
-    if (!r.success) throw new Error(r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
-    await this.save(id, doc.toString());
+  setTrigger(id: string, kind: "schedules" | "watchers", name: string, entry: Record<string, unknown> | null) {
+    return this.edit(id, async () => {
+      const p = this.editable(id);
+      const list = (p.config![kind] as { name: string }[]).filter((t) => t.name !== name);
+      if (entry) list.push(entry as { name: string });
+      else if (list.length === p.config![kind].length) throw new Error(`no ${kind === "schedules" ? "schedule" : "watcher"} "${name}"`);
+      const doc = YAML.parseDocument(p.yaml);
+      doc.set(kind, doc.createNode(list));
+      const r = PersonaSchema.safeParse(doc.toJS());
+      if (!r.success) throw new Error(r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+      await this.write(id, doc.toString());
+    });
   }
 
   /** "Always allow" on a command card: add the rules to the persona's permissions.allow. */
-  async addAllowRules(id: string, rules: string[]) {
-    const p = this.personas.get(id);
-    if (!p?.config) throw new Error("persona is invalid");
-    const allow = p.config.permissions.allow;
-    const added = [...new Set(rules)].filter((r) => !allow.includes(r));
-    if (!added.length) return;
-    const doc = YAML.parseDocument(p.yaml);
-    doc.setIn(["permissions", "allow"], doc.createNode([...allow, ...added]));
-    await this.save(id, doc.toString());
+  addAllowRules(id: string, rules: string[]) {
+    return this.edit(id, async () => {
+      const p = this.editable(id);
+      const allow = p.config!.permissions.allow;
+      const added = [...new Set(rules)].filter((r) => !allow.includes(r));
+      if (!added.length) return;
+      const doc = YAML.parseDocument(p.yaml);
+      doc.setIn(["permissions", "allow"], doc.createNode([...allow, ...added]));
+      await this.write(id, doc.toString());
+    });
   }
 
   /** "Always allow" on an ask prompt: move the pattern from ask to allow in the rules for that credential. */
-  async promoteAskRule(id: string, ref: string, api: string, pattern: string) {
-    const p = this.personas.get(id);
-    if (!p?.config) throw new Error("persona is invalid");
-    const i = ref.indexOf("/");
-    const conn = ref.slice(0, i);
-    const name = ref.slice(i + 1);
-    const rules = p.config.connections[conn]?.rules ?? [];
-    const glob = (g: string) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\-]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(name);
-    let changed = false;
-    const next = rules.map((r) => {
-      if (r.api !== api || !glob(r.credential) || !r.ask.includes(pattern)) return r;
-      changed = true;
-      return { ...r, ask: r.ask.filter((x) => x !== pattern), allow: r.allow.includes(pattern) ? r.allow : [...r.allow, pattern] };
+  promoteAskRule(id: string, ref: string, api: string, pattern: string) {
+    return this.edit(id, async () => {
+      const p = this.editable(id);
+      const i = ref.indexOf("/");
+      const conn = ref.slice(0, i);
+      const name = ref.slice(i + 1);
+      const rules = p.config!.connections[conn]?.rules ?? [];
+      const glob = (g: string) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\-]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(name);
+      let changed = false;
+      const next = rules.map((r) => {
+        if (r.api !== api || !glob(r.credential) || !r.ask.includes(pattern)) return r;
+        changed = true;
+        return { ...r, ask: r.ask.filter((x) => x !== pattern), allow: r.allow.includes(pattern) ? r.allow : [...r.allow, pattern] };
+      });
+      if (!changed) return;
+      const doc = YAML.parseDocument(p.yaml);
+      doc.setIn(["connections", conn, "rules"], doc.createNode(next));
+      await this.write(id, doc.toString());
     });
-    if (!changed) return;
-    const doc = YAML.parseDocument(p.yaml);
-    doc.setIn(["connections", conn, "rules"], doc.createNode(next));
-    await this.save(id, doc.toString());
   }
 
   /** Composer model/effort selectors: saved to the persona, used from the next model turn. */
-  async setModel(id: string, m: { provider: string; id: string; effort?: Effort }) {
-    const p = this.personas.get(id);
-    if (!p) throw new Error("not found");
-    if (!this.settings.providers[m.provider]) throw new Error(`unknown provider "${m.provider}"`);
-    const doc = YAML.parseDocument(p.yaml);
-    const keep = p.config?.model?.maxTokens;
-    doc.set("model", doc.createNode({ provider: m.provider, id: m.id, ...(m.effort ? { effort: m.effort } : {}), ...(keep ? { maxTokens: keep } : {}) }));
-    return this.summary(await this.save(id, doc.toString()));
+  setModel(id: string, m: { provider: string; id: string; effort?: Effort }) {
+    return this.edit(id, async () => {
+      const p = this.editable(id, false);
+      if (!this.settings.providers[m.provider]) throw new Error(`unknown provider "${m.provider}"`);
+      const doc = YAML.parseDocument(p.yaml);
+      const keep = p.config?.model?.maxTokens;
+      doc.set("model", doc.createNode({ provider: m.provider, id: m.id, ...(m.effort ? { effort: m.effort } : {}), ...(keep ? { maxTokens: keep } : {}) }));
+      return this.summary(await this.write(id, doc.toString()));
+    });
   }
 
-  async remove(id: string): Promise<void> {
-    const p = this.personas.get(id);
-    if (!p) throw new Error("not found");
-    await fs.rm(p.file);
-    this.personas.delete(id);
-    this.emit("changed");
+  remove(id: string): Promise<void> {
+    return this.edit(id, async () => {
+      const p = this.editable(id, false);
+      await fs.rm(p.file);
+      this.personas.delete(id);
+      this.emit("changed");
+    });
   }
 
   /** Persona ids per credential ref their rules name. */

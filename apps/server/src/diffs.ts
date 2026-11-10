@@ -1,9 +1,9 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { ChangedFile, ChangeLine, DiffSummary, DiffView } from "@ph/shared";
 import { paths } from "./settings.js";
-import { exists, nowIso, randomId, writeFileAtomic } from "./util.js";
+import { FileStore } from "./file-store.js";
+import { nowIso, randomId } from "./util.js";
 
 const FILE_LINES = 2000; // lines kept per file
 const DIFF_LINES = 20_000; // per diff
@@ -36,42 +36,11 @@ export const summary = ({ files, ...d }: DiffView): DiffSummary => ({ ...d, file
  * in the sandbox, so they show what the agent chose to show: they are for reading, not proof.
  */
 export class DiffStore {
-  private cache = new Map<string, Promise<DiffView[]>>();
-  private chains = new Map<string, Promise<unknown>>();
-
-  private file(sessionId: string) {
-    return path.join(paths.home, "diffs", `${sessionId}.json`);
-  }
-
-  private load(sessionId: string): Promise<DiffView[]> {
-    let loaded = this.cache.get(sessionId);
-    if (!loaded) {
-      loaded = fs.readFile(this.file(sessionId), "utf8").then(
-        (raw) => {
-          // A file that doesn't parse only costs the pane its old diffs.
-          try {
-            return StoreSchema.parse(JSON.parse(raw));
-          } catch {
-            return [];
-          }
-        },
-        () => [],
-      );
-      this.cache.set(sessionId, loaded);
-    }
-    return loaded;
-  }
+  // A file that doesn't validate only costs the pane its old diffs.
+  private store = new FileStore<DiffView[]>({ name: "diffs", dir: () => path.join(paths.home, "diffs"), format: "json", schema: StoreSchema, empty: () => [], mode: 0o600 });
 
   private change<T>(sessionId: string, fn: (diffs: DiffView[]) => T): Promise<T> {
-    const run = (this.chains.get(sessionId) ?? Promise.resolve()).then(async () => {
-      const diffs = await this.load(sessionId);
-      const out = fn(diffs);
-      await fs.mkdir(path.dirname(this.file(sessionId)), { recursive: true });
-      await writeFileAtomic(this.file(sessionId), JSON.stringify(diffs));
-      return out;
-    });
-    this.chains.set(sessionId, run.catch(() => {}));
-    return run;
+    return this.store.change(sessionId, fn);
   }
 
   /** Adds a diff; one with the same title takes the place of the old one, as the newest. */
@@ -109,29 +78,20 @@ export class DiffStore {
 
   /** Newest first. */
   async list(sessionId: string): Promise<DiffSummary[]> {
-    await this.chains.get(sessionId);
-    return (await this.load(sessionId)).map(summary).reverse();
+    return (await this.store.get(sessionId)).map(summary).reverse();
   }
 
   async get(sessionId: string, id: string): Promise<DiffView | undefined> {
-    await this.chains.get(sessionId);
-    return (await this.load(sessionId)).find((d) => d.id === id);
+    return (await this.store.get(sessionId)).find((d) => d.id === id);
   }
 
   /** A fork's copy of the diffs its transcript shows. */
-  async copySession(from: string, to: string) {
-    await this.chains.get(from);
-    if (await exists(this.file(from))) {
-      await fs.mkdir(path.dirname(this.file(to)), { recursive: true });
-      await fs.copyFile(this.file(from), this.file(to));
-    }
+  copySession(from: string, to: string) {
+    return this.store.copy(from, to);
   }
 
-  async removeSession(sessionId: string) {
-    await this.chains.get(sessionId);
-    this.cache.delete(sessionId);
-    this.chains.delete(sessionId);
-    await fs.rm(this.file(sessionId), { force: true });
+  removeSession(sessionId: string) {
+    return this.store.remove(sessionId);
   }
 }
 
