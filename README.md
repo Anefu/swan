@@ -111,12 +111,15 @@ to use one of the persona's skills.
   `git show`, `diff -u`), under the persona's rules for commands. They show what the agent chose to
   show, so treat them as a reading aid, not proof.
 - **Conversations**: the menu beside the persona's name switches between its conversations and
-  starts new ones (⌘N). Each keeps working in the background with its own sandbox, and shows its
+  starts new ones (⌘N). **Fork this conversation** makes a copy to take in another direction: the
+  same messages and files, and the agent picks up where the original was, with a sandbox of its own
+  and nothing you had allowed "until stopped". Each keeps working in the background with its own sandbox, and shows its
   status there. They share the persona's folders, so Swan warns when two are at work in them. Each
   run of a schedule or watcher gets its own conversation, and its sandbox stops when the run ends.
   Agents can manage them with the `conversations` tool: list, rename and delete them, and send a
-  result to another one. A run that found nothing can delete itself. Changing a conversation you
-  started asks you first, so an unattended run can't.
+  result to another one, in the same persona or another (a new conversation there, or one you
+  name). A run that found nothing can delete itself. Changing a conversation you started, and
+  sending to another persona, ask you first, so an unattended run can't.
 - **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
   Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
   can't ask.

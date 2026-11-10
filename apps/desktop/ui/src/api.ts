@@ -169,6 +169,7 @@ export const api = {
   diffs: (sessionId: string) => request<DiffSummary[]>("GET", `/api/sessions/${enc(sessionId)}/diffs`),
   diff: (sessionId: string, id: string) => request<DiffView>("GET", `/api/sessions/${enc(sessionId)}/diffs/${enc(id)}`),
   renameSession: (id: string, title: string) => request<SessionSummary>("PATCH", `/api/sessions/${enc(id)}`, { title }),
+  forkSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/fork`),
   tracker: (personaId: string) => request<TrackerItem[]>("GET", `/api/personas/${enc(personaId)}/tracker`),
   track: (personaId: string, item: { url: string; title?: string; kind?: string; status?: TrackStatus; note?: string }) =>
     request<TrackerItem>("POST", `/api/personas/${enc(personaId)}/tracker`, item),
