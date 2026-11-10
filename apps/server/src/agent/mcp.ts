@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ResolvedCredential } from "../connections/manager.js";
 import { isHttpMcp, type McpHttpConfig, type McpStdioConfig } from "../personas.js";
-import { Redactor } from "../proxy/egress.js";
+import { Redactor } from "../proxy/redactor.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
 import type { Settings } from "../settings.js";
 import { errMsg, hostMatches, log, truncateMiddle } from "../util.js";

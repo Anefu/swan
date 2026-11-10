@@ -9,7 +9,10 @@ import { SecretStore } from "../secrets.js";
 import { paths, type Settings } from "../settings.js";
 import { CertAuthority } from "./ca.js";
 import { startCompanyProxy, type CompanyProxy } from "./company-proxy.fixture.js";
-import { EgressProxy, Redactor, bypassesProxy, isPrivateAddress, resolveChecked, subnetList, type ProxySession } from "./egress.js";
+import { isPrivateAddress, resolveChecked, subnetList } from "./addresses.js";
+import { EgressProxy, type ProxySession } from "./egress.js";
+import { Redactor } from "./redactor.js";
+import { bypassesProxy } from "./upstream.js";
 
 describe("isPrivateAddress", () => {
   it("blocks loopback, LAN, link-local, CGNAT, metadata and mapped addresses", () => {
