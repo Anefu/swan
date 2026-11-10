@@ -210,7 +210,8 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
   /**
    * The latest checkpoint, of one conversation when sessionId is given. Checkpoints from before a
    * persona could have several conversations have no sessionId: one belongs to the conversation
-   * that holds its sources, since event ids are unique across conversations.
+   * that holds its sources. Event ids are unique across conversations, except that a fork keeps
+   * the ids of the events it copied, so such a checkpoint serves both.
    */
   async latestCheckpoint(personaId: string, sessionId?: string, hasEvent?: (id: string) => boolean): Promise<Checkpoint | null> {
     const all = (await this.load(personaId)).checkpoints;

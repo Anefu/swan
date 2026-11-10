@@ -576,6 +576,8 @@ export interface Actions {
   /** Opens an empty conversation of the persona, starting one only if it has none. */
   newConversation(personaId: string): Promise<void>;
   renameConversation(sessionId: string, title: string): Promise<boolean>;
+  /** A copy of the conversation to take in another direction; it opens once made. */
+  forkConversation(personaId: string, sessionId: string): Promise<boolean>;
   /** Removes it; the persona's latest conversation opens instead. */
   deleteConversation(personaId: string, sessionId: string): Promise<boolean>;
   refreshEgress(): Promise<void>;
@@ -886,6 +888,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           await openConversation(personaId, empty?.id ?? (await api.createSession(personaId)).id);
         } catch (e) {
           toast("error", errorMessage(e), "Conversation");
+        }
+      },
+      forkConversation: async (personaId, sessionId) => {
+        try {
+          const fork = await api.forkSession(sessionId);
+          dispatch({ type: "session.upsert", session: fork });
+          await openConversation(personaId, fork.id);
+          return true;
+        } catch (e) {
+          toast("error", errorMessage(e), "Conversation");
+          return false;
         }
       },
       renameConversation: async (sessionId, title) => {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { ChangedFile, ChangeLine, DiffSummary, DiffView } from "@ph/shared";
 import { paths } from "./settings.js";
-import { nowIso, randomId, writeFileAtomic } from "./util.js";
+import { exists, nowIso, randomId, writeFileAtomic } from "./util.js";
 
 const FILE_LINES = 2000; // lines kept per file
 const DIFF_LINES = 20_000; // per diff
@@ -116,6 +116,15 @@ export class DiffStore {
   async get(sessionId: string, id: string): Promise<DiffView | undefined> {
     await this.chains.get(sessionId);
     return (await this.load(sessionId)).find((d) => d.id === id);
+  }
+
+  /** A fork's copy of the diffs its transcript shows. */
+  async copySession(from: string, to: string) {
+    await this.chains.get(from);
+    if (await exists(this.file(from))) {
+      await fs.mkdir(path.dirname(this.file(to)), { recursive: true });
+      await fs.copyFile(this.file(from), this.file(to));
+    }
   }
 
   async removeSession(sessionId: string) {
