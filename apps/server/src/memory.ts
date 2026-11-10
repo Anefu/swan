@@ -7,12 +7,13 @@ import { TypedEmitter, exists, nowIso, randomId, writeFileAtomic } from "./util.
 export const MEMORY_TYPES: MemoryType[] = ["preference", "decision", "observation", "procedure", "episode"];
 
 const tokenize = (s: string) => s.toLowerCase().match(/[a-z0-9_.-]{2,}/g) ?? [];
+const ORIGINS: MemoryOrigin[] = ["user", "observation", "inference"];
+const live = (r: MemoryRecord | undefined) => !!r && (r.status === "active" || r.status === "tentative");
 
 interface PersonaMemory {
   records: MemoryRecord[];
   changes: MemoryChange[];
   checkpoints: Checkpoint[];
-  lastDreamAt: string | null;
 }
 
 /**
@@ -31,7 +32,7 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
   private async load(personaId: string): Promise<PersonaMemory> {
     const hit = this.cache.get(personaId);
     if (hit) return hit;
-    let data: PersonaMemory = { records: [], changes: [], checkpoints: [], lastDreamAt: null };
+    let data: PersonaMemory = { records: [], changes: [], checkpoints: [] };
     if (await exists(this.file(personaId))) data = { ...data, ...JSON.parse(await fs.readFile(this.file(personaId), "utf8")) };
     this.cache.set(personaId, data);
     return data;
@@ -126,7 +127,46 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     return r;
   }
 
-  async act(personaId: string, id: string, action: "pin" | "unpin" | "archive" | "forget", by: MemoryChange["by"] = "user") {
+  /**
+   * Correct a live record from what the agent or /dream learned: new content, the events it now
+   * rests on, and an origin that says who it comes from. A record that becomes an inference is
+   * tentative again; one that stops being one becomes active.
+   */
+  async revise(personaId: string, id: string, v: { content: string; origin?: MemoryOrigin; sources?: string[]; reason?: string }, by: MemoryChange["by"]) {
+    const m = await this.load(personaId);
+    const r = m.records.find((x) => x.id === id);
+    if (!r || !live(r)) throw new Error("memory record not found");
+    this.reviseIn(m, r, v, by, nowIso());
+    await this.save(personaId);
+    return r;
+  }
+
+  private reviseIn(m: PersonaMemory, r: MemoryRecord, v: { content: string; origin?: MemoryOrigin; sources?: string[]; reason?: string }, by: MemoryChange["by"], ts: string) {
+    const before = r.content;
+    r.content = v.content.trim().slice(0, 4000);
+    if (v.origin && ORIGINS.includes(v.origin) && v.origin !== r.origin) {
+      r.origin = v.origin;
+      r.status = v.origin === "inference" ? "tentative" : "active";
+    }
+    if (v.sources?.length) r.sources = [...new Set([...r.sources, ...v.sources])].slice(-20);
+    r.version += 1;
+    r.updatedAt = ts;
+    const why = v.reason?.trim();
+    this.log(m, { recordId: r.id, action: "edited", summary: (why ? `Corrected: ${why}` : r.content).slice(0, 120), by, before, after: r.content });
+  }
+
+  /**
+   * Records for /dream to reread against the events they were saved from, oldest check first:
+   * tentative ones lead, since they are unconfirmed. Only records that cite events qualify.
+   */
+  async dueForRecheck(personaId: string, limit: number): Promise<MemoryRecord[]> {
+    return (await this.load(personaId)).records
+      .filter((r) => live(r) && r.sources.some((s) => s !== "user"))
+      .sort((a, b) => Number(b.status === "tentative") - Number(a.status === "tentative") || (a.checkedAt ?? "").localeCompare(b.checkedAt ?? "") || a.updatedAt.localeCompare(b.updatedAt))
+      .slice(0, limit);
+  }
+
+  async act(personaId: string, id: string, action: "pin" | "unpin" | "archive" | "forget", by: MemoryChange["by"] = "user", note?: string) {
     const m = await this.load(personaId);
     const r = m.records.find((x) => x.id === id);
     if (!r) throw new Error("memory record not found");
@@ -135,7 +175,7 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     r.updatedAt = nowIso();
     r.version += 1;
     const verb = { pin: "pinned", unpin: "unpinned", archive: "archived", forget: "forgotten" } as const;
-    this.log(m, { recordId: id, action: verb[action], summary: r.content.slice(0, 120), by });
+    this.log(m, { recordId: id, action: verb[action], summary: (note?.trim() ? `${note.trim()} — ${r.content}` : r.content).slice(0, 120), by });
     await this.save(personaId);
     return r;
   }
@@ -167,12 +207,15 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
     await this.save(personaId);
   }
 
-  async latestCheckpoint(personaId: string): Promise<Checkpoint | null> {
-    return (await this.load(personaId)).checkpoints.at(-1) ?? null;
-  }
-
-  async dreamState(personaId: string) {
-    return (await this.load(personaId)).lastDreamAt;
+  /**
+   * The latest checkpoint, of one conversation when sessionId is given. Checkpoints from before a
+   * persona could have several conversations have no sessionId: one belongs to the conversation
+   * that holds its sources, since event ids are unique across conversations.
+   */
+  async latestCheckpoint(personaId: string, sessionId?: string, hasEvent?: (id: string) => boolean): Promise<Checkpoint | null> {
+    const all = (await this.load(personaId)).checkpoints;
+    if (!sessionId) return all.at(-1) ?? null;
+    return all.findLast((c) => c.sessionId === sessionId || (!c.sessionId && !!hasEvent && c.sources.some(hasEvent))) ?? null;
   }
 
   /** Apply a consolidation result atomically. Archived and forgotten records are never revived. */
@@ -182,12 +225,24 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
       add: { type: MemoryType; content: string; origin: MemoryOrigin; sources: string[] }[];
       merge: { keep: string; remove: string[]; content: string }[];
       archive: string[];
+      revise?: { id: string; content: string; reason?: string; origin?: MemoryOrigin; sources?: string[] }[];
+      checked?: string[]; // records it reread against their sources
     },
   ): Promise<number> {
     const m = await this.load(personaId);
     let changed = 0;
-    const live = (id: string) => m.records.find((r) => r.id === id && (r.status === "active" || r.status === "tentative"));
+    const find = (id: string) => m.records.find((r) => r.id === id && live(r));
     const ts = nowIso();
+    for (const v of d.revise ?? []) {
+      const r = find(v.id);
+      if (!r || typeof v.content !== "string" || !v.content.trim() || v.content.trim() === r.content) continue;
+      this.reviseIn(m, r, { ...v, sources: Array.isArray(v.sources) ? v.sources.filter((s) => typeof s === "string") : undefined }, "dream", ts);
+      changed++;
+    }
+    for (const id of d.checked ?? []) {
+      const r = find(id);
+      if (r) r.checkedAt = ts;
+    }
     for (const a of d.add) {
       if (!a.content?.trim() || !MEMORY_TYPES.includes(a.type)) continue;
       const dup = m.records.some((r) => r.content.trim().toLowerCase() === a.content.trim().toLowerCase());
@@ -209,14 +264,14 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
       changed++;
     }
     for (const g of d.merge) {
-      const keep = live(g.keep);
+      const keep = find(g.keep);
       if (!keep || !g.content?.trim()) continue;
       const before = keep.content;
       keep.content = g.content.trim().slice(0, 4000);
       keep.version += 1;
       keep.updatedAt = ts;
       for (const id of g.remove) {
-        const r = live(id);
+        const r = find(id);
         if (!r || r.id === keep.id || r.origin === "user") continue; // never fold away a user statement
         r.status = "archived";
         r.updatedAt = ts;
@@ -225,14 +280,13 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
       changed++;
     }
     for (const id of d.archive) {
-      const r = live(id);
+      const r = find(id);
       if (!r || r.origin === "user" || r.pinned) continue;
       r.status = "archived";
       r.updatedAt = ts;
       this.log(m, { recordId: id, action: "archived", summary: r.content.slice(0, 120), by: "dream" });
       changed++;
     }
-    m.lastDreamAt = ts;
     await this.save(personaId);
     return changed;
   }

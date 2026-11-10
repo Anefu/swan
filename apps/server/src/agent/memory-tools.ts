@@ -89,7 +89,7 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
     zodTool({
       name: "memory_propose",
       description:
-        "Save a durable memory for this persona: a user preference they stated, a project decision with its rationale, an observed fact, or a procedure that worked. Cite the event ids it comes from. Use origin 'user' only for things the user said; your own guesses must use 'inference' and stay tentative.",
+        "Save something to this persona's memory: what would help a later conversation, or this one after its context rolls over, and can't simply be read again from files or tools. Cite the event ids it comes from. Origin 'user' is for what the user said, 'observation' for what tools showed, 'inference' for your own conclusions, which stay tentative. If a saved memory already covers it, use memory_update instead.",
       schema: z.object({
         content: z.string().min(1).max(2000),
         type: z.enum(MEMORY_TYPES as [string, ...string[]]),
@@ -101,6 +101,42 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
       async run(i) {
         const rec = await memory.add(personaId, { content: i.content, type: i.type as never, origin: i.origin, sources: i.sources, by: "agent" });
         return { text: `Saved ${rec.id} (${rec.status}).` };
+      },
+    }),
+    zodTool({
+      name: "memory_update",
+      description:
+        "Correct one of this persona's saved memories when you learn it is wrong, out of date or incomplete, rather than saving a second one that contradicts it. Give the whole new text, the event ids it now rests on, and its origin as for memory_propose.",
+      schema: z.object({
+        id: z.string().min(1),
+        content: z.string().min(1).max(2000),
+        origin: z.enum(["user", "observation", "inference"]),
+        sources: z.array(z.string()).max(20),
+        reason: z.string().max(300).optional().describe("What changed, in a few words"),
+      }),
+      preview: (i) => `${i.id}: ${i.content.slice(0, 80)}`,
+      primaryArg: (i) => i.id,
+      async run(i) {
+        const r = await memory.get(personaId, i.id);
+        if (!r || (r.status !== "active" && r.status !== "tentative")) return { text: "No such memory.", isError: true };
+        const rec = await memory.revise(personaId, i.id, { content: i.content, origin: i.origin, sources: i.sources, reason: i.reason }, "agent");
+        return { text: `Updated ${rec.id} (version ${rec.version}, ${rec.status}).` };
+      },
+    }),
+    zodTool({
+      name: "memory_archive",
+      description:
+        "Retire one of this persona's saved memories that no longer matters or turned out to be wrong. It leaves memory search and the brief; the user can restore it. Memories the user stated, and pinned ones, can't be archived this way: update a user's memory with what they say now.",
+      schema: z.object({ id: z.string().min(1), reason: z.string().min(1).max(300) }),
+      preview: (i) => `${i.id}: ${i.reason.slice(0, 80)}`,
+      primaryArg: (i) => i.id,
+      async run(i) {
+        const r = await memory.get(personaId, i.id);
+        if (!r || (r.status !== "active" && r.status !== "tentative")) return { text: "No such memory.", isError: true };
+        if (r.pinned) return { text: "That memory is pinned by the user; ask them before retiring it.", isError: true };
+        if (r.origin === "user") return { text: "That memory is something the user said. Update it with memory_update to what they say now, or ask them to archive it.", isError: true };
+        await memory.act(personaId, i.id, "archive", "agent", i.reason);
+        return { text: `Archived ${i.id}.` };
       },
     }),
   ];

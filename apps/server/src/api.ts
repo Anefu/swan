@@ -507,9 +507,12 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     persona(req.params.id);
     return d.memory.history(req.params.id);
   });
-  app.get("/api/personas/:id/checkpoint", async (req: P) => {
+  app.get("/api/personas/:id/checkpoint", async (req: FastifyRequest<{ Params: { id: string }; Querystring: { sessionId?: string } }>) => {
     persona(req.params.id);
-    return d.memory.latestCheckpoint(req.params.id);
+    const sid = req.query.sessionId;
+    if (!sid) return d.memory.latestCheckpoint(req.params.id);
+    const own = new Set((d.sessions.get(sid)?.items ?? []).map((it) => it.id));
+    return d.memory.latestCheckpoint(req.params.id, sid, (id) => own.has(id));
   });
 
   // ----- usage -----

@@ -88,6 +88,7 @@ export const PersonaSchema = z.strictObject({
     .strictObject({
       autoBrief: z.boolean().default(true), // load saved memories at the start of each context
       briefTokens: z.number().int().min(0).max(8000).default(1500),
+      autoDream: z.boolean().default(true), // run /dream when a context rolls over and when a conversation goes quiet
     })
     .prefault({}),
   permissions: z

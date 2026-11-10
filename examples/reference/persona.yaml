@@ -62,6 +62,7 @@ subagents:
 memory:
   autoBrief: true       # load saved memories at the start of each context
   briefTokens: 1500
+  autoDream: true       # run /dream when a context rolls over and when a conversation goes quiet
 
 # Tool permissions: deny > allow > ask > default. A rule is a tool name or glob (mcp__github__*), a
 # command pattern such as "cd *" or "npm test*" (also written bash(cd *)), or tool(argument glob).
