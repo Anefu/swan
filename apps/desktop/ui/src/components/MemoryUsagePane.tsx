@@ -472,7 +472,9 @@ function RecordRow({
 function CurrentWork({ persona }: { persona: PersonaSummary }) {
   const { state } = useStore();
   const rev = state.memoryRev[persona.id] ?? 0;
-  const { data, error, missing, loading, reload } = useLoad<Checkpoint | null>(() => api.checkpoint(persona.id), [persona.id, rev]);
+  // The conversation on screen: each conversation has its own checkpoint.
+  const sessionId = state.conversations[persona.id];
+  const { data, error, missing, loading, reload } = useLoad<Checkpoint | null>(() => api.checkpoint(persona.id, sessionId), [persona.id, sessionId, rev]);
   if (loading && data === undefined)
     return (
       <div className="pane-state">
@@ -483,7 +485,7 @@ function CurrentWork({ persona }: { persona: PersonaSummary }) {
   if (!data)
     return (
       <Empty title="No checkpoint yet">
-        Swan saves a checkpoint of the task when the context rolls over: objective, constraints, progress and the next action.
+        Swan saves a checkpoint of the task when this conversation's context rolls over: objective, constraints, progress and the next action.
       </Empty>
     );
   // Each part folds; what to act on starts open.

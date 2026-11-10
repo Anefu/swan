@@ -249,7 +249,8 @@ export const api = {
   memoryAction: (personaId: string, recordId: string, action: "pin" | "unpin" | "archive" | "forget") =>
     request<MemoryRecord>("POST", `/api/personas/${enc(personaId)}/memory/${enc(recordId)}/${action}`),
   memoryHistory: (personaId: string) => request<MemoryChange[]>("GET", `/api/personas/${enc(personaId)}/memory-history`),
-  checkpoint: (personaId: string) => request<Checkpoint | null>("GET", `/api/personas/${enc(personaId)}/checkpoint`),
+  checkpoint: (personaId: string, sessionId?: string) =>
+    request<Checkpoint | null>("GET", `/api/personas/${enc(personaId)}/checkpoint${sessionId ? `?sessionId=${enc(sessionId)}` : ""}`),
 
   personaAttachments: (personaId: string) => request<PersonaAttachment[]>("GET", `/api/personas/${enc(personaId)}/attachments`),
 

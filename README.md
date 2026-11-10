@@ -65,7 +65,8 @@ The install script avoids this, because files `curl` downloads aren't marked as 
 4. **Keep an eye on it.** The Overview panel (the list icon) shows what the agent is working on, its
    sub-agents, credentials, memory, attachments and network activity.
 
-Type `/` in the message box for commands: `/dream` tidies the persona's memory, `/stop` stops the
+Type `/` in the message box for commands: `/dream` tidies the persona's memory (Swan also
+runs it when a context fills up and when a conversation goes quiet), `/stop` stops the
 agent and clears what you allowed for this run, `/usage` shows usage, and `/<skill>` asks the agent
 to use one of the persona's skills.
 

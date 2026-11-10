@@ -9,8 +9,8 @@ import { SessionManager, type SessionDeps } from "./session.js";
 
 function setup() {
   const broadcast = vi.fn();
-  const other = { id: "q", folders: [], errors: [], config: { skills: [], model: undefined, connections: {}, permissions: { default: "ask", allow: [], ask: [], deny: [] } } };
-  const persona = { id: "p", folders: [], errors: [], config: { skills: [], model: undefined, connections: {}, permissions: { default: "ask", allow: [], ask: [], deny: [] } } };
+  const other = { id: "q", folders: [], errors: [], config: { skills: [], model: undefined, connections: {}, memory: { autoBrief: false, briefTokens: 0, autoDream: false }, permissions: { default: "ask", allow: [], ask: [], deny: [] } } };
+  const persona = { id: "p", folders: [], errors: [], config: { skills: [], model: undefined, connections: {}, memory: { autoBrief: false, briefTokens: 0, autoDream: false }, permissions: { default: "ask", allow: [], ask: [], deny: [] } } };
   const deps = {
     personas: { get: (id: string) => (id === "p" ? persona : id === "q" ? other : undefined) },
     settings: { defaultModel: { provider: "fake", id: "m" } },

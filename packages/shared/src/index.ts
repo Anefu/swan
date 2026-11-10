@@ -451,7 +451,7 @@ export interface PersonaAttachment extends AttachmentMeta {
 // PUT    /api/personas/:id/memory/:recordId {content?, type?}        -> MemoryRecord (new version)
 // POST   /api/personas/:id/memory/:recordId/:action  (pin|unpin|archive|forget) -> MemoryRecord
 // GET    /api/personas/:id/memory-history  -> MemoryChange[] (newest first)
-// GET    /api/personas/:id/checkpoint      -> Checkpoint | null (latest committed)
+// GET    /api/personas/:id/checkpoint?sessionId= -> Checkpoint | null (latest committed, of that conversation when given)
 //
 // Usage:
 // GET    /api/usage?personaId=&period=today|all -> UsageReport
@@ -495,7 +495,7 @@ export interface PersonaConfigView {
   permissions: { default: PermissionMode; allow: string[]; ask: string[]; deny: string[] };
   skills: string[];
   mcpServers: Record<string, unknown>; // raw YAML objects, edited as JSON
-  memory: { autoBrief: boolean; briefTokens: number };
+  memory: { autoBrief: boolean; briefTokens: number; autoDream?: boolean }; // autoDream absent from servers before 0.2.11
   subagents: SubagentsConfig;
   schedules?: ScheduleView[]; // absent from servers before 0.2.1
   watchers?: WatcherView[];
@@ -558,6 +558,7 @@ export interface MemoryRecord {
   sources: string[]; // chat item ids or "user"
   createdAt: string;
   updatedAt: string;
+  checkedAt?: string; // when /dream last reread the events it came from
 }
 
 export interface MemoryChange {
@@ -572,6 +573,7 @@ export interface MemoryChange {
 }
 
 export interface Checkpoint {
+  sessionId?: string; // its conversation; absent on checkpoints from before a persona had several
   epoch: number;
   createdAt: string;
   objective: string;

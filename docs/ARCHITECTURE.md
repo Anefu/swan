@@ -275,11 +275,29 @@ effort: command rules decide what asks, the sandbox and credential rules are the
   caching, Swan context epochs with checkpoints (not provider compaction), and server-side refusal fallbacks
   (`fallbacks: "default"`, `server-side-fallback-2026-07-01`) for models that support them.
 - Tools are frozen at session start (deterministic order) so the prefix stays cacheable.
+- The system prompt has two parts, each ending at a cache point: what stays the same across a
+  conversation's contexts (instructions, environment, skills), then the per-context lines (the
+  checkpoint note and memory brief). A new context reads the tools and first part from the cache
+  instead of writing them again, and a sub-agent, which gets the parent's tools and system prompt,
+  reads both parts. With the automatic cache point on the conversation that is 3 of the API's 4.
+  Checkpoint and `/dream` requests are one-off, so they set no cache points (`cache: false`).
+- A new context opens with the checkpoint and as many recent events as fit in half the room left
+  below the rollover point (after its prompt, tools and checkpoint), so it has room to work before
+  it rolls over again. Characters per token come from the conversation's last measured request.
 - Each assistant turn: stream → validate tool inputs → permission check (ask → UI approval) →
   execute approved calls concurrently → one user message with all `tool_result`s.
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with
   "interrupted" results so the transcript stays valid.
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
+- Memory: the agent saves, corrects and retires a persona's memory records with `memory_propose`,
+  `memory_update` and `memory_archive` (it can't archive what the user said, or pinned records).
+  `/dream` consolidates: it reads the conversation's events since its last run in that
+  conversation, rereads a few saved records against the events they cite (in any of the persona's
+  conversations), and adds, corrects, merges or archives records. It is told to leave out what
+  files or tools can show again and the state of the task in hand (the checkpoint's job), and a
+  record it says the user said must cite a message the user wrote, or it is kept as a tentative
+  inference. It runs on `/dream`, alongside each rollover's checkpoint, and once a conversation
+  the user wrote in has been quiet for 10 minutes (`memory.autoDream`, on by default).
 - Sessions persist to `~/.swan/sessions/<id>.json`; after a restart a session is
   `stopped` and the next message re-creates its container and MCP servers.
 - A container keeps what it was started with: folders, skills, MCP servers, `env`, `sandbox` and

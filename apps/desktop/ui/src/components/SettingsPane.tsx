@@ -132,7 +132,7 @@ function blankConfig(): PersonaConfigView {
     permissions: { default: "ask", allow: ["read_file", "list_dir", "glob", "grep", "load_skill"], ask: ["bash", "write_file", "edit_file"], deny: [] },
     skills: [],
     mcpServers: {},
-    memory: { autoBrief: true, briefTokens: 2000 },
+    memory: { autoBrief: true, briefTokens: 2000, autoDream: true },
     subagents: subagentDefaults(),
     schedules: [],
     watchers: [],
@@ -1016,8 +1016,13 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
 
         <Section
           id="memory"
-          title="Memory brief"
-          summary={d.memory.autoBrief && Number.isFinite(d.memory.briefTokens) ? `On · ${d.memory.briefTokens.toLocaleString()} tokens` : d.memory.autoBrief ? "On" : "Off"}
+          title="Memory"
+          summary={[
+            d.memory.autoBrief ? (Number.isFinite(d.memory.briefTokens) ? `Brief · ${d.memory.briefTokens.toLocaleString()} tokens` : "Brief on") : "No brief",
+            d.memory.autoDream !== false ? "auto /dream" : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
           invalid={!!errors.briefTokens}
         >
           <label className="check-row">
@@ -1037,6 +1042,10 @@ function PersonaSettings({ draftKey, persona }: { draftKey: string; persona: Per
               />
             )}
           </Field>
+          <label className="check-row">
+            <input type="checkbox" checked={d.memory.autoDream !== false} onChange={(e) => update((x) => void (x.memory.autoDream = e.target.checked))} />
+            <span>Tidy memory with /dream when a context fills up, and when a conversation you wrote in has been quiet for 10 minutes</span>
+          </label>
           <p className="hint">Memory is private to this persona. Review it in Memory &amp; Usage.</p>
         </Section>
         {!isNew && persona && !state.settingsSection && (
