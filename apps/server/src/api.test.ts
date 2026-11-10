@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
-import { hostAllowed, originAllowed, requestGuard } from "./api.js";
+import { Hub, hostAllowed, originAllowed, requestGuard, startApi } from "./api.js";
 
 describe("API guards", () => {
   it("accepts only loopback Host names (DNS rebinding)", () => {
@@ -48,5 +48,48 @@ describe("the API token", () => {
     expect((await a.inject({ url: "/", headers: host })).statusCode).toBe(200);
     expect((await a.inject({ url: "/", headers: { host: "evil.example" } })).statusCode).toBe(403);
     expect((await a.inject({ url: "/api/personas", headers: { ...host, "x-ph-token": TOKEN, origin: "https://evil.example" } })).statusCode).toBe(403);
+  });
+});
+
+describe("routes under a persona or a conversation", () => {
+  const TOKEN = "t0ken-for-tests-0123456789";
+  const start = async () => {
+    const persona = { id: "p", yaml: "name: P\n", folders: [], errors: [], config: { skills: [] } };
+    const session = { id: "s1", summary: { id: "s1" }, items: [], rename: (t: string) => Object.assign(session.summary, { title: t }) };
+    const deps = {
+      settings: { port: 0, providers: {} },
+      token: TOKEN,
+      runtime: { status: {} },
+      personas: { get: (id: string) => (id === "p" ? persona : undefined) },
+      sessions: { get: (id: string) => (id === "s1" ? session : undefined) },
+    };
+    return (await startApi(deps as never, new Hub())).app;
+  };
+  const ok = { host: "127.0.0.1:4317", "x-ph-token": TOKEN };
+
+  it("check the token before looking anything up, so ids can't be probed", async () => {
+    const app = await start();
+    for (const url of ["/api/personas/p/source", "/api/personas/nobody/source", "/api/sessions/nope"]) expect((await app.inject({ url, headers: { host: "127.0.0.1:4317" } })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("answer 404 for a persona or conversation that doesn't exist, and find the ones that do", async () => {
+    const app = await start();
+    expect((await app.inject({ url: "/api/personas/nobody/source", headers: ok })).json()).toEqual({ error: 'persona "nobody" not found' });
+    expect((await app.inject({ url: "/api/sessions/nope", headers: ok })).statusCode).toBe(404);
+    expect((await app.inject({ url: "/api/personas/p/source", headers: ok })).json()).toEqual({ id: "p", yaml: "name: P\n" });
+    expect((await app.inject({ url: "/api/sessions/s1", headers: ok })).json()).toEqual({ session: { id: "s1" }, items: [] });
+    await app.close();
+  });
+
+  it("name the field of a body that isn't valid", async () => {
+    const app = await start();
+    const patch = (title: unknown) => app.inject({ method: "PATCH", url: "/api/sessions/s1", headers: ok, payload: { title } });
+    expect((await patch("   ")).json()).toEqual({ error: "title: must be 1 to 120 characters" });
+    expect((await patch("  Release   notes ")).json()).toMatchObject({ title: "Release notes" });
+    const approve = await app.inject({ method: "POST", url: "/api/sessions/s1/approvals/t1", headers: ok, payload: { decision: "maybe" } });
+    expect(approve.statusCode).toBe(400);
+    expect(approve.json().error).toMatch(/^decision: /);
+    await app.close();
   });
 });
