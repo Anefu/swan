@@ -37,6 +37,11 @@ export class AttachmentStore {
     return { meta: JSON.parse(await fs.readFile(metaFile, "utf8")), data: await fs.readFile(path.join(this.dir(sessionId), id)) };
   }
 
+  /** A fork's copy, so the files its messages show stay available after the original goes. */
+  async copySession(from: string, to: string) {
+    if (await exists(this.dir(from))) await fs.cp(this.dir(from), this.dir(to), { recursive: true });
+  }
+
   async removeSession(sessionId: string) {
     await fs.rm(this.dir(sessionId), { recursive: true, force: true });
   }

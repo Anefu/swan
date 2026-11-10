@@ -133,13 +133,23 @@ refused too, since the proxy can't tell who asked), and its report runs as an un
 its own rather than joining one the user is in. Unattended turns never use what the user allowed
 "until stopped".
 
-Conversations of one persona can pass messages with the `conversations` tool, never across personas.
-A message may quote outside text, so the agent there is told it isn't from the user, and it never
+Conversations can pass messages with the `conversations` tool, in one persona or to another. Sending
+to another persona asks the user first (an explicit allow rule for `conversations` skips that), since
+that persona has its own folders, credentials and permissions; without a conversation named, it
+starts a new one there, labelled as a run of "a message from" the sender, and the turn counts against
+the receiving persona's limit. A message may quote outside text, so the agent there is told it isn't from the user, and it never
 joins a running turn: it waits for its own turn, which is unattended and refuses what would ask,
 and which first clears the conversation's temporary allowances so what the user allowed for their
 own turns can't be used. It can't send further, so conversations can't keep waking each other, and
 each one spends a turn of `unattended.maxTurnsPerDay`. Renaming or deleting a conversation the user
 started asks first (renaming the one the agent is in doesn't). Sub-agents don't get the tool.
+
+Forking copies a conversation in its persona: the events with their ids (so what its context cites can
+be read with the history tools; checkpoint lookup tolerates the shared ids), the epochs verbatim (so its
+first turn reads the original's cached prefix, and thinking blocks stay valid), the carry-over,
+placeholders, /dream bookmark, attachments, diffs and latest checkpoint. It gets a new id and proxy
+token, starts stopped as a conversation of the user's (no run label), and loses allowances and usage;
+anything in progress is marked ended, as after a restart.
 
 The Changes pane shows diffs the agent chooses to show, with `show_diff`. The command runs in the
 sandbox under the persona's rules for commands (`permissionView`), and Swan only parses its output as

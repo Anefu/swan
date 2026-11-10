@@ -18,7 +18,7 @@ function rowStatus(s: SessionSummary, approvals: PendingApproval[], now: number)
   return { text: relTime(s.updatedAt, now), tone: "muted" };
 }
 
-/** The persona's conversations, newest first: switch, start, rename or delete. */
+/** The persona's conversations, newest first: switch, start, fork, rename or delete. */
 export function ConversationMenu({ personaId }: { personaId: string }) {
   const { state, actions } = useStore();
   const approvals = usePendingApprovals();
@@ -47,10 +47,11 @@ export function ConversationMenu({ personaId }: { personaId: string }) {
     return q ? all.filter((s) => s.title.toLowerCase().includes(q)) : all;
   }, [all, query]);
 
-  // Rows after the conversations: New, then Rename and Delete for the one on screen.
+  // Rows after the conversations: New, then Fork, Rename and Delete for the one on screen.
   const newIndex = matches.length;
-  const renameIndex = newIndex + 1;
-  const deleteIndex = newIndex + 2;
+  const forkIndex = newIndex + 1;
+  const renameIndex = newIndex + 2;
+  const deleteIndex = newIndex + 3;
   const last = current ? deleteIndex : newIndex;
 
   const close = (refocus = true) => {
@@ -95,10 +96,20 @@ export function ConversationMenu({ personaId }: { personaId: string }) {
     } else if (i === newIndex) {
       void actions.newConversation(personaId);
       close();
+    } else if (i === forkIndex && current) {
+      void fork();
     } else if (i === renameIndex && current) {
       setTitle(current.title);
       setMode("rename");
     } else if (i === deleteIndex && current) setMode("delete");
+  };
+
+  const fork = async () => {
+    if (!current || busy) return;
+    setBusy(true);
+    const ok = await actions.forkConversation(personaId, current.id);
+    setBusy(false);
+    if (ok) close();
   };
 
   const saveTitle = async () => {
@@ -265,6 +276,7 @@ export function ConversationMenu({ personaId }: { personaId: string }) {
                   </span>
                   <Kbd>{MOD}N</Kbd>
                 </li>
+                {current && action(forkIndex, "Fork this conversation")}
                 {current && action(renameIndex, "Rename this conversation")}
                 {current && action(deleteIndex, "Delete this conversation")}
               </ul>

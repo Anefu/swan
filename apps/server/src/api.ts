@@ -392,6 +392,7 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     s.rename(title);
     return s.summary;
   });
+  app.post("/api/sessions/:id/fork", async (req: P) => (await d.sessions.fork(session(req.params.id).id)).summary);
   app.get("/api/sessions/:id/diffs", async (req: P) => d.diffs.list(session(req.params.id).id));
   app.get("/api/sessions/:id/diffs/:diffId", async (req: P<{ id: string; diffId: string }>, reply) => {
     const view = await d.diffs.get(session(req.params.id).id, req.params.diffId);
