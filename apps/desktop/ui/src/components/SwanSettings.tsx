@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import type { ConnectionCredentialStatus, ConnectionStatus, ProviderStatus } from "@ph/shared";
 import type { ConnectionAction } from "../api";
 import { useStore } from "../store";
@@ -225,7 +225,6 @@ function Connections() {
           </button>
         )}
       </div>
-      {state.migration && <MigrationNoteView />}
       <p className="hint">Where the agent's credentials come from. Values are never shown. Model keys live under Model providers.</p>
       {!hasCommand && <p className="hint">Command connections (sign-in with a code) are defined in config.yaml.</p>}
       {adding && <AddCredential onDone={() => setAdding(false)} />}
@@ -241,42 +240,6 @@ function Connections() {
         </p>
       )}
     </section>
-  );
-}
-
-function MigrationNoteView() {
-  const { state, actions } = useStore();
-  const note = state.migration;
-  if (!note) return null;
-  const lines: Array<[string, string[]]> = [
-    ["Moved", note.moved],
-    ["Personas updated", note.personas],
-    ["Kept in secrets.yaml (no hosts)", note.kept],
-    ["Problems", note.problems],
-  ];
-  return (
-    <div className="inline-form" role="status">
-      <p className="small">
-        <strong>Credentials are now connections.</strong> Swan converted the earlier secrets format.
-      </p>
-      <dl className="facts small">
-        {lines
-          .filter(([, v]) => v.length > 0)
-          .map(([k, v]) => (
-            <Fragment key={k}>
-              <dt>{k}</dt>
-              <dd className={cls(k === "Moved" || k.startsWith("Kept") ? "mono" : undefined, k === "Problems" && "tone-attention")}>
-                {k === "Personas updated" ? v.join(", ") : v.map((x) => <div key={x}>{x}</div>)}
-              </dd>
-            </Fragment>
-          ))}
-      </dl>
-      <div className="row end">
-        <button type="button" className="btn sm" onClick={() => void actions.dismissMigration()}>
-          Dismiss
-        </button>
-      </div>
-    </div>
   );
 }
 

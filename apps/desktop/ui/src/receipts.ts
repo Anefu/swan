@@ -33,7 +33,6 @@ export interface ReceiptText {
   target: string;
   /** Short result summary after a separator, e.g. "3 matches" or "exit 1". */
   result: string | null;
-  icon: "file" | "search" | "terminal" | "pencil" | "plug" | "sparkles" | "tool" | "globe";
   /** The target is words (an agent's description, a question), not code. */
   prose?: boolean;
 }
@@ -48,7 +47,7 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
   const out = item.output ?? "";
   if (server) {
     const arg = str(item.input, Object.keys(isRecord(item.input) ? item.input : {}));
-    return { verb: "Called", target: `${server} › ${tool}${arg ? ` ${firstLine(arg, 50)}` : ""}`, result: null, icon: "plug" };
+    return { verb: "Called", target: `${server} › ${tool}${arg ? ` ${firstLine(arg, 50)}` : ""}`, result: null };
   }
   switch (tool) {
     case "agent":
@@ -56,7 +55,6 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
         verb: "Agent",
         target: str(item.input, ["description"]) ?? item.inputPreview ?? "",
         result: null,
-        icon: "sparkles",
         prose: true,
       };
     case "agent_message": {
@@ -66,26 +64,25 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
         verb: "Replied to",
         target: agents?.get(id) ?? id,
         result: message ? `“${firstLine(message, 80)}”` : null,
-        icon: "sparkles",
         prose: true,
       };
     }
     case "agent_stop": {
       const id = str(item.input, ["id"]) ?? "";
-      return { verb: "Stopped", target: agents?.get(id) ?? id, result: null, icon: "sparkles", prose: true };
+      return { verb: "Stopped", target: agents?.get(id) ?? id, result: null, prose: true };
     }
     case "agent_status":
-      return { verb: "Checked agents", target: "", result: null, icon: "sparkles" };
+      return { verb: "Checked agents", target: "", result: null };
     case "ask_parent":
-      return { verb: "Asked the parent", target: str(item.input, ["question"]) ?? item.inputPreview, result: null, icon: "sparkles", prose: true };
+      return { verb: "Asked the parent", target: str(item.input, ["question"]) ?? item.inputPreview, result: null, prose: true };
     case "ask_user":
-      return { verb: "Asked", target: str(item.input, ["question"]) ?? item.inputPreview, result: item.answer ?? null, icon: "sparkles", prose: true };
+      return { verb: "Asked", target: str(item.input, ["question"]) ?? item.inputPreview, result: item.answer ?? null, prose: true };
     case "network_access":
-      return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null, icon: "globe" };
+      return { verb: "Network", target: item.inputPreview || (str(item.input, ["host"]) ?? ""), result: null };
     case "credential_use": {
       const op = str(item.input, ["operation"]);
       const cred = str(item.input, ["credential"]);
-      return { verb: "Credential", target: op && cred ? `${op} with ${cred}` : item.inputPreview, result: null, icon: "globe" };
+      return { verb: "Credential", target: op && cred ? `${op} with ${cred}` : item.inputPreview, result: null };
     }
     case "grep":
     case "glob": {
@@ -95,18 +92,18 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
         const n = out.trim() ? lineCount(out.trim()) : 0;
         result = n === 0 ? "no matches" : `${n} ${tool === "glob" ? (n === 1 ? "file" : "files") : n === 1 ? "match" : "matches"}`;
       }
-      return { verb: "Searched", target: pattern, result, icon: "search" };
+      return { verb: "Searched", target: pattern, result };
     }
     case "read_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const off = num(item.input, "offset");
       const lim = num(item.input, "limit");
       const range = off !== null || lim !== null ? `:${off ?? 1}–${(off ?? 1) + (lim ?? 2000) - 1}` : "";
-      return { verb: "Read", target: `${shortPath(p)}${range}`, result: null, icon: "file" };
+      return { verb: "Read", target: `${shortPath(p)}${range}`, result: null };
     }
     case "list_dir": {
       const p = str(item.input, PATH_KEYS) ?? ".";
-      return { verb: "Read", target: shortPath(p), result: null, icon: "file" };
+      return { verb: "Read", target: shortPath(p), result: null };
     }
     case "bash": {
       const cmd = str(item.input, ["command", "cmd"]) ?? item.inputPreview;
@@ -121,38 +118,38 @@ export function describeTool(item: ToolItem, agents?: ReadonlyMap<string, string
         if (code !== null) parts.push(`exit ${code}`);
         result = parts.length ? parts.join(", ") : null;
       }
-      return { verb: "Ran", target: firstLine(cmd, 90), result, icon: "terminal" };
+      return { verb: "Ran", target: firstLine(cmd, 90), result };
     }
     case "write_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const c = str(item.input, ["content"]) ?? "";
       const n = lineCount(c);
-      return { verb: "Wrote", target: basename(p), result: c ? `+${n}` : null, icon: "pencil" };
+      return { verb: "Wrote", target: basename(p), result: c ? `+${n}` : null };
     }
     case "edit_file": {
       const p = str(item.input, PATH_KEYS) ?? item.inputPreview;
       const n = str(item.input, ["new_string"]) ?? "";
       const o = str(item.input, ["old_string"]) ?? "";
-      return { verb: "Edited", target: basename(p), result: editCounts(o, n), icon: "pencil" };
+      return { verb: "Edited", target: basename(p), result: editCounts(o, n) };
     }
     case "show_diff":
-      return { verb: "Showed diff", target: str(item.input, ["title"]) ?? item.inputPreview, result: item.inputPreview.split(" · ")[1] ?? null, icon: "pencil" };
+      return { verb: "Showed diff", target: str(item.input, ["title"]) ?? item.inputPreview, result: item.inputPreview.split(" · ")[1] ?? null };
     case "load_skill":
-      return { verb: "Loaded skill", target: str(item.input, ["name"]) ?? item.inputPreview, result: null, icon: "sparkles" };
+      return { verb: "Loaded skill", target: str(item.input, ["name"]) ?? item.inputPreview, result: null };
     case "memory_search":
     case "history_search":
-      return { verb: "Searched", target: `${tool === "memory_search" ? "memory" : "history"} for ${str(item.input, ["query"]) ?? item.inputPreview}`, result: null, icon: "search" };
+      return { verb: "Searched", target: `${tool === "memory_search" ? "memory" : "history"} for ${str(item.input, ["query"]) ?? item.inputPreview}`, result: null };
     case "memory_read":
     case "history_read":
-      return { verb: "Read", target: `${tool === "memory_read" ? "memory" : "history"} ${item.inputPreview}`, result: null, icon: "file" };
+      return { verb: "Read", target: `${tool === "memory_read" ? "memory" : "history"} ${item.inputPreview}`, result: null };
     case "memory_propose":
-      return { verb: "Proposed memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
+      return { verb: "Proposed memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null };
     case "memory_update":
-      return { verb: "Updated memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
+      return { verb: "Updated memory", target: firstLine(str(item.input, ["content"]) ?? item.inputPreview, 70), result: null };
     case "memory_archive":
-      return { verb: "Archived memory", target: firstLine(str(item.input, ["reason"]) ?? item.inputPreview, 70), result: null, icon: "sparkles" };
+      return { verb: "Archived memory", target: firstLine(str(item.input, ["reason"]) ?? item.inputPreview, 70), result: null };
     default:
-      return { verb: "Used", target: `${tool}${item.inputPreview ? ` ${firstLine(item.inputPreview, 70)}` : ""}`, result: null, icon: "tool" };
+      return { verb: "Used", target: `${tool}${item.inputPreview ? ` ${firstLine(item.inputPreview, 70)}` : ""}`, result: null };
   }
 }
 

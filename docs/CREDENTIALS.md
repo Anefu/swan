@@ -79,8 +79,8 @@ CLI and SDKs work unmodified.
 [tools/aws-stub](../tools/aws-stub/) has a reference wrapper and a local AWS and Kubernetes
 stand-in for trying this without an AWS account.
 
-## Upgrading from the earlier format
+## Upgrading from the format before connections
 
-Credentials with `hosts` in the secrets files, and personas with `credentials: [...]`, are converted
-once on start: the originals are kept as `.bak`, existing access is kept with `allow: ["* /**"]`
-rules, and Settings shows what moved.
+Swan no longer converts credentials with `hosts` in the secrets files, personas with
+`credentials: [...]`, or `{{secret:NAME}}` references. To bring an install that still uses them
+forward, run Swan 0.3 once, which converts them, then update.

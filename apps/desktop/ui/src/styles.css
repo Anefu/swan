@@ -242,10 +242,6 @@ code {
 .btn.danger:hover:not(:disabled) {
   background: #352527;
 }
-.btn.accent-outline {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
 
 .icon-btn {
   display: inline-flex;
@@ -370,9 +366,6 @@ textarea::placeholder {
   color: var(--ink);
   font-size: 14px;
   max-width: 260px;
-}
-.mini-select.tall select {
-  height: 40px;
 }
 .mini-select select:disabled {
   opacity: 0.7;
@@ -754,9 +747,6 @@ textarea::placeholder {
   max-width: 1080px;
   margin: 0 auto;
   padding: 0 28px;
-}
-.column.wide {
-  max-width: 1240px;
 }
 
 /* ---------- Persona menu ---------- */
@@ -2008,26 +1998,6 @@ button.line:focus-visible .chev,
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-.cred-line {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.cred-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0;
-  background: none;
-  border: none;
-  text-align: left;
-  cursor: pointer;
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cred-name:hover {
-  text-decoration: underline;
 }
 .inline-form {
   display: flex;

@@ -189,11 +189,6 @@ function SaveSummary({ result }: { result: NonNullable<SettingsDraft["result"]> 
         {result.appliedNow.length > 0 && ` Applied now: ${result.appliedNow.join(", ")}.`}
         {result.nextStart.length > 0 && ` Applied later: ${result.nextStart.join(", ")}.`}
       </p>
-      {(result.notes ?? []).map((n, i) => (
-        <p key={i} className="muted">
-          {n}
-        </p>
-      ))}
       {live.errors.length > 0 && (
         <p className="tone-attention">
           Still to fix before {live.name} can start: {live.errors.join("; ")}

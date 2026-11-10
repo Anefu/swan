@@ -79,3 +79,10 @@ describe("persona edits", () => {
     await store.remove("edit-race");
   });
 });
+
+describe("credential references", () => {
+  it("say what to write instead of the {{secret:NAME}} form from before connections", () => {
+    const errors = store.parse("p", `name: P\nenv:\n  TOKEN: "{{secret:GITHUB_TOKEN}}"\n`).errors;
+    expect(errors).toContain("env.TOKEN: {{secret:GITHUB_TOKEN}} is no longer read; write {{credential:<connection>/GITHUB_TOKEN}}");
+  });
+});

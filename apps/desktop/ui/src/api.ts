@@ -26,16 +26,12 @@ import type {
   UsageReport,
   ConnectionStatus,
   CredentialUpsert,
-  MigrationNote,
   EgressEvent,
-  FileEntry,
-  PersonaSource,
   PersonaSummary,
   ProviderStatus,
   RuntimeStatus,
   SessionSummary,
   SkillSummary,
-  ToolSummary,
 } from "@ph/shared";
 
 // Matches the un-substituted placeholder without spelling it out, so a server that
@@ -136,15 +132,6 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const enc = encodeURIComponent;
 
-export interface FileList {
-  path: string;
-  entries: FileEntry[];
-}
-export interface FileContent {
-  path: string;
-  content: string;
-  truncated: boolean;
-}
 export interface Ok {
   ok: true;
 }
@@ -160,9 +147,6 @@ export const api = {
   personas: () => request<PersonaSummary[]>("GET", "/api/personas"),
   secretsStatus: () => request<{ error: string | null }>("GET", "/api/secrets/status"),
   createPersona: (id: string, yaml: string) => request<PersonaSummary>("POST", "/api/personas", { id, yaml }),
-  personaSource: (id: string) => request<PersonaSource>("GET", `/api/personas/${enc(id)}/source`),
-  savePersonaSource: (id: string, yaml: string) =>
-    request<PersonaSummary>("PUT", `/api/personas/${enc(id)}/source`, { yaml }),
   deletePersona: (id: string) => request<Ok>("DELETE", `/api/personas/${enc(id)}`),
   previewImport: (text: string) => request<PersonaImportPreview>("POST", "/api/personas/import/preview", { text }),
   importPersona: (text: string, choices: PersonaImportChoices) => request<PersonaImportResult>("POST", "/api/personas/import", { text, choices }),
@@ -178,10 +162,6 @@ export const api = {
   pauseTriggers: (personaId: string, paused: boolean) => request<TriggersInfo>("POST", `/api/personas/${enc(personaId)}/triggers/pause`, { paused }),
   runTrigger: (personaId: string, name: string) => request<TriggersInfo>("POST", `/api/personas/${enc(personaId)}/triggers/${enc(name)}/run`),
   testWatcher: (personaId: string, name: string) => request<WatcherTestResult>("POST", `/api/personas/${enc(personaId)}/triggers/${enc(name)}/test`),
-  personaTools: (id: string) => request<ToolSummary[]>("GET", `/api/personas/${enc(id)}/tools`),
-  files: (id: string, path: string) =>
-    request<FileList>("GET", `/api/personas/${enc(id)}/files?path=${enc(path)}`),
-  file: (id: string, path: string) => request<FileContent>("GET", `/api/personas/${enc(id)}/file?path=${enc(path)}`),
 
   skills: () => request<SkillSummary[]>("GET", "/api/skills"),
 
@@ -192,8 +172,6 @@ export const api = {
     request<ConnectionStatus | Ok>("DELETE", `/api/connections/${enc(conn)}/credentials/${enc(name)}`),
   connectionAction: (conn: string, action: ConnectionAction) =>
     request<ConnectionStatus>("POST", `/api/connections/${enc(conn)}/${action}`),
-  migrationNote: () => request<MigrationNote | null>("GET", "/api/connections/migration"),
-  dismissMigrationNote: () => request<Ok>("DELETE", "/api/connections/migration"),
   setProviderKey: (name: string, value: string) => request<ProviderStatus>("PUT", `/api/providers/${enc(name)}/key`, { value }),
   removeProviderKey: (name: string) => request<Ok>("DELETE", `/api/providers/${enc(name)}/key`),
 
@@ -202,13 +180,11 @@ export const api = {
   createSession: (personaId: string, title?: string) =>
     request<SessionSummary>("POST", "/api/sessions", title ? { personaId, title } : { personaId }),
   session: (id: string) => request<{ session: SessionSummary; items: ChatItem[] }>("GET", `/api/sessions/${enc(id)}`),
-  sessionTools: (id: string) => request<ToolSummary[]>("GET", `/api/sessions/${enc(id)}/tools`),
   sendMessage: (id: string, text: string, attachments?: string[]) =>
     request<Ok>("POST", `/api/sessions/${enc(id)}/messages`, attachments && attachments.length ? { text, attachments } : { text }),
   interrupt: (id: string) => request<Ok>("POST", `/api/sessions/${enc(id)}/interrupt`),
   approve: (id: string, toolUseId: string, body: ApprovalBody) =>
     request<Ok>("POST", `/api/sessions/${enc(id)}/approvals/${enc(toolUseId)}`, body),
-  stopSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/stop`),
   /** agentId "all" stops every sub-agent of the session. */
   stopAgent: (id: string, agentId: string) => request<Ok>("POST", `/api/sessions/${enc(id)}/agents/${enc(agentId)}/stop`),
   deleteSession: (id: string) => request<Ok>("DELETE", `/api/sessions/${enc(id)}`),

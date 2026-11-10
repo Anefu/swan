@@ -1,5 +1,5 @@
 // How each action changes the state. Pure: no requests, no timers.
-import type { ChatItem, ConnectionStatus, EgressEvent, MigrationNote, ModelOption, PendingApproval, PersonaSummary, ProviderStatus, RuntimeStatus, SessionSummary, SkillSummary } from "@ph/shared";
+import type { ChatItem, ConnectionStatus, EgressEvent, ModelOption, PendingApproval, PersonaSummary, ProviderStatus, RuntimeStatus, SessionSummary, SkillSummary } from "@ph/shared";
 import type { WsState } from "../ws";
 import { type ServerState, type DockMode, type Toast, type Transcript, type MemoryPaneState, DEFAULT_MEMORY_PANE, type SettingsDraft, type SettingsFocus, type DraftAttachment, type NetworkFilters, type State, MAX_EGRESS } from "./state";
 
@@ -14,7 +14,6 @@ export type Action =
   | { type: "connections"; connections: ConnectionStatus[]; changed?: string[] }
   | { type: "connection.upsert"; connection: ConnectionStatus; changed?: string }
   | { type: "connection.remove"; name: string }
-  | { type: "migration"; note: MigrationNote | null }
   | { type: "secrets"; error: string | null }
   | { type: "skills"; skills: SkillSummary[] }
   | { type: "models"; models: ModelOption[] | null }
@@ -128,8 +127,6 @@ export function reducer(state: State, a: Action): State {
     }
     case "connection.remove":
       return { ...state, connections: state.connections.filter((c) => c.name !== a.name) };
-    case "migration":
-      return { ...state, migration: a.note };
     case "secrets":
       return { ...state, secretsError: a.error };
     case "skills":

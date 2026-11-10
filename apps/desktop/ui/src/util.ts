@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Effort, RuntimeStatus, SessionStatus, ToolCallStatus } from "@ph/shared";
+import type { Effort, RuntimeStatus } from "@ph/shared";
 import { ApiError } from "./api";
 
 export function cls(...parts: Array<string | false | null | undefined>): string {
@@ -72,28 +72,6 @@ export function toolDisplayName(name: string): { server?: string; tool: string }
   return { tool: name };
 }
 
-export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
-  starting: "Starting",
-  idle: "Idle",
-  running: "Running",
-  awaiting_approval: "Awaiting approval",
-  error: "Error",
-  stopped: "Stopped",
-};
-
-export const TOOL_STATUS_LABEL: Record<ToolCallStatus, string> = {
-  pending_approval: "Needs approval",
-  running: "Running",
-  done: "Done",
-  error: "Error",
-  denied: "Denied",
-  interrupted: "Interrupted",
-};
-
-export function isBusy(status: SessionStatus | undefined): boolean {
-  return status === "running" || status === "awaiting_approval";
-}
-
 export type RuntimeLevel = "ok" | "busy" | "error" | "unknown";
 
 export function runtimeLevel(r: RuntimeStatus | null): RuntimeLevel {
@@ -120,16 +98,6 @@ export function parseList(text: string): string[] {
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-/** Line numbers mentioned in error strings ("... at line 4, column 2"). */
-export function errorLines(errors: Array<string | null | undefined>): Set<number> {
-  const out = new Set<number>();
-  for (const e of errors) {
-    if (!e) continue;
-    for (const m of e.matchAll(/\bline (\d+)/gi)) out.add(Number(m[1]));
-  }
-  return out;
 }
 
 export function isRecord(v: unknown): v is Record<string, unknown> {
@@ -190,13 +158,6 @@ export async function copyText(text: string): Promise<boolean> {
 /** True when the server does not implement an endpoint yet (older server). */
 export function isMissingEndpoint(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 404 || e.status === 405 || e.status === 501);
-}
-
-export function initials(name: string): string {
-  const parts = name.trim().split(/[\s_-]+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
 export function basename(p: string): string {

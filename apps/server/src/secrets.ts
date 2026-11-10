@@ -16,20 +16,11 @@ export interface SecretEntry {
   source: "yaml" | "env" | null;
   fingerprint: string | null;
   updatedAt: string | null;
-  // Earlier format only (read for migration): bindings now live in config.yaml.
-  hosts: string[];
-  inject?: { header: string; format: string };
-  substituteInBody?: boolean;
 }
 
 const YamlEntry = z.union([
   z.string(), // shorthand: NAME: value
-  z.object({
-    value: z.string().optional(),
-    hosts: z.array(z.string()).optional(),
-    inject: z.object({ header: z.string(), format: z.string().default("{value}") }).optional(),
-    substituteInBody: z.boolean().optional(),
-  }),
+  z.object({ value: z.string().optional() }), // other keys (hosts, from before connections) are ignored
 ]);
 
 function parseEnv(text: string): Map<string, string> {
@@ -95,11 +86,7 @@ export class SecretStore extends TypedEmitter<Events> {
     if (await exists(paths.secretsEnv)) {
       const env = parseEnv(await fs.readFile(paths.secretsEnv, "utf8"));
       const t = fileTime(paths.secretsEnv);
-      for (const [k, v] of env) {
-        if (k.endsWith("__HOSTS") && env.has(k.slice(0, -7))) continue;
-        const hosts = (env.get(`${k}__HOSTS`) ?? "").split(",").map((h) => h.trim()).filter(Boolean);
-        next.set(k, { name: k, value: v, source: "env", hosts, fingerprint: null, updatedAt: t });
-      }
+      for (const [k, v] of env) next.set(k, { name: k, value: v, source: "env", fingerprint: null, updatedAt: t });
     }
 
     if (await exists(paths.secretsYaml)) {
@@ -122,9 +109,6 @@ export class SecretStore extends TypedEmitter<Events> {
           name,
           value: e.value ?? prev?.value,
           source: e.value !== undefined ? "yaml" : (prev?.source ?? null),
-          hosts: "hosts" in e && e.hosts ? e.hosts : (prev?.hosts ?? []),
-          inject: "inject" in e ? e.inject : undefined,
-          substituteInBody: "substituteInBody" in e ? e.substituteInBody : undefined,
           fingerprint: null,
           updatedAt: e.value !== undefined ? t : (prev?.updatedAt ?? null),
         });
@@ -136,7 +120,7 @@ export class SecretStore extends TypedEmitter<Events> {
       e.fingerprint = e.value ? sha256Hex(e.value).slice(0, 8) : null;
       const prev = this.entries.get(name);
       if (prev && prev.fingerprint === e.fingerprint) e.updatedAt = prev.updatedAt;
-      if (!prev || prev.fingerprint !== e.fingerprint || prev.hosts.join(",") !== e.hosts.join(",") || JSON.stringify(prev.inject) !== JSON.stringify(e.inject)) {
+      if (!prev || prev.fingerprint !== e.fingerprint) {
         if (prev && prev.fingerprint !== e.fingerprint) e.updatedAt = new Date().toISOString();
         changed.push(name);
       }
@@ -187,7 +171,7 @@ export class SecretStore extends TypedEmitter<Events> {
     return this.get(key)?.value;
   }
 
-  /** Every entry as stored, keyed by file spelling (migration reads the earlier format from here). */
+  /** Every entry as stored, keyed by file spelling. */
   all(): SecretEntry[] {
     return [...this.entries.values()];
   }
@@ -223,7 +207,7 @@ export class SecretStore extends TypedEmitter<Events> {
     if (await exists(paths.secretsEnv)) {
       const lines = (await fs.readFile(paths.secretsEnv, "utf8")).split(/\r?\n/);
       const names = envKeys(key).map((k) => k.replace(/[^A-Za-z0-9_]/g, ""));
-      const re = new RegExp(`^\\s*(export\\s+)?(${names.join("|")})(__HOSTS)?\\s*=`);
+      const re = new RegExp(`^\\s*(export\\s+)?(${names.join("|")})\\s*=`);
       const kept = lines.filter((l) => !re.test(l));
       if (kept.length !== lines.length) await writeFileAtomic(paths.secretsEnv, kept.join("\n"), 0o600);
     }

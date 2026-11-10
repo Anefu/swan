@@ -1,4 +1,4 @@
-// Wire protocol shared by the harness server and the web UI.
+// Wire protocol shared by the server and the app's UI.
 // REST carries commands and queries; one WebSocket (/api/ws) carries live events.
 
 export type ProviderType = "anthropic" | "openai" | "copilot";
@@ -112,15 +112,6 @@ export interface CredentialRule {
 
 export interface PersonaConnection {
   rules: CredentialRule[];
-}
-
-/** One-time note after converting the earlier secrets format. */
-export interface MigrationNote {
-  at: string;
-  moved: string[]; // e.g. "GITHUB_TOKEN → github/GITHUB_TOKEN"
-  personas: string[]; // persona ids whose credentials became rules
-  kept: string[]; // host-less entries left in secrets.yaml
-  problems: string[];
 }
 
 // ---------- Skills ----------
@@ -332,42 +323,9 @@ export interface ProviderModel {
 }
 
 // ---------- REST endpoints ----------
-// All requests need header `x-ph-token: <token>` (the token is in <meta name="ph-token">).
-// Bodies are JSON. Errors come back as { error: string } with a 4xx/5xx status.
-//
-// GET    /api/runtime                         -> RuntimeStatus
-// POST   /api/runtime/rebuild                 -> RuntimeStatus   (rebuild sandbox image)
-// POST   /api/runtime/retry                   -> RuntimeStatus   (check Podman again and bring the sandbox up)
-// POST   /api/runtime/setup                   -> RuntimeStatus   (create and start the Podman machine)
-// GET    /api/secrets/status                  -> { error: string | null } (why secrets.yaml cannot be read)
-// GET    /api/providers                       -> ProviderStatus[]
-// GET    /api/providers/:name/models          -> ProviderModel[] (copilot providers)
-// GET    /api/personas                        -> PersonaSummary[]
-// POST   /api/personas            {id,yaml}   -> PersonaSummary
-// GET    /api/personas/:id/source             -> PersonaSource
-// PUT    /api/personas/:id/source {yaml}      -> PersonaSummary
-// DELETE /api/personas/:id                    -> { ok: true }  (also its conversation, memory and attachments)
-// GET    /api/personas/:id/tools              -> ToolSummary[]  (built-in + skill tools; MCP tools appear once a session runs)
-// GET    /api/personas/:id/files?path=/workspace/x -> { path, entries: FileEntry[] } (path inside sandbox)
-// GET    /api/personas/:id/file?path=...      -> { path, content, truncated }
-// GET    /api/skills                          -> SkillSummary[]
-// GET    /api/connections                     -> ConnectionStatus[]
-// PUT    /api/connections/:conn/credentials/:name CredentialUpsert -> ConnectionStatus (static; creates the connection)
-// DELETE /api/connections/:conn/credentials/:name -> ConnectionStatus | { ok: true } (static)
-// POST   /api/connections/:conn/:action       (login|renew|cancel|logout) -> ConnectionStatus (command)
-// GET    /api/connections/migration           -> MigrationNote | null
-// DELETE /api/connections/migration           -> { ok: true } (dismiss the note)
-// GET    /api/sessions?personaId=             -> SessionSummary[] (newest first)
-// POST   /api/sessions            {personaId, title?} -> SessionSummary
-// GET    /api/sessions/:id                    -> { session: SessionSummary, items: ChatItem[] }
-// GET    /api/sessions/:id/tools              -> ToolSummary[]
-// POST   /api/sessions/:id/messages {text}    -> { ok: true }
-// POST   /api/sessions/:id/interrupt          -> { ok: true }
-// POST   /api/sessions/:id/approvals/:toolUseId ApprovalBody -> { ok: true }
-// POST   /api/sessions/:id/stop               -> SessionSummary (removes container, keeps transcript)
-// POST   /api/sessions/:id/agents/:agentId/stop -> { ok: true } (one sub-agent; "all" stops every one)
-// DELETE /api/sessions/:id                    -> { ok: true }  (also deletes transcript)
-// GET    /api/egress?sessionId=&limit=200     -> EgressEvent[] (newest last)
+// All requests need the header `x-ph-token: <token>`. Bodies are JSON; errors come back as
+// { error: string } with a 4xx or 5xx status. The routes are in apps/server/src/api/routes, one
+// file per area, each with the types it answers with.
 
 export interface FileEntry {
   name: string;
@@ -540,7 +498,6 @@ export interface SaveResult {
   persona: PersonaSummary;
   appliedNow: string[]; // e.g. "permissions", "network allowlist"
   nextStart: string[]; // e.g. "folders" (next container start)
-  notes?: string[]; // adjustments the server made, in plain words
 }
 
 export type MemoryType = "preference" | "decision" | "observation" | "procedure" | "episode";

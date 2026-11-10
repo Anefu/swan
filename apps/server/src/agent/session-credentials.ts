@@ -96,12 +96,12 @@ export class SessionCredentials {
     }
   }
 
-  /** `{{credential:conn/NAME…}}` (and `{{secret:NAME}}`) in persona env and MCP stdio env -> placeholders. */
+  /** `{{credential:conn/NAME…}}` in persona env and MCP stdio env -> placeholders. */
   render(template: string): string {
     const named = this.namedRefs();
     return template.replace(CREDENTIAL_REF, (...m) => {
       const r = parseRefMatch(m as unknown as RegExpMatchArray);
-      const ref = r.legacy ? named.find((x) => x.endsWith(`/${r.name}`)) : r.connection ? `${r.connection}/${r.name}` : undefined;
+      const ref = r.connection ? `${r.connection}/${r.name}` : undefined;
       if (!ref || !named.includes(ref)) return "";
       const c = this.host.connections.resolve(ref);
       if (r.basic) return Buffer.from(`${c?.username ?? ""}:${this.placeholderFor(ref)}`).toString("base64");

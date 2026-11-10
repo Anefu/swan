@@ -297,21 +297,8 @@ export class Session {
   }
 
   static async load(deps: SessionDeps, file: string): Promise<Session> {
-    const raw = JSON.parse(await fs.readFile(file, "utf8"));
-    let data: Persisted;
-    if (raw.version === 2) data = raw;
-    else {
-      // v1: one transcript with one frozen prompt -> a single epoch.
-      data = {
-        version: 2,
-        summary: raw.summary,
-        items: raw.items,
-        epochs: raw.frozen ? [{ n: 1, model: raw.summary.model, frozen: raw.frozen, messages: raw.messages, startedAt: raw.summary.createdAt }] : [],
-        carry: null,
-        placeholders: raw.placeholders,
-        proxyToken: raw.proxyToken,
-      };
-    }
+    const data = JSON.parse(await fs.readFile(file, "utf8")) as Persisted;
+    if (data.version !== 2) throw new Error(`saved in an older format (${data.version ?? 1}) that this version of Swan no longer reads`);
     return Session.settle(deps, data, "Swan restarted before the sign-in finished");
   }
 
@@ -648,7 +635,7 @@ export class Session {
     this.attended = true;
     this.stopWhenDone = this.deleteWhenDone = false;
     this.addItem({ kind: "user", id: randomId("it_", 6), ts: nowIso(), text: display, ...(files?.length ? { attachments: files.map((f) => f.meta) } : {}) });
-    if (this.summary.title === "New conversation" || this.summary.title === "New session") this.summary = { ...this.summary, title: display.replace(/\s+/g, " ").slice(0, 60) };
+    if (this.summary.title === "New conversation") this.summary = { ...this.summary, title: display.replace(/\s+/g, " ").slice(0, 60) };
     const receiptId = this.loopRunning ? this.receipt("steer", "Queued", "Will steer the next step").id : undefined;
     this.wake({ text: content, receiptId, files });
   }

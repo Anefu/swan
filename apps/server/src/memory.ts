@@ -1,4 +1,4 @@
-import type { Checkpoint, MemoryChange, MemoryOrigin, MemoryRecord, MemoryStatus, MemoryType } from "@ph/shared";
+import type { Checkpoint, MemoryChange, MemoryOrigin, MemoryRecord, MemoryType } from "@ph/shared";
 import { z } from "zod";
 import { FileStore } from "./file-store.js";
 import { paths } from "./settings.js";
@@ -321,9 +321,5 @@ export class MemoryStore extends TypedEmitter<{ changed: [string] }> {
 
   removePersona(personaId: string) {
     return this.store.remove(personaId);
-  }
-
-  status(s: MemoryStatus) {
-    return s;
   }
 }

@@ -295,7 +295,6 @@ const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false })
 /** Wrap an MCP tool. Inputs are checked against the server's JSON Schema before the call. */
 export function mcpTool(def: {
   server: string;
-  tool: string;
   qualifiedName: string;
   description: string;
   inputSchema: Record<string, unknown>;

@@ -376,11 +376,6 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     await this.run(["rm", "-f", "-t", "2", this.containerName(sessionId)], { timeoutMs: 30_000 });
   }
 
-  async isRunning(sessionId: string): Promise<boolean> {
-    const r = await this.run(["inspect", this.containerName(sessionId), "--format", "{{.State.Running}}"]);
-    return r.code === 0 && r.stdout.trim() === "true";
-  }
-
   /**
    * Remove session containers left over from a previous run of this instance. Only containers on
    * this instance's network: another Swan (a second PH_HOME, a test run) has its own and keeps them.

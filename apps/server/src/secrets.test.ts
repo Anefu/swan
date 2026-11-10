@@ -10,20 +10,17 @@ beforeEach(async () => {
 });
 
 describe("SecretStore", () => {
-  it("reads both files, lets YAML win, and binds env values to hosts", async () => {
-    await fs.writeFile(
-      paths.secretsEnv,
-      ["NPM_TOKEN=npm_abc", "NPM_TOKEN__HOSTS=registry.npmjs.org, *.npmjs.com", 'SHARED="from env"', 'export QUOTED="a\\nb" # trailing comment', "HASH='x # y'", "PLAIN=value # comment", ""].join("\n"),
-    );
+  it("reads both files and lets YAML win; keys from before connections are ignored", async () => {
+    await fs.writeFile(paths.secretsEnv, ["NPM_TOKEN=npm_abc", 'SHARED="from env"', 'export QUOTED="a\\nb" # trailing comment', "HASH='x # y'", "PLAIN=value # comment", ""].join("\n"));
     await fs.writeFile(paths.secretsYaml, "SHARED: from yaml\nGITHUB_TOKEN:\n  value: ghp_x\n  hosts: [api.github.com]\n  inject: { header: Authorization, format: 'Bearer {value}' }\n");
     const s = new SecretStore();
     await s.load();
-    expect(s.get("NPM_TOKEN")).toMatchObject({ value: "npm_abc", source: "env", hosts: ["registry.npmjs.org", "*.npmjs.com"] });
+    expect(s.get("NPM_TOKEN")).toMatchObject({ value: "npm_abc", source: "env" });
     expect(s.value("SHARED")).toBe("from yaml");
     expect(s.value("QUOTED")).toBe("a\nb");
     expect(s.value("HASH")).toBe("x # y");
     expect(s.value("PLAIN")).toBe("value");
-    expect(s.get("GITHUB_TOKEN")?.inject).toEqual({ header: "Authorization", format: "Bearer {value}" });
+    expect(s.get("GITHUB_TOKEN")).toEqual({ name: "GITHUB_TOKEN", value: "ghp_x", source: "yaml", fingerprint: expect.any(String), updatedAt: expect.any(String) });
   });
 
   it("finds connection keys in either file and edits them in place", async () => {

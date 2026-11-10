@@ -164,7 +164,6 @@ export class SessionMcp {
           out.push(
             mcpTool({
               server: conn.name,
-              tool: t.name,
               qualifiedName,
               description: t.description ?? "",
               inputSchema: t.inputSchema ?? { type: "object" },

@@ -149,7 +149,8 @@ describe("static connections", () => {
     await s.load();
     expect(m.usable("corp-api/KEY")?.value).toBe("from-env");
     expect(m.resolveHost("Bearer {{credential:corp-api/KEY}}", new Set(["corp-api/KEY"]))).toEqual({ text: "Bearer from-env", missing: [], used: ["corp-api/KEY"] });
-    expect(m.resolveHost("{{secret:KEY}}", new Set(["corp-api/KEY"])).text).toBe("from-env");
+    // The form from before connections is never resolved (a persona using it doesn't start).
+    expect(m.resolveHost("{{secret:KEY}}", new Set(["corp-api/KEY"])).text).toBe("{{secret:KEY}}");
     expect(m.resolveHost("{{credential:corp-api/KEY}}", new Set()).text).toBe("");
   });
 

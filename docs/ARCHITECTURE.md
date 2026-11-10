@@ -169,7 +169,7 @@ forge it: it is for reading, and review of anything important belongs where the 
    placeholder keys shaped like real ones). Static credentials appear as an env var; command
    connections' files are written into `/home/agent` with placeholders, and their env goes to a
    file every bash shell reads (`BASH_ENV`). Persona/MCP config refers to credentials as
-   `{{credential:conn/NAME}}` (`{{secret:NAME}}` is an old alias).
+   `{{credential:conn/NAME}}`.
 3. Container traffic must use the proxy (there is no other route). The proxy identifies the session
    from `Proxy-Authorization`, then for each request:
    - destination not in `network.allow` ∪ `network.internal` ∪ hosts of the session's usable

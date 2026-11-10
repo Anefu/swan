@@ -1,5 +1,5 @@
 // The app's state: its shape, the defaults it starts from, and what is kept between launches.
-import type { AttachmentMeta, ChatItem, ConnectionStatus, CredentialRule, EgressEvent, MigrationNote, ModelOption, PendingApproval, PersonaConfigView, PersonaSummary, ProviderStatus, RuntimeStatus, SaveResult, SessionSummary, SkillSummary } from "@ph/shared";
+import type { AttachmentMeta, ChatItem, ConnectionStatus, CredentialRule, EgressEvent, ModelOption, PendingApproval, PersonaConfigView, PersonaSummary, ProviderStatus, RuntimeStatus, SaveResult, SessionSummary, SkillSummary } from "@ph/shared";
 import { readToken } from "../api";
 import { loadPref } from "../util";
 import type { WsState } from "../ws";
@@ -109,7 +109,6 @@ export interface State {
   connections: ConnectionStatus[];
   /** Static credential ref -> when it last changed, for the "reloaded, no restart" line. */
   credentialFlash: Record<string, number>;
-  migration: MigrationNote | null;
   secretsError: string | null; // why secrets.yaml / secrets.env cannot be read
   skills: SkillSummary[];
   /** null = not loaded or the server has no /api/models. */
@@ -179,7 +178,6 @@ export function initState(): State {
     personas: [],
     connections: [],
     credentialFlash: {},
-    migration: null,
     secretsError: null,
     skills: [],
     models: null,

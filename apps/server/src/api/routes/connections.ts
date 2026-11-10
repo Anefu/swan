@@ -1,7 +1,6 @@
 // Connections: their status, static credential values, and command connections' sign-ins.
 import type { CredentialUpsert } from "@ph/shared";
 import type { FastifyInstance } from "fastify";
-import { dismissMigrationNote, readMigrationNote } from "../../connections/migrate.js";
 import { log } from "../../util.js";
 import type { ApiDeps } from "../deps.js";
 import { HttpError, type Req } from "../http.js";
@@ -13,11 +12,6 @@ export function connectionRoutes(app: FastifyInstance, d: ApiDeps) {
     return c;
   };
   app.get("/api/connections", async () => d.connections.status());
-  app.get("/api/connections/migration", async () => readMigrationNote());
-  app.delete("/api/connections/migration", async () => {
-    await dismissMigrationNote();
-    return { ok: true };
-  });
   app.put("/api/connections/:conn/credentials/:name", async (req: Req<{ conn: string; name: string }, CredentialUpsert>) => {
     await d.connections.upsertStatic(req.params.conn, req.params.name, req.body ?? {});
     return connection(req.params.conn);

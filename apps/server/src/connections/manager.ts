@@ -13,6 +13,7 @@ import {
   CREDENTIAL_REF,
   ConnectionsSchema,
   credentialRefs,
+  OLD_SECRET_REF,
   hostWithin,
   parseRefMatch,
   type CommandConnectionConfig,
@@ -469,8 +470,8 @@ export class ConnectionManager extends TypedEmitter<Events> {
     const byName = new Map(creds.map((c) => [c.name, c] as const));
     const values = creds.flatMap((c) => (c.kind === "aws-sigv4" ? [c.accessKeyId, c.secretAccessKey, c.sessionToken ?? ""] : [c.value])).filter((v) => v.length >= 8);
     const checkText = (where: string, text: string): string | null => {
+      if (OLD_SECRET_REF.test(text)) return `${where} uses {{secret:…}}; wrappers use {{credential:NAME}}`;
       for (const ref of credentialRefs(text)) {
-        if (ref.legacy) return `${where} uses {{secret:…}}; wrappers use {{credential:NAME}}`;
         if (ref.connection && ref.connection !== conn) return `${where} refers to another connection (${ref.connection})`;
         const c = byName.get(ref.name);
         if (!c) return `${where} refers to unknown credential "${ref.name}"`;
@@ -557,7 +558,7 @@ export class ConnectionManager extends TypedEmitter<Events> {
   render(conn: string, template: string, placeholder: (ref: string, field?: string) => string): string {
     return template.replace(CREDENTIAL_REF, (...m) => {
       const ref = parseRefMatch(m as unknown as RegExpMatchArray);
-      if (ref.legacy || (ref.connection && ref.connection !== conn)) return "";
+      if (ref.connection && ref.connection !== conn) return "";
       const c = this.resolve(`${conn}/${ref.name}`);
       if (!c) return "";
       if (ref.basic) return Buffer.from(`${c.username ?? ""}:${placeholder(c.ref)}`).toString("base64");
@@ -573,7 +574,7 @@ export class ConnectionManager extends TypedEmitter<Events> {
     const used: string[] = [];
     const text = template.replace(CREDENTIAL_REF, (...m) => {
       const r = parseRefMatch(m as unknown as RegExpMatchArray);
-      const ref = r.legacy ? [...allowed].find((x) => x.endsWith(`/${r.name}`)) : r.connection ? `${r.connection}/${r.name}` : undefined;
+      const ref = r.connection ? `${r.connection}/${r.name}` : undefined;
       if (!ref || !allowed.has(ref)) {
         missing.push(ref ?? r.name);
         return "";

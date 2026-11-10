@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import { TRACK_STATUSES } from "./tracker.js";
 import type { Effort, FolderMount, McpServerSummary, PersonaConfigView, PersonaSummary, SaveResult } from "@ph/shared";
-import { PersonaConnectionsSchema, credentialRefs } from "./connections/config.js";
+import { OLD_SECRET_REF, PersonaConnectionsSchema, credentialRefs } from "./connections/config.js";
 import type { ConnectionManager } from "./connections/manager.js";
 import { patternError } from "./connections/rules.js";
 import { PH_HOME, paths, SandboxToolsSchema, type Settings } from "./settings.js";
@@ -304,10 +304,10 @@ export class PersonaStore extends TypedEmitter<Events> {
     }
     const named = this.namedRefs(cfg);
     const checkRefs = (where: string, value: string) => {
+      const old = OLD_SECRET_REF.exec(value);
+      if (old) errors.push(`${where}: {{secret:${old[1]}}} is no longer read; write {{credential:<connection>/${old[1]}}}`);
       for (const ref of credentialRefs(value)) {
-        if (ref.legacy) {
-          if (![...named].some((n) => n.endsWith(`/${ref.name}`))) errors.push(`${where} references {{secret:${ref.name}}} but no rule names a credential ${ref.name}`);
-        } else if (!ref.connection) errors.push(`${where}: write {{credential:<connection>/${ref.name}}}`);
+        if (!ref.connection) errors.push(`${where}: write {{credential:<connection>/${ref.name}}}`);
         else if (!named.has(`${ref.connection}/${ref.name}`)) errors.push(`${where} references {{credential:${ref.connection}/${ref.name}}} but no rule of this persona names it`);
       }
     };

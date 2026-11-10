@@ -7,7 +7,6 @@ import { AttachmentStore } from "./attachments.js";
 import { ConnectionManager } from "./connections/manager.js";
 import { HomeInUseError, HomeLock, choosePort, moveLegacyHome } from "./home.js";
 import { applyNetwork, loadExtraCas } from "./network.js";
-import { migrateConnections } from "./connections/migrate.js";
 import { ModelCatalog } from "./catalog.js";
 import { DiffStore } from "./diffs.js";
 import { TrackerStore } from "./tracker.js";
@@ -53,10 +52,6 @@ async function main() {
   const portFallback = process.env.PH_PORT_FALLBACK === "1";
   const extraCas = await loadExtraCas(settings.caFiles);
   await applyNetwork(settings, extraCas, paths.extraCa);
-
-  // Model-provider keys stay host-side secrets; everything else becomes a connection once.
-  const providerKeys = new Set(Object.values(settings.providers).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : p.type === "copilot" ? ["COPILOT_GITHUB_TOKEN"] : [])));
-  await migrateConnections(providerKeys).catch((e) => log.error("connections", `could not convert credentials to connections: ${errMsg(e)}`));
 
   const secrets = new SecretStore();
   await secrets.tryLoad();

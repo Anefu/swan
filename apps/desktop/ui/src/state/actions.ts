@@ -90,7 +90,6 @@ export interface Actions {
   removeProviderKey(provider: string): Promise<void>;
   /** Reports errors itself; false when the action failed. */
   connectionAction(conn: string, action: ConnectionAction): Promise<boolean>;
-  dismissMigration(): Promise<void>;
   rebuildRuntime(): Promise<void>;
   /** Deletes the persona with its conversation and memory, and closes its settings. Throws on failure. */
   deletePersona(id: string): Promise<void>;
@@ -197,7 +196,7 @@ export function createActions({
   };
 
   const loadAll = async () => {
-    const [runtime, providers, personas, connections, egress, sessions, skills, migration, secrets] = await Promise.allSettled([
+    const [runtime, providers, personas, connections, egress, sessions, skills, secrets] = await Promise.allSettled([
       api.runtime(),
       api.providers(),
       api.personas(),
@@ -205,13 +204,11 @@ export function createActions({
       api.egress({ limit: 1000 }),
       api.sessions(),
       api.skills(),
-      api.migrationNote(),
       api.secretsStatus(),
     ]);
     if (runtime.status === "fulfilled") dispatch({ type: "runtime", runtime: runtime.value });
     if (providers.status === "fulfilled") dispatch({ type: "providers", providers: providers.value });
     if (connections.status === "fulfilled") dispatch({ type: "connections", connections: connections.value });
-    if (migration.status === "fulfilled") dispatch({ type: "migration", note: migration.value ?? null });
     if (secrets.status === "fulfilled") dispatch({ type: "secrets", error: secrets.value.error });
     if (egress.status === "fulfilled") dispatch({ type: "egress.merge", events: egress.value });
     if (sessions.status === "fulfilled") dispatch({ type: "sessions", sessions: sessions.value });
@@ -498,14 +495,6 @@ export function createActions({
         const what = { login: "Sign-in did not start", renew: "Renewal failed", cancel: "Could not cancel the sign-in", logout: "Sign-out failed" }[action];
         reportError(e, what);
         return false;
-      }
-    },
-    dismissMigration: async () => {
-      try {
-        await api.dismissMigrationNote();
-        dispatch({ type: "migration", note: null });
-      } catch (e) {
-        reportError(e, "Could not dismiss the note");
       }
     },
     rebuildRuntime: async () => {

@@ -55,8 +55,8 @@ describe("SessionCredentials", () => {
   it("renders references as this session's placeholders, never values", () => {
     const { sc } = setup();
     sc.ensurePlaceholders();
-    const out = sc.render("t={{credential:github/GITHUB_TOKEN}} old={{secret:GITHUB_TOKEN}} k={{credential:corp/aws.accessKeyId}} b={{credential:corp/registry|basic}} x={{credential:other/X}}");
-    expect(out).toMatch(/^t=phs_GITHUB_TOKEN_[0-9a-f]{16} old=phs_GITHUB_TOKEN_[0-9a-f]{16} k=ASIASWAN[0-9A-F]{12} b=\S+ x=$/);
+    const out = sc.render("t={{credential:github/GITHUB_TOKEN}} k={{credential:corp/aws.accessKeyId}} b={{credential:corp/registry|basic}} x={{credential:other/X}}");
+    expect(out).toMatch(/^t=phs_GITHUB_TOKEN_[0-9a-f]{16} k=ASIASWAN[0-9A-F]{12} b=\S+ x=$/);
     expect(Buffer.from(/b=(\S+)/.exec(out)![1], "base64").toString()).toMatch(/^dev:phs_registry_/);
     expect(out).not.toMatch(/real-/);
     expect(sc.staticEnv()).toEqual({ GITHUB_TOKEN: expect.stringMatching(/^phs_GITHUB_TOKEN_/) });

@@ -4,21 +4,20 @@ export const CONNECTION_NAME = /^[a-z0-9-]{1,32}$/;
 export const CREDENTIAL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** `{{credential:conn/NAME}}`, `{{credential:NAME.field}}`, `{{credential:NAME|basic}}`; `{{secret:NAME}}` is the old alias. */
-export const CREDENTIAL_REF =
-  /\{\{\s*(?:credential:(?:([a-z0-9-]{1,32})\/)?([A-Za-z0-9_-]{1,64})(?:\.(accessKeyId|secretAccessKey|sessionToken|username|value))?(\|basic)?|secret:([A-Za-z_][A-Za-z0-9_]*))\s*\}\}/g;
+/** `{{credential:conn/NAME}}`, `{{credential:NAME.field}}`, `{{credential:NAME|basic}}`. */
+export const CREDENTIAL_REF = /\{\{\s*credential:(?:([a-z0-9-]{1,32})\/)?([A-Za-z0-9_-]{1,64})(?:\.(accessKeyId|secretAccessKey|sessionToken|username|value))?(\|basic)?\s*\}\}/g;
+/** The form before connections, which Swan no longer reads: said so where it appears. */
+export const OLD_SECRET_REF = /\{\{\s*secret:([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/;
 
 export interface CredentialRefMatch {
   connection?: string;
   name: string;
   field?: "accessKeyId" | "secretAccessKey" | "sessionToken" | "username" | "value";
   basic: boolean;
-  legacy: boolean; // {{secret:NAME}}
 }
 
 export function parseRefMatch(m: RegExpMatchArray): CredentialRefMatch {
-  if (m[5]) return { name: m[5], basic: false, legacy: true };
-  return { connection: m[1], name: m[2], field: m[3] as CredentialRefMatch["field"], basic: !!m[4], legacy: false };
+  return { connection: m[1], name: m[2], field: m[3] as CredentialRefMatch["field"], basic: !!m[4] };
 }
 
 export function credentialRefs(text: string): CredentialRefMatch[] {
