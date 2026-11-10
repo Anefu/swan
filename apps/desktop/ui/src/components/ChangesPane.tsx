@@ -5,7 +5,7 @@ import { useSelectedPersona, useStore } from "../store";
 import { cls } from "../util";
 import { PaneHead } from "./Cards";
 import { IconChevronDown, IconChevronRight } from "./icons";
-import { useLoad } from "./MemoryUsagePane";
+import { useLoad } from "../hooks";
 import { Empty, Spinner } from "./ui";
 
 const FOLD_OVER = 600; // lines; longer files start folded

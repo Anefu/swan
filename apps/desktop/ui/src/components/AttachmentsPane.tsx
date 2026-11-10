@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { PersonaAttachment } from "@ph/shared";
 import { api, attachmentFileUrl } from "../api";
 import { useSelectedPersona, useStore } from "../store";
-import { cls, errorMessage, fmtBytes, fullTime, isMissingEndpoint, relTime } from "../util";
+import { useLoad } from "../hooks";
+import { cls, fmtBytes, fullTime, relTime } from "../util";
 import { PaneHead } from "./Cards";
 import { IconExternal, IconFile, IconSearch } from "./icons";
 import { Empty, Segmented, Spinner } from "./ui";
@@ -13,9 +14,6 @@ type Kind = "all" | "images" | "files";
 export function AttachmentsPane({ onBack }: { onBack: () => void }) {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
-  const [list, setList] = useState<PersonaAttachment[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const [open, setOpen] = useState<string | null>(null);
@@ -26,24 +24,10 @@ export function AttachmentsPane({ onBack }: { onBack: () => void }) {
     const items = sid ? state.transcripts[sid]?.items : undefined;
     return (items ?? []).reduce((n, it) => n + (it.kind === "user" ? (it.attachments?.length ?? 0) : 0), 0);
   }, [sid, state.transcripts]);
-
-  useEffect(() => {
-    if (!persona) return;
-    let alive = true;
-    setLoading(true);
-    api
-      .personaAttachments(persona.id)
-      .then((l) => {
-        if (!alive) return;
-        setList(l);
-        setError(null);
-      })
-      .catch((e) => alive && setError(isMissingEndpoint(e) ? "Attachments are not available from this server yet." : errorMessage(e)))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [persona?.id, sentCount]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = useLoad<PersonaAttachment[] | null>(() => (persona ? api.personaAttachments(persona.id) : Promise.resolve(null)), [persona?.id, sentCount]);
+  const list = load.data ?? null;
+  const error = load.missing ? "Attachments are not available from this server yet." : load.error;
+  const loading = load.loading;
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();

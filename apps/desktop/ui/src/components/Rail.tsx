@@ -3,7 +3,7 @@ import { cls } from "../util";
 import { api } from "../api";
 import { Counts } from "./ChangesPane";
 import { IconDiff, IconOverview, IconSettings, IconShield, IconSwan } from "./icons";
-import { useLoad } from "./MemoryUsagePane";
+import { useLoad } from "../hooks";
 import { isMac } from "./ui";
 
 /**

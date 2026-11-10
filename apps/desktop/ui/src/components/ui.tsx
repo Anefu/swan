@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { cls, copyText } from "../util";
+import { cls, copyText, errorMessage } from "../util";
 import { IconCheck, IconChevronRight, IconCopy } from "./icons";
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -137,6 +137,101 @@ export function Segmented<T extends string>({
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * An inline confirmation for something that can't be undone: what will happen, then the action and
+ * Cancel. A failure shows under the text unless `onError` takes it (a toast, say).
+ */
+export function Confirm({
+  label,
+  action,
+  children,
+  onConfirm,
+  onCancel,
+  onError,
+}: {
+  label: string;
+  action: string;
+  children: ReactNode;
+  onConfirm: () => Promise<unknown>;
+  onCancel: () => void;
+  onError?: (e: unknown) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (e) {
+      if (onError) onError(e);
+      else setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="inline-form" role="group" aria-label={label}>
+      <p className="small">{children}</p>
+      {error && <span className="field-error">{error}</span>}
+      <div className="row gap end">
+        <button type="button" className="btn sm danger" disabled={busy} onClick={() => void run()}>
+          {busy && <Spinner size={10} />}
+          {action}
+        </button>
+        <button type="button" className="btn sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What a Field gives its control: its id, and the hint or error that describes it. */
+export interface FieldProps {
+  id: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: true;
+}
+
+/** A labelled control with an optional hint, or an error in its place. */
+export function Field({
+  label,
+  hint,
+  error,
+  id: fixedId,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  /** For a field that is focused from elsewhere. */
+  id?: string;
+  children: (f: FieldProps) => ReactNode;
+}) {
+  const autoId = useId();
+  const id = fixedId ?? autoId;
+  const note = error || hint ? `${id}-note` : undefined;
+  return (
+    <div className="field">
+      <label className="field-label" htmlFor={id}>
+        {label}
+      </label>
+      {children({ id, ...(note ? { "aria-describedby": note } : {}), ...(error ? { "aria-invalid": true } : {}) })}
+      {hint && !error && (
+        <span className="hint" id={note}>
+          {hint}
+        </span>
+      )}
+      {error && (
+        <span className="field-error" id={note}>
+          {error}
+        </span>
+      )}
     </div>
   );
 }

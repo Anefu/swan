@@ -1,8 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { usePendingApprovals, useSelectedPersona, useStore } from "../store";
 import { personaModelLine, personaStatus } from "../status";
 import { cls } from "../util";
-import { IconCheck, IconChevronDown, IconPersonaAdd, IconSearch, IconUpload } from "./icons";
+import { IconCheck, IconChevronDown, IconPersonaAdd, IconUpload } from "./icons";
+import { MenuList, MenuOption, MenuSearch, useListMenu } from "./ListMenu";
 import { ConversationMenu } from "./ConversationMenu";
 import { Rail } from "./Rail";
 import { Kbd, MOD } from "./ui";
@@ -23,16 +24,10 @@ function PersonaMenu() {
   const { state, actions } = useStore();
   const persona = useSelectedPersona();
   const approvals = usePendingApprovals();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const listId = useId();
+  const fileRef = useRef<HTMLInputElement>(null);
   const showSearch = state.personas.length > 6;
-
+  const menu = useListMenu({ count: () => filtered.length + 2, choose: (i) => choose(i) });
+  const query = menu.query;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return state.personas;
@@ -41,20 +36,20 @@ function PersonaMenu() {
   // After the personas: "New persona", then "Import persona…".
   const newIndex = filtered.length;
   const importIndex = filtered.length + 1;
-  const count = filtered.length + 2;
-  const fileRef = useRef<HTMLInputElement>(null);
 
-  const close = (refocus = true) => {
-    setOpen(false);
-    setQuery("");
-    if (refocus) triggerRef.current?.focus();
+  const choose = (i: number) => {
+    if (i === newIndex) {
+      menu.close(false);
+      actions.openSettings({ isNew: true });
+    } else if (i === importIndex) {
+      menu.close(false);
+      fileRef.current?.click();
+    } else if (filtered[i]) {
+      actions.selectPersona(filtered[i].id);
+      menu.close();
+    }
   };
-
-  const openMenu = () => {
-    setOpen(true);
-    const i = state.personas.findIndex((p) => p.id === state.selectedPersonaId);
-    setActive(Math.max(0, i));
-  };
+  const openMenu = () => menu.openAt(state.personas.findIndex((p) => p.id === state.selectedPersonaId));
 
   // Cmd+K
   const seq = state.personaMenuSeq;
@@ -63,81 +58,18 @@ function PersonaMenu() {
     if (seq !== firstSeq.current) openMenu();
   }, [seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!open) return;
-    if (showSearch) searchRef.current?.focus();
-    else listRef.current?.focus();
-    const onDown = (e: PointerEvent) => {
-      if (!popRef.current?.contains(e.target as Node) && !triggerRef.current?.contains(e.target as Node)) close(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (active >= count) setActive(count - 1);
-  }, [count, active]);
-
-  useEffect(() => {
-    if (!open) return;
-    document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
-  }, [active, open, listId]);
-
-  const choose = (i: number) => {
-    if (i === newIndex) {
-      close(false);
-      actions.openSettings({ isNew: true });
-      return;
-    }
-    if (i === importIndex) {
-      close(false);
-      fileRef.current?.click();
-      return;
-    }
-    const p = filtered[i];
-    if (!p) return;
-    actions.selectPersona(p.id);
-    close();
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!open) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive((a) => (a + 1) % count);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((a) => (a - 1 + count) % count);
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      setActive(0);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      setActive(count - 1);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      choose(active);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      close();
-    } else if (e.key === "Tab") {
-      close(false);
-    }
-  };
-
   return (
     // Keys are handled on the wrapper so they work even before focus has moved into the list.
-    <div className="persona-menu" onKeyDown={onKeyDown}>
+    <div ref={menu.rootRef} className="persona-menu" onKeyDown={menu.onKeyDown}>
       <button
-        ref={triggerRef}
+        ref={menu.triggerRef}
         id="persona-trigger"
         type="button"
-        className={cls("persona-trigger", open && "is-open")}
+        className={cls("persona-trigger", menu.open && "is-open")}
         aria-haspopup="listbox"
-        aria-expanded={open}
+        aria-expanded={menu.open}
         aria-label={`Persona: ${persona?.name ?? "none"}. Switch persona (${MOD}K)`}
-        onClick={() => (open ? close() : openMenu())}
+        onClick={() => (menu.open ? menu.close() : openMenu())}
       >
         <span>{persona?.name ?? "Choose persona"}</span>
         <IconChevronDown size={14} />
@@ -154,87 +86,37 @@ function PersonaMenu() {
           if (file) void actions.startImport(file);
         }}
       />
-      {open && (
-        <div ref={popRef} className="popover persona-pop">
-          {showSearch && (
-            <label className="search-field">
-              <IconSearch size={16} />
-              <span className="sr-only">Find a persona</span>
-              <input
-                ref={searchRef}
-                placeholder="Find a persona"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setActive(0);
-                }}
-                role="combobox"
-                aria-controls={listId}
-                aria-expanded="true"
-                aria-activedescendant={`${listId}-${active}`}
-              />
-            </label>
-          )}
-          <ul
-            ref={listRef}
-            id={listId}
-            role="listbox"
-            aria-label="Personas"
-            tabIndex={showSearch ? -1 : 0}
-            aria-activedescendant={`${listId}-${active}`}
-            className="persona-list"
-          >
+      {menu.open && (
+        <div className="popover persona-pop">
+          {showSearch && <MenuSearch menu={menu} label="Find a persona" />}
+          <MenuList menu={menu} label="Personas" searching={showSearch}>
             {filtered.map((p, i) => {
               const st = personaStatus(state, p, approvals);
               const selected = p.id === state.selectedPersonaId;
               return (
-                <li
+                <MenuOption
                   key={p.id}
-                  id={`${listId}-${i}`}
-                  role="option"
-                  aria-selected={selected}
-                  className={cls("persona-opt", i === active && "is-active")}
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => choose(i)}
+                  menu={menu}
+                  index={i}
+                  onChoose={choose}
+                  selected={selected}
+                  mark={selected && <IconCheck size={16} />}
+                  aside={st && <span className={cls("status-text", `tone-${st.tone}`)}>{st.text}</span>}
                 >
-                  <span className="persona-check">{selected && <IconCheck size={16} />}</span>
-                  <span className="persona-opt-main">
-                    <span className={cls("persona-opt-name", selected && "strong")}>{p.name}</span>
-                    <span className="persona-opt-model">{personaModelLine(state, p)}</span>
-                  </span>
-                  {st && <span className={cls("status-text", `tone-${st.tone}`)}>{st.text}</span>}
-                </li>
+                  <span className={cls("persona-opt-name", selected && "strong")}>{p.name}</span>
+                  <span className="persona-opt-model">{personaModelLine(state, p)}</span>
+                </MenuOption>
               );
             })}
             {filtered.length === 0 && <li className="persona-none">No persona matches “{query}”.</li>}
             <li role="separator" className="sep" aria-hidden="true" />
-            <li
-              id={`${listId}-${newIndex}`}
-              role="option"
-              aria-selected={false}
-              className={cls("persona-opt new", active === newIndex && "is-active")}
-              onMouseEnter={() => setActive(newIndex)}
-              onClick={() => choose(newIndex)}
-            >
-              <span className="persona-check">
-                <IconPersonaAdd size={16} />
-              </span>
-              <span className="persona-opt-main">New persona</span>
-            </li>
-            <li
-              id={`${listId}-${importIndex}`}
-              role="option"
-              aria-selected={false}
-              className={cls("persona-opt new", active === importIndex && "is-active")}
-              onMouseEnter={() => setActive(importIndex)}
-              onClick={() => choose(importIndex)}
-            >
-              <span className="persona-check">
-                <IconUpload size={16} />
-              </span>
-              <span className="persona-opt-main">Import persona…</span>
-            </li>
-          </ul>
+            <MenuOption menu={menu} index={newIndex} onChoose={choose} className="new" mark={<IconPersonaAdd size={16} />}>
+              New persona
+            </MenuOption>
+            <MenuOption menu={menu} index={importIndex} onChoose={choose} className="new" mark={<IconUpload size={16} />}>
+              Import persona…
+            </MenuOption>
+          </MenuList>
           <div className="pop-hint">
             <Kbd>↑</Kbd>
             <Kbd>↓</Kbd> move · <Kbd>Enter</Kbd> open · <Kbd>Esc</Kbd> close

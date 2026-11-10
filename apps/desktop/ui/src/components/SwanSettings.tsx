@@ -7,7 +7,7 @@ import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, u
 import { PaneHead } from "./Cards";
 import { DeviceCodePanel, minutesLeft } from "./DeviceCode";
 import { IconPlus, IconWarning } from "./icons";
-import { Fold, Spinner } from "./ui";
+import { Confirm, Fold, Spinner } from "./ui";
 
 /** Swan's own settings, shared by every persona: model providers, connections and the sandbox. */
 export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
@@ -63,7 +63,6 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
   const { actions } = useStore();
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const [busy, setBusy] = useState(false);
   const now = useNow(30_000);
   const secret = p.apiKeySecret;
 
@@ -123,34 +122,18 @@ function ProviderRow({ p }: { p: ProviderStatus }) {
         />
       )}
       {confirm && secret && (
-        <div className="inline-form" role="group" aria-label={`Disconnect ${providerLabel(p)}`}>
-          <p className="small">
-            Remove the {providerLabel(p)} key from Swan? Personas using this provider stop working until a key is added again.
-          </p>
-          <div className="row gap end">
-            <button
-              type="button"
-              className="btn sm danger"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await actions.removeProviderKey(p.name);
-                  setConfirm(false);
-                } catch (e) {
-                  actions.reportError(e, "Could not disconnect");
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Disconnect
-            </button>
-            <button type="button" className="btn sm" onClick={() => setConfirm(false)} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
+        <Confirm
+          label={`Disconnect ${providerLabel(p)}`}
+          action="Disconnect"
+          onConfirm={async () => {
+            await actions.removeProviderKey(p.name);
+            setConfirm(false);
+          }}
+          onCancel={() => setConfirm(false)}
+          onError={(e) => actions.reportError(e, "Could not disconnect")}
+        >
+          Remove the {providerLabel(p)} key from Swan? Personas using this provider stop working until a key is added again.
+        </Confirm>
       )}
     </li>
   );
@@ -352,8 +335,6 @@ function credentialMeta(c: ConnectionCredentialStatus): string {
 function CredentialRow({ conn, c }: { conn: ConnectionStatus; c: ConnectionCredentialStatus }) {
   const { actions } = useStore();
   const [mode, setMode] = useState<null | "replace" | "remove">(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const editable = conn.type === "static";
   const last = conn.credentials.length === 1;
   return (
@@ -392,37 +373,11 @@ function CredentialRow({ conn, c }: { conn: ConnectionStatus; c: ConnectionCrede
         />
       )}
       {mode === "remove" && (
-        <div className="inline-form" role="group" aria-label={`Remove ${c.ref}`}>
-          <p className="small">
-            Remove <span className="mono">{c.ref}</span> and its value from Swan?
-            {c.usedBy.length > 0 ? ` ${c.usedBy.join(", ")} lose access on the next request.` : " No persona uses it."}
-            {last && ` The ${conn.name} connection goes with it.`}
-          </p>
-          {error && <span className="field-error">{error}</span>}
-          <div className="row gap end">
-            <button
-              type="button"
-              className="btn sm danger"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                setError(null);
-                try {
-                  await actions.deleteCredential(conn.name, c.name);
-                } catch (e) {
-                  setError(errorMessage(e));
-                  setBusy(false);
-                }
-              }}
-            >
-              {busy && <Spinner size={10} />}
-              Remove
-            </button>
-            <button type="button" className="btn sm" onClick={() => setMode(null)} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
+        <Confirm label={`Remove ${c.ref}`} action="Remove" onConfirm={() => actions.deleteCredential(conn.name, c.name)} onCancel={() => setMode(null)}>
+          Remove <span className="mono">{c.ref}</span> and its value from Swan?
+          {c.usedBy.length > 0 ? ` ${c.usedBy.join(", ")} lose access on the next request.` : " No persona uses it."}
+          {last && ` The ${conn.name} connection goes with it.`}
+        </Confirm>
       )}
     </li>
   );

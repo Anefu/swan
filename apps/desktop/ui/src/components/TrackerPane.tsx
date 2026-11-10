@@ -5,7 +5,7 @@ import { useSelectedPersona, useStore } from "../store";
 import { errorMessage, relTime, useNow } from "../util";
 import { PaneHead } from "./Cards";
 import { IconPlus, IconWarning } from "./icons";
-import { useLoad } from "./MemoryUsagePane";
+import { useLoad } from "../hooks";
 import { Empty, Fold, Spinner } from "./ui";
 
 const GROUPS: { status: TrackStatus; label: string }[] = [

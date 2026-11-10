@@ -7,7 +7,7 @@ import { CONNECTION_STATE, plural } from "../status";
 import { fmtDuration, relTime, useNow } from "../util";
 import { Card, CardHead, focusPaneHead, MeterSm } from "./Cards";
 import { IconCheck, IconFile, IconImage } from "./icons";
-import { useLoad } from "./MemoryUsagePane";
+import { useLoad } from "../hooks";
 import { Empty, Spinner } from "./ui";
 
 /** Remembered folded cards, shared across personas. */

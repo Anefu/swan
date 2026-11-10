@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Checkpoint, MemoryChange, MemoryRecord, MemoryType, PersonaSummary, ProviderAllowance, UsageReport, UsageTotals } from "@ph/shared";
 import { api } from "../api";
 import { DEFAULT_MEMORY_PANE, useSelectedPersona, useStore, type MemoryPaneState } from "../store";
-import { clockTime, cls, errorMessage, fmtNumber, fmtTokens, fmtUsd, fullTime, isMissingEndpoint, relTime, useNow } from "../util";
+import { clockTime, cls, errorMessage, fmtNumber, fmtTokens, fmtUsd, fullTime, relTime, useNow } from "../util";
 import { PaneHead } from "./Cards";
 import { IconChevronRight, IconExternal, IconLock, IconPin, IconPlus, IconRefresh, IconSearch } from "./icons";
-import { Empty, Fold, Segmented, Spinner } from "./ui";
+import { Confirm, Empty, Fold, Segmented, Spinner } from "./ui";
+import { useLoad } from "../hooks";
 
 /** Scroll offsets per persona and view, kept for the session. */
 const scrolls = new Map<string, number>();
@@ -76,36 +77,6 @@ export function MemoryUsagePane({ mode, onBack }: { mode: "memory" | "usage"; on
       )}
     </div>
   );
-}
-
-/** Load something for the pane; refetch on deps; keep the previous value when a refresh fails. */
-export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
-  const [data, setData] = useState<T | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [missing, setMissing] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    fn()
-      .then((v) => {
-        if (!alive) return;
-        setData(v);
-        setError(null);
-        setMissing(false);
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setMissing(isMissingEndpoint(e));
-        setError(errorMessage(e));
-      })
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [...deps, tick]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { data, setData, error, missing, loading, reload: () => setTick((t) => t + 1) };
 }
 
 function Unavailable({ what, error, missing, onRetry }: { what: string; error: string; missing: boolean; onRetry: () => void }) {
@@ -423,21 +394,10 @@ function RecordRow({
             <dd>{persona.name} only</dd>
           </dl>
           {mode === "forget" ? (
-            <div className="inline-form" role="group" aria-label="Forget this memory">
-              <p className="small">
-                Forgetting removes this memory from search and from future briefs at the next safe point. It does not erase the original
-                conversation.
-              </p>
-              <div className="row gap end">
-                <button type="button" className="btn sm danger" disabled={!!busy} onClick={() => void act("forget")}>
-                  {busy === "forget" && <Spinner size={10} />}
-                  Forget
-                </button>
-                <button type="button" className="btn sm" onClick={() => setMode(null)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
+            <Confirm label="Forget this memory" action="Forget" onConfirm={() => act("forget")} onCancel={() => setMode(null)}>
+              Forgetting removes this memory from search and from future briefs at the next safe point. It does not erase the original
+              conversation.
+            </Confirm>
           ) : (
             mode !== "edit" &&
             r.status !== "forgotten" && (
