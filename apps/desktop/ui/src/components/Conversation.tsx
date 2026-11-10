@@ -6,20 +6,10 @@ import { sessionStatusLine, unreadyCredentials } from "../status";
 import { cls, useNow } from "../util";
 import { Composer } from "./Composer";
 import { IconArrowRight, IconWarning } from "./icons";
-import {
-  AgentLine,
-  AgentNames,
-  AssistantText,
-  CredentialBlockedLine,
-  Dots,
-  HarnessReceipt,
-  NoticeLine,
-  SignInCard,
-  Thinking,
-  ToolGroup,
-  ToolLine,
-  UserMessage,
-} from "./Items";
+import { CredentialBlockedLine, SignInCard } from "./items/ConnectionLines";
+import { AssistantText, Dots, Thinking, UserMessage } from "./items/Messages";
+import { HarnessReceipt, NoticeLine } from "./items/Notices";
+import { AgentLine, AgentNames, ToolGroup, ToolLine } from "./items/ToolLines";
 import { Spinner } from "./ui";
 
 /** Remembered scroll offsets per persona. */

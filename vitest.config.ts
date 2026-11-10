@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["apps/server/src/**/*.test.ts", "apps/desktop/main/**/*.test.ts", "packages/*/src/**/*.test.ts", "tools/*/src/**/*.test.ts"],
+    include: ["apps/server/src/**/*.test.ts", "apps/desktop/main/**/*.test.ts", "apps/desktop/ui/src/**/*.test.ts", "packages/*/src/**/*.test.ts", "tools/*/src/**/*.test.ts"],
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
     testTimeout: 20_000,
