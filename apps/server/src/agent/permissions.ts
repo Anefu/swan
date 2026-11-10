@@ -1,7 +1,7 @@
 import type { PermissionMode } from "@ph/shared";
 import type { PersonaConfig } from "../personas.js";
 import { wildcardMatch } from "../util.js";
-import type { ToolDef } from "./tools.js";
+import { permissionView, type ToolDef } from "./tools.js";
 
 // What Swan cannot check in a command line, anywhere: substitution ($, `), escapes and line breaks.
 const UNCHECKABLE_ANYWHERE = /[$`\\\n\r]/;
@@ -175,6 +175,19 @@ export class PermissionPolicy {
   /** The rules for prefixes: the prefix with any arguments, and on its own ("ls *" does not match "ls"). */
   static prefixRules(prefixes: string[]): string[] {
     return prefixes.flatMap((p) => [`${p} *`, `bash(${p})`]);
+  }
+
+  /** A call as the rules decide it; when no rule matches, the tool's own default can allow it. */
+  check(tool: ToolDef, input: Record<string, unknown>): Evaluation {
+    const e = this.evaluate(permissionView(tool), input);
+    const d = tool.defaultAllow;
+    return d && e.rule.startsWith("default") && !d.unless?.(input) ? { mode: "allow", rule: d.rule } : e;
+  }
+
+  /** The tools panel's view of a tool, with its own default. */
+  view(tool: ToolDef): PermissionMode {
+    const mode = this.describe(permissionView(tool));
+    return tool.defaultAllow && mode !== "deny" ? "allow" : mode;
   }
 
   /** Static view for the tools panel (no input available). */

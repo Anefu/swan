@@ -7,19 +7,13 @@ export const SHOW_DIFF = "show_diff";
 export const CLEAR_DIFFS = "clear_diffs";
 const MAX_OUTPUT = 8_000_000;
 
-/**
- * show_diff runs a command, so a persona's rules for commands decide it: `bash(git diff *)` allows
- * it and `deny: bash(...)` stops it, as if the agent had typed the command itself.
- */
-export function permissionView(tool: ToolDef): ToolDef {
-  return tool.name === SHOW_DIFF ? { ...tool, name: "bash" } : tool;
-}
-
 export function diffTools(o: { diffs: DiffStore; sessionId: string; changed: () => void }): ToolDef[] {
   const { diffs, sessionId, changed } = o;
   return [
     zodTool({
       name: SHOW_DIFF,
+      // It runs a command, so the rules for commands decide it, as if the agent had typed it.
+      permissionAs: "bash",
       description: [
         "Show the user a diff in the Changes pane beside the conversation, so they can review it. Use it after changing files, and for any diff worth reading: call it as many times as there are things to review.",
         "Give a command that prints a unified diff, run in the sandbox like bash: `git diff`, `git diff main...HEAD`, `git show <commit>`, `diff -u a b`.",
@@ -59,6 +53,7 @@ export function diffTools(o: { diffs: DiffStore; sessionId: string; changed: () 
     }),
     zodTool({
       name: CLEAR_DIFFS,
+      defaultAllow: { rule: "changes pane" },
       description: "Remove diffs from the Changes pane once they're no longer worth reviewing: one by its title, or all of them.",
       schema: z.object({ title: z.string().optional().describe("The diff to remove; leave out to remove them all") }),
       preview: (i) => i.title ?? "all diffs",

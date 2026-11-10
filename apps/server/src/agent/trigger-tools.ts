@@ -3,7 +3,6 @@ import type { PersonaStore } from "../personas.js";
 import { zodTool, type ToolDef } from "./tools.js";
 
 /** Reminders and schedules only start turns that run under the unattended rules: allowed by default. Watchers ask. */
-export const SCHEDULE_TOOLS = new Set(["schedule"]);
 
 const name = z.string().regex(/^[a-z0-9][a-z0-9-]{0,40}$/).describe("Lowercase letters, digits and dashes; unique in this persona");
 
@@ -13,6 +12,7 @@ export function triggerTools(o: { personas: PersonaStore; personaId: string }): 
   return [
     zodTool({
       name: "schedule",
+      defaultAllow: { rule: "schedule" },
       description: [
         "Manage this persona's schedules: turns that start without the user, at a time you set. Use it for reminders",
         '("remind me at 17:00": once "YYYY-MM-DD 17:00", local time) and recurring checks (at "09:00" with days, or every "1h").',

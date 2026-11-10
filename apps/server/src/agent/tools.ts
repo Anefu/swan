@@ -36,8 +36,20 @@ export interface ToolDef {
   preview(input: Record<string, unknown>): string;
   /** The argument permission patterns like `bash(git *)` match against. */
   primaryArg?(input: Record<string, unknown>): string | undefined;
+  /** The tool name permission rules match against, when not its own (show_diff runs a command, so bash rules gate it). */
+  permissionAs?: string;
+  /** Allowed when no persona rule matches (the default would ask), under this rule name, unless `unless` says to ask. */
+  defaultAllow?: DefaultAllow;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput>;
 }
+
+export interface DefaultAllow {
+  rule: string;
+  unless?: (input: Record<string, unknown>) => boolean;
+}
+
+/** The tool as permission rules see it. */
+export const permissionView = (tool: ToolDef): ToolDef => (tool.permissionAs ? { ...tool, name: tool.permissionAs } : tool);
 
 const oneLine = (s: unknown, n = 120) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -51,8 +63,11 @@ export function zodTool<S extends z.ZodObject>(def: {
   source?: "builtin" | "skill";
   preview: (i: z.infer<S>) => string;
   primaryArg?: (i: z.infer<S>) => string | undefined;
+  permissionAs?: string;
+  defaultAllow?: { rule: string; unless?: (i: z.infer<S>) => boolean };
   run: (i: z.infer<S>, ctx: ToolContext) => Promise<ToolOutput>;
 }): ToolDef {
+  const allow = def.defaultAllow;
   const { $schema: _s, ...inputSchema } = z.toJSONSchema(def.schema) as Record<string, unknown>;
   return {
     name: def.name,
@@ -67,6 +82,8 @@ export function zodTool<S extends z.ZodObject>(def: {
     },
     preview: (i) => def.preview(i as z.infer<S>),
     primaryArg: def.primaryArg ? (i) => def.primaryArg!(i as z.infer<S>) : undefined,
+    ...(def.permissionAs ? { permissionAs: def.permissionAs } : {}),
+    ...(allow ? { defaultAllow: { rule: allow.rule, ...(allow.unless ? { unless: (i) => allow.unless!(i as z.infer<S>) } : {}) } } : {}),
     run: (i, ctx) => def.run(i as z.infer<S>, ctx),
   };
 }

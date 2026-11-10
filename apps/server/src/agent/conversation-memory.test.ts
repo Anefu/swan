@@ -8,7 +8,10 @@ import { paths } from "../settings.js";
 import { nowIso } from "../util.js";
 import { memoryTools } from "./memory-tools.js";
 import { systemText, type SystemPrompt } from "./providers.js";
-import { IDLE_DREAM_MS, Session, SessionManager, type SessionDeps } from "./session.js";
+import type { ModelContext } from "./context.js";
+import { IDLE_DREAM_MS, type SessionDream } from "./dream.js";
+import { Session, type SessionDeps } from "./session.js";
+import { SessionManager } from "./session-manager.js";
 import type { ToolContext } from "./tools.js";
 
 const cp = (objective: string, extra: Partial<Checkpoint> = {}): Checkpoint => ({
@@ -111,16 +114,23 @@ function setup(o: { autoDream?: boolean; autoBrief?: boolean } = {}) {
   };
 }
 
-type Internals = {
-  openEpoch(): Promise<void>;
-  rollover(reason: string): Promise<void>;
-  addItem(it: ChatItem): void;
-  dreamIfQuiet(): Promise<void>;
-  scheduleIdleDream(): void;
-  epoch: { frozen: { system: SystemPrompt } };
-  carry: string | null;
+/** The parts of a conversation these tests drive directly. */
+const x = (s: Session) => {
+  const i = s as unknown as { context: ModelContext; dreams: SessionDream; addItem(it: ChatItem): void };
+  return {
+    openEpoch: () => i.context.open(),
+    rollover: (reason: string) => i.context.rollover(reason),
+    addItem: (it: ChatItem) => i.addItem(it),
+    dreamIfQuiet: () => i.dreams.ifQuiet(),
+    scheduleIdleDream: () => i.dreams.scheduleIdle(),
+    get epoch() {
+      return i.context.current!;
+    },
+    get carry() {
+      return i.context.carry;
+    },
+  };
 };
-const x = (s: Session) => s as unknown as Internals;
 const say = (s: Session, text: string, id = `it_${text}`, ts = nowIso()) => x(s).addItem({ kind: "user", id, ts, text });
 const roll = async (s: Session, text: string) => {
   await x(s).openEpoch();

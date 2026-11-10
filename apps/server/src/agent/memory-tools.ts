@@ -5,7 +5,6 @@ import { truncateMiddle } from "../util.js";
 import { zodTool, type ToolDef } from "./tools.js";
 
 /** Read-only memory/history tools run without asking unless the persona denies them. */
-export const MEMORY_READ_TOOLS = new Set(["memory_search", "memory_read", "history_search", "history_read"]);
 
 const itemText = (it: ChatItem): string => {
   switch (it.kind) {
@@ -33,6 +32,7 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
   return [
     zodTool({
       name: "memory_search",
+      defaultAllow: { rule: "memory read" },
       description: "Search this persona's saved memories (preferences, decisions, observations, procedures, episodes). Use before asking the user something they may have told you before.",
       schema: z.object({ query: z.string().min(1), type: z.enum(MEMORY_TYPES as [string, ...string[]]).optional(), limit: z.number().int().min(1).max(20).optional() }),
       preview: (i) => i.query,
@@ -45,6 +45,7 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
     }),
     zodTool({
       name: "memory_read",
+      defaultAllow: { rule: "memory read" },
       description: "Read one saved memory with its provenance (origin, sources, version, dates).",
       schema: z.object({ id: z.string().min(1) }),
       preview: (i) => i.id,
@@ -57,6 +58,7 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
     }),
     zodTool({
       name: "history_search",
+      defaultAllow: { rule: "memory read" },
       description: "Search the full history of this conversation, including turns that are no longer in your context. Returns matching events with their ids.",
       schema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(20).optional() }),
       preview: (i) => i.query,
@@ -74,6 +76,7 @@ export function memoryTools(o: { memory: MemoryStore; personaId: string; items: 
     }),
     zodTool({
       name: "history_read",
+      defaultAllow: { rule: "memory read" },
       description: "Read an event from this conversation's history by id, with surrounding events.",
       schema: z.object({ event_id: z.string().min(1), surrounding: z.number().int().min(0).max(10).optional() }),
       preview: (i) => i.event_id,

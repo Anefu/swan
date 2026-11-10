@@ -88,6 +88,7 @@ export class SubAgent {
       schema: z.object({ question: z.string().min(1).describe("One clear question") }),
       preview: (i) => i.question,
       primaryArg: (i) => i.question,
+      defaultAllow: { rule: "sub-agent" },
       run: async (i) => {
         this.answer = deferred<string | null>();
         this.set({ state: "asking", question: i.question });

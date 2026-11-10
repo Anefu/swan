@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import type { LauncherMessage } from "@ph/shared";
 import { ProviderRegistry } from "./agent/providers.js";
-import { SessionManager } from "./agent/session.js";
+import { SessionManager } from "./agent/session-manager.js";
 import { Hub, startApi } from "./api.js";
 import { AttachmentStore } from "./attachments.js";
 import { ConnectionManager } from "./connections/manager.js";

@@ -20,6 +20,7 @@ export const AnswerSchema = z.object({ selected: z.array(z.string().max(200)).ma
 export function askUserTool(): ToolDef {
   return zodTool({
     name: ASK_USER,
+    defaultAllow: { rule: "question" },
     description: [
       "Show the user a card with options and wait for their answer. Use it when you need them to choose before you can go on, instead of asking in text.",
       "They can pick an option, type something else, or skip. Don't use it for what you can decide yourself, or for approval of a tool call: those cards appear by themselves.",

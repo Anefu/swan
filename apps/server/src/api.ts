@@ -13,7 +13,7 @@ import type { ModelCatalog } from "./catalog.js";
 import type { MemoryStore } from "./memory.js";
 import type { UsageLedger } from "./usage.js";
 import type { ProviderRegistry } from "./agent/providers.js";
-import type { SessionManager } from "./agent/session.js";
+import type { SessionManager } from "./agent/session-manager.js";
 import { PERSONA_ID, type PersonaStore } from "./personas.js";
 import type { EgressProxy } from "./proxy/egress.js";
 import type { PodmanRuntime } from "./sandbox/podman.js";

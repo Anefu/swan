@@ -138,3 +138,32 @@ describe("what an approval card offers for a command", () => {
     expect(policy({ deny: ["ls *"] }, rules).evaluate(bash, { command: "ls src" }).mode).toBe("deny");
   });
 });
+
+describe("a tool's own default", () => {
+  const read = { ...tool("memory_read"), defaultAllow: { rule: "memory read" } } as ToolDef;
+  const send = { ...tool("conversations"), defaultAllow: { rule: "conversations", unless: (i: Record<string, unknown>) => i.persona !== undefined } } as ToolDef;
+
+  it("allows it when no rule matches, and only then", () => {
+    expect(policy({}).check(read, {})).toEqual({ mode: "allow", rule: "memory read" });
+    expect(policy({ ask: ["memory_read"] }).check(read, {}).mode).toBe("ask");
+    expect(policy({ deny: ["memory_*"] }).check(read, {}).mode).toBe("deny");
+    expect(policy({}).check(tool("bash"), {}).mode).toBe("ask");
+  });
+
+  it("asks after all when the tool says the input needs it", () => {
+    expect(policy({}).check(send, {}).mode).toBe("allow");
+    expect(policy({}).check(send, { persona: "other" }).mode).toBe("ask");
+  });
+
+  it("shows as allowed in the tools panel unless a rule denies it", () => {
+    expect(policy({}).view(read)).toBe("allow");
+    expect(policy({ deny: ["memory_read"] }).view(read)).toBe("deny");
+    expect(policy({}).view(tool("bash"))).toBe("ask");
+  });
+
+  it("is matched under the name the tool asks to be gated as", () => {
+    const diff = { ...tool("show_diff", "command"), permissionAs: "bash" } as ToolDef;
+    expect(policy({ allow: ["bash(git diff*)"] }).check(diff, { command: "git diff" }).mode).toBe("allow");
+    expect(policy({ deny: ["bash(rm *)"] }).check(diff, { command: "rm -rf x" }).mode).toBe("deny");
+  });
+});

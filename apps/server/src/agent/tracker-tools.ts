@@ -3,13 +3,13 @@ import { TRACK_STATUSES, type TrackerStore } from "../tracker.js";
 import { zodTool, type ToolDef } from "./tools.js";
 
 /** Tracker tools run without asking: they only change the persona's own list. */
-export const TRACKER_TOOLS = new Set(["track", "tracker_list"]);
 
 export function trackerTools(o: { tracker: TrackerStore; personaId: string }): ToolDef[] {
   const { tracker, personaId } = o;
   return [
     zodTool({
       name: "track",
+      defaultAllow: { rule: "tracker" },
       description: [
         "Add a work item to this persona's tracker, or update it: merge requests, tickets, docs, deploys you create or are asked to follow.",
         "The URL identifies the item; calling again with the same URL updates it. Keep statuses current:",
@@ -34,6 +34,7 @@ export function trackerTools(o: { tracker: TrackerStore; personaId: string }): T
     }),
     zodTool({
       name: "tracker_list",
+      defaultAllow: { rule: "tracker" },
       description: "List this persona's tracked work items. By default the open ones (in progress and waiting).",
       schema: z.object({ all: z.boolean().optional().describe("Include done and dropped items") }),
       preview: (i) => (i.all ? "all items" : "open items"),

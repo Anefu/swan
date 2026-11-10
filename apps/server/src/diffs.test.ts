@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { diffTools, permissionView, SHOW_DIFF } from "./agent/diff-tools.js";
+import { diffTools, SHOW_DIFF } from "./agent/diff-tools.js";
+import { permissionView } from "./agent/tools.js";
 import { PermissionPolicy } from "./agent/permissions.js";
 import type { ToolContext } from "./agent/tools.js";
 import { DiffStore, parsePatch } from "./diffs.js";

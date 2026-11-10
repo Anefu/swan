@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { SessionManager, type SessionDeps } from "./session.js";
+import { SessionManager } from "./session-manager.js";
+import type { SessionDeps } from "./session.js";
 import { zodTool } from "./tools.js";
 
 // Unattended runs: nobody can answer, so anything that would ask is refused, and that has to hold
@@ -73,11 +74,11 @@ describe("unattended runs", () => {
   it("refuse new hosts and asking credentials while a run's agent is at work", async () => {
     const { m, s } = setup();
     s.notice = vi.fn();
-    s.agents.set("ag_1", { sub: { active: true }, origin: { unattended: true, delivered: false } });
+    s.agents.entries.set("ag_1", { sub: { active: true }, origin: { unattended: true, delivered: false } });
     expect(await s.requestNetwork("example.com", 443)).toBe(false);
     expect(await s.requestCredentialUse("c/tok", { rule: "get *", op: { description: "get pods" } })).toBe(false);
     expect(s.pendingApprovals()).toEqual([]);
-    s.agents.clear();
+    s.agents.entries.clear();
     for (const x of m.list()) await m.remove(x.id);
   });
 
@@ -85,9 +86,9 @@ describe("unattended runs", () => {
     const { m, s } = setup();
     s.runLoop = vi.fn();
     s.receipt = vi.fn();
-    s.onAgentOutcome = vi.fn();
+    s.agents.onOutcome = vi.fn();
     const sub = { run: { id: "ag_1", startedAt: new Date().toISOString() }, next: async () => ({ kind: "report" }), describe: () => "done" };
-    await s.watchBackground({ sub, toolUseId: "t", description: "check", origin: { unattended: true, delivered: true } });
+    await s.agents.watchBackground({ sub, toolUseId: "t", description: "check", origin: { unattended: true, delivered: true } });
     expect(s.queue).toEqual([expect.objectContaining({ fromAgent: true, trigger: "background agent", delivered: true })]);
     // It doesn't join a turn the user is in.
     s.queue.unshift({ text: "from the user" });

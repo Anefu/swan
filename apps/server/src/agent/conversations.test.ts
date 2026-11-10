@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatItem, SessionSummary } from "@ph/shared";
 import { conversationAsks, conversationTools } from "./conversation-tools.js";
 import { paths } from "../settings.js";
-import { SessionManager, type SessionDeps } from "./session.js";
+import { SessionManager } from "./session-manager.js";
+import type { SessionDeps } from "./session.js";
 
 function setup() {
   const broadcast = vi.fn();
@@ -156,8 +157,10 @@ describe("the conversations tool", () => {
 describe("a message from another conversation", () => {
   // The turn itself is stubbed: these check what surrounds it.
   const stubbed = (s: object, during: (s: never) => void = () => {}) => {
-    const x = s as Record<string, unknown>;
-    for (const k of ["restartIfDue", "ensureStarted", "prepareEpoch", "placeFiles", "warnIfSharingFolders", "pushUser"]) x[k] = vi.fn(async () => {});
+    const x = s as unknown as { sandbox: Record<string, unknown>; context: Record<string, unknown>; warnIfSharingFolders: unknown; agentTurns: unknown };
+    for (const k of ["restartIfDue", "ensureStarted", "placeFiles", "teardown"]) x.sandbox[k] = vi.fn(async () => {});
+    for (const k of ["prepare", "pushUser"]) x.context[k] = vi.fn(async () => {});
+    x.warnIfSharingFolders = vi.fn();
     x.agentTurns = vi.fn(async () => during(s as never));
     return x;
   };
@@ -206,10 +209,9 @@ describe("a message from another conversation", () => {
     const from = m.create("p", "Release work");
     const to = m.create("q", "Pull requests");
     const x = stubbed(to);
-    x.teardown = vi.fn(async () => {});
     to.deliver(from.summary, "open the PR", "P");
     await idle(to);
-    const sent = String((x.pushUser as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+    const sent = String((x.context.pushUser as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
     expect(sent).toContain('A conversation of another persona, "P", called "Release work"');
     const item = (to as unknown as { items: { kind: string; trigger?: string }[] }).items.find((i) => i.kind === "user");
     expect(item?.trigger).toBe('the conversations tool in "P" · "Release work"');
@@ -223,11 +225,10 @@ describe("a message from another conversation", () => {
     (to as unknown as { summary: SessionSummary }).summary.allowances = ["bash(npm test *)", "net:example.com"];
     const seen: unknown[] = [];
     const x = stubbed(to, (s: { unattended: boolean; deliveredTurn: boolean; summary: SessionSummary }) => seen.push(s.unattended, s.deliveredTurn, s.summary.allowances.length));
-    x.teardown = vi.fn(async () => {});
     to.deliver(from.summary, "the build failed");
     await idle(to);
     expect(seen).toEqual([true, true, 0]);
-    const sent = String((x.pushUser as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+    const sent = String((x.context.pushUser as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
     expect(sent).toMatch(/^\[Not from the user\./);
     expect(sent).toContain("conversations tool");
     expect(sent).toContain('"morning" (a run of schedule morning)');
@@ -263,11 +264,11 @@ describe("a message from another conversation", () => {
     to.deliver(from.summary, "one");
     await idle(to);
     expect(stop).toHaveBeenCalledOnce();
-    (to as unknown as { container: string | null }).container = "running";
+    (to as unknown as { sandbox: { container: string | null } }).sandbox.container = "running";
     to.deliver(from.summary, "two");
     await idle(to);
     expect(stop).toHaveBeenCalledOnce();
-    (to as unknown as { container: string | null }).container = null;
+    (to as unknown as { sandbox: { container: string | null } }).sandbox.container = null;
     stop.mockRestore();
     for (const s of m.list()) await m.remove(s.id);
   });
@@ -286,8 +287,34 @@ describe("a message from another conversation", () => {
 });
 
 describe("forking a conversation", () => {
-  type Inside = { items: ChatItem[]; epochs: { n: number; messages: unknown[] }[]; carry: string | null; placeholders: Record<string, string>; proxyToken: string; dreamedThrough: string | null };
-  const inside = (s: object) => s as unknown as Inside;
+  type Parts = { items: ChatItem[]; context: { epochs: { n: number; messages: unknown[] }[]; carry: string | null }; placeholders: Record<string, string>; proxyToken: string; dreams: { dreamedThrough: string | null } };
+  /** What a fork copies, wherever in the conversation it lives. */
+  const inside = (s: object) => {
+    const i = s as unknown as Parts;
+    return {
+      items: i.items,
+      epochs: i.context.epochs,
+      proxyToken: i.proxyToken,
+      get carry() {
+        return i.context.carry;
+      },
+      set carry(v) {
+        i.context.carry = v;
+      },
+      get placeholders() {
+        return i.placeholders;
+      },
+      set placeholders(v) {
+        i.placeholders = v;
+      },
+      get dreamedThrough() {
+        return i.dreams.dreamedThrough;
+      },
+      set dreamedThrough(v) {
+        i.dreams.dreamedThrough = v;
+      },
+    };
+  };
 
   it("copies the events with their ids and the model context, as a stopped conversation of the user's", async () => {
     await fs.mkdir(paths.sessions, { recursive: true }); // the app makes it at startup

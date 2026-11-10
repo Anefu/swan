@@ -98,6 +98,7 @@ export function conversationTools(o: {
           ? `list conversations${i.persona ? ` of ${i.persona}` : ""}`
           : `${i.action} ${i.persona ? `${i.persona} · ` : ""}${i.conversation ?? (i.persona && i.action === "send" ? "a new conversation" : "this conversation")}${i.title ? ` · ${i.title}` : ""}`,
       primaryArg: (i: Input) => i.action,
+      defaultAllow: { rule: "conversations", unless: (i: Input) => conversationAsks(i, { selfId, personaId, all: all(), personas: access.personas() }) },
       async run(i: Input) {
         const other = otherPersona(i, personaId, access.personas());
         if (other && "error" in other) return { text: other.error, isError: true };

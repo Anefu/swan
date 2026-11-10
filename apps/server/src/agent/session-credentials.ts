@@ -15,7 +15,6 @@ import { zodTool, type ToolDef } from "./tools.js";
 
 const HOME = "/home/agent";
 export const ENV_FILE = `${HOME}/.swan/env.sh`;
-export const CONNECTION_TOOLS = new Set(["connection_status", "connection_login"]);
 
 type SignInItem = Extract<ChatItem, { kind: "sign_in" }>;
 type BlockedItem = Extract<ChatItem, { kind: "credential_blocked" }>;
@@ -358,6 +357,7 @@ export class SessionCredentials {
     return [
       zodTool({
         name: "connection_status",
+        defaultAllow: { rule: "connection tool" },
         description: "State, expiry, credential names and hosts for this persona's connections. Never shows values.",
         schema: z.object({}),
         preview: () => "connections",
@@ -365,6 +365,7 @@ export class SessionCredentials {
       }),
       zodTool({
         name: "connection_login",
+        defaultAllow: { rule: "connection tool" },
         description:
           "Ask the user to sign in to a command connection (for example after its credentials expired). Shows them a sign-in card; you never see the code. Returns when they finish, cancel, or it fails.",
         schema: z.object({ connection: z.string().describe("Connection name, as listed by connection_status") }),
