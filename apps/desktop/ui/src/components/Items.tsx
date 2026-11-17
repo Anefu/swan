@@ -18,6 +18,7 @@ import { attachmentPreviews, modelLabel, useStore } from "../store";
 import { basename, cls, EFFORT_LABEL, exitCode, fmtBytes, fmtDuration, isEditableTarget, isRecord, prettyJson, toolDisplayName, useNow } from "../util";
 import { DeviceCodePanel } from "./DeviceCode";
 import { IconChevronRight, IconFile, IconRepeat } from "./icons";
+import { splitQuotes } from "../quote";
 import { Markdown } from "./Markdown";
 import { CopyButton, Fold, Kbd, Spinner } from "./ui";
 
@@ -92,7 +93,17 @@ function SentMessage({ item, sessionId }: { item: Extract<ChatItem, { kind: "use
             })}
           </ul>
         )}
-        {item.text && <div className="user-block">{item.text}</div>}
+        {item.text && (
+          <div className="user-block">
+            {/^>( |$)/m.test(item.text)
+              ? splitQuotes(item.text).map((p, i) => (
+                  <div key={i} className={p.quote ? "user-quote" : "user-reply"}>
+                    {p.text}
+                  </div>
+                ))
+              : item.text}
+          </div>
+        )}
       </div>
       {preview && (
         <ImagePreview

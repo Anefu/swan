@@ -5,6 +5,7 @@ import { conversationSession, useSelectedPersona, useStore } from "../store";
 import { sessionStatusLine, unreadyCredentials } from "../status";
 import { cls, useNow } from "../util";
 import { Composer } from "./Composer";
+import { QuoteReply } from "./QuoteReply";
 import { IconArrowRight, IconWarning } from "./icons";
 import {
   AgentLine,
@@ -227,6 +228,10 @@ export function Conversation() {
           <span>Drop files to attach them to your next message</span>
         </div>
       )}
+      <QuoteReply
+        scrollRef={scrollRef}
+        onQuote={(text) => actions.setQuotes(persona.id, [...(state.quotes[persona.id] ?? []), { id: crypto.randomUUID(), text, reply: "" }])}
+      />
       <div className="convo-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="column" ref={contentRef}>
           {/* The header names the persona; the heading is for screen readers only. */}

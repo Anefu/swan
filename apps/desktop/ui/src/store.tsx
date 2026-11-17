@@ -23,6 +23,7 @@ import type {
 import { api, ApiError, configureApi, probeToken, readToken, uploadAttachment, type ApiHealth, type ConnectionAction } from "./api";
 import { errorMessage, isMissingEndpoint, loadPref, savePref } from "./util";
 import { EventSocket, wsUrl, type WsState } from "./ws";
+import type { DraftQuote } from "./quote";
 
 // ---------- State ----------
 
@@ -153,6 +154,8 @@ export interface State {
   drafts: Record<string, SettingsDraft>;
   memoryPane: Record<string, MemoryPaneState>;
   composer: Record<string, string>;
+  /** Passages quoted from the conversation, each with its own reply, sent with the next message. */
+  quotes: Record<string, DraftQuote[]>;
   attachments: Record<string, DraftAttachment[]>;
   network: NetworkFilters;
   focusApproval: { sessionId: string; toolUseId: string; seq: number } | null;
@@ -172,6 +175,7 @@ export interface State {
 const PREFS_KEY = "swan.ui.v1";
 const SELECTION_KEY = "swan.persona.v1";
 const COMPOSER_KEY = "swan.composer.v1";
+const QUOTES_KEY = "swan.quotes.v1";
 const MAX_EGRESS = 2000;
 
 export const DOCK_DEFAULT = 380;
@@ -218,6 +222,7 @@ function initState(): State {
     drafts: {},
     memoryPane: {},
     composer: loadPref<Record<string, string>>(COMPOSER_KEY, {}),
+    quotes: loadPref<Record<string, DraftQuote[]>>(QUOTES_KEY, {}),
     attachments: {},
     network: { query: "", range: "today", onlyBlocked: false, expanded: null },
     focusApproval: null,
@@ -273,6 +278,7 @@ type Action =
   | { type: "draft.set"; key: string; draft: SettingsDraft | null }
   | { type: "memoryPane"; personaId: string; patch: Partial<MemoryPaneState> }
   | { type: "composer"; personaId: string; text: string }
+  | { type: "quotes"; personaId: string; quotes: DraftQuote[] }
   | { type: "network"; patch: Partial<NetworkFilters> }
   | { type: "att.add"; personaId: string; att: DraftAttachment }
   | { type: "att.update"; personaId: string; key: string; patch: Partial<DraftAttachment> }
@@ -475,6 +481,8 @@ function reducer(state: State, a: Action): State {
     }
     case "composer":
       return { ...state, composer: { ...state.composer, [a.personaId]: a.text } };
+    case "quotes":
+      return { ...state, quotes: { ...state.quotes, [a.personaId]: a.quotes } };
     case "network":
       return { ...state, network: { ...state.network, ...a.patch } };
     case "att.add":
@@ -566,6 +574,7 @@ export interface Actions {
   setMemoryPane(personaId: string, patch: Partial<MemoryPaneState>): void;
   openUsage(): void;
   setComposer(personaId: string, text: string): void;
+  setQuotes(personaId: string, quotes: DraftQuote[]): void;
   setNetwork(patch: Partial<NetworkFilters>): void;
   openPersonaMenu(): void;
   jumpToApproval(a?: PendingApproval): void;
@@ -812,6 +821,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setMemoryPane: (personaId, patch) => dispatch({ type: "memoryPane", personaId, patch }),
       openUsage: () => dispatch({ type: "dock", dock: "usage" }),
       setComposer: (personaId, text) => dispatch({ type: "composer", personaId, text }),
+      setQuotes: (personaId, quotes) => dispatch({ type: "quotes", personaId, quotes }),
       setNetwork: (patch) => dispatch({ type: "network", patch }),
       addAttachments: (personaId, files) => {
         const sessionId = stateRef.current.conversations[personaId];
@@ -1191,6 +1201,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const t = window.setTimeout(() => savePref(COMPOSER_KEY, state.composer), 400);
     return () => window.clearTimeout(t);
   }, [state.composer]);
+  useEffect(() => {
+    const t = window.setTimeout(() => savePref(QUOTES_KEY, state.quotes), 400);
+    return () => window.clearTimeout(t);
+  }, [state.quotes]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
