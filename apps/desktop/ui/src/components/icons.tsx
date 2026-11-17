@@ -174,3 +174,4 @@ export const IconImage = make(
     <path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
   </>,
 );
+export const IconReply = make(<path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />);

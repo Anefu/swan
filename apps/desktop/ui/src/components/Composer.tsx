@@ -4,7 +4,8 @@ import { api } from "../api";
 import { usePendingApprovals, useStore, type DraftAttachment } from "../store";
 import { isWorking, plural } from "../status";
 import { ALL_EFFORTS, cls, EFFORT_LABEL, fmtBytes } from "../util";
-import { IconArrowRight, IconArrowUp, IconFile, IconPaperclip, IconStop, IconX } from "./icons";
+import { composeMessage, type DraftQuote } from "../quote";
+import { IconArrowRight, IconArrowUp, IconFile, IconPaperclip, IconReply, IconStop, IconX } from "./icons";
 import { MOD, Spinner } from "./ui";
 
 const SWAN_COMMANDS: SlashCommand[] = [
@@ -108,17 +109,28 @@ export function Composer({
   const uploading = atts.some((a) => a.status === "uploading");
   const failed = atts.some((a) => a.status === "error");
   const ready = atts.filter((a) => a.status === "done" && a.meta);
-  const canSend = (!!text.trim() || ready.length > 0) && !uploading && !failed && !sending;
+  const quotes = state.quotes[persona.id] ?? [];
+  const setQuotes = (q: DraftQuote[]) => actions.setQuotes(persona.id, q);
+  const canSend = (!!text.trim() || ready.length > 0 || quotes.length > 0) && !uploading && !failed && !sending;
+
+  // A quote added from the conversation gets the cursor in its reply box.
+  const quotesRef = useRef<HTMLDivElement>(null);
+  const quoteCount = useRef(quotes.length);
+  useEffect(() => {
+    if (quotes.length > quoteCount.current) quotesRef.current?.querySelector<HTMLTextAreaElement>(".quote-card:last-child textarea")?.focus();
+    quoteCount.current = quotes.length;
+  }, [quotes.length]);
   const blockReason = uploading ? "Waiting for uploads to finish" : failed ? "Remove the attachments that failed first" : null;
 
   const submit = async (raw: string) => {
-    const value = raw.trim();
+    const sentQuotes = quotes;
+    const value = sentQuotes.length ? composeMessage(sentQuotes, raw) : raw.trim();
     if (sending || (!value && ready.length === 0)) return;
     if (blockReason) {
       actions.toast("info", `${blockReason}.`);
       return;
     }
-    if (value === "/usage" && ready.length === 0) {
+    if (value === "/usage" && ready.length === 0 && sentQuotes.length === 0) {
       setText("");
       actions.openUsage();
       return;
@@ -136,6 +148,7 @@ export function Composer({
     setSending(false);
     if (ok) {
       setText("");
+      if (sentQuotes.length) setQuotes([]);
       actions.clearAttachments(
         persona.id,
         ready.map((a) => a.key),
@@ -220,6 +233,24 @@ export function Composer({
         </div>
       )}
       <div className={cls("composer", text.startsWith("/") && "is-command")}>
+        {quotes.length > 0 && (
+          <div className="quote-cards" ref={quotesRef} aria-label="Quoted passages">
+            {quotes.map((q, i) => (
+              <QuoteCard
+                key={q.id}
+                quote={q}
+                onReply={(reply) => setQuotes(quotes.map((x) => (x.id === q.id ? { ...x, reply } : x)))}
+                onRemove={(moveFocus) => {
+                  setQuotes(quotes.filter((x) => x.id !== q.id));
+                  if (!moveFocus) return;
+                  const prev = quotesRef.current?.querySelectorAll<HTMLTextAreaElement>(".quote-card textarea")[i - 1];
+                  (prev ?? taRef.current)?.focus();
+                }}
+                onSend={() => void submit(text)}
+              />
+            ))}
+          </div>
+        )}
         {atts.length > 0 && (
           <ul className="att-chips" aria-label="Attachments">
             {atts.map((a) => (
@@ -258,7 +289,7 @@ export function Composer({
             ref={taRef}
             rows={1}
             value={text}
-            placeholder={`Message ${persona.name}…  (/ for commands)`}
+            placeholder={quotes.length ? `Anything else for ${persona.name}? (optional)` : `Message ${persona.name}…  (/ for commands)`}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
@@ -270,7 +301,7 @@ export function Composer({
             spellCheck
           />
           <SendStopButton
-            hasText={!!text.trim() || atts.length > 0}
+            hasText={!!text.trim() || atts.length > 0 || quotes.length > 0}
             canSend={canSend}
             blockReason={blockReason}
             sending={sending || uploading}
@@ -285,6 +316,54 @@ export function Composer({
         <span className="grow" />
         <ModelSelectors persona={persona} />
       </div>
+    </div>
+  );
+}
+
+/** A passage quoted from the conversation, on one line, with its own reply box. */
+function QuoteCard({
+  quote,
+  onReply,
+  onRemove,
+  onSend,
+}: {
+  quote: DraftQuote;
+  onReply: (reply: string) => void;
+  onRemove: (moveFocus: boolean) => void;
+  onSend: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => fitHeight(ref.current), [quote.reply]);
+  const oneLine = quote.text.replace(/\s+/g, " ").trim();
+  return (
+    <div className="quote-card">
+      <div className="quote-head">
+        <IconReply size={14} className="quote-icon" />
+        <span className="quote-text" title={quote.text}>
+          “{oneLine}”
+        </span>
+        <button type="button" className="icon-btn sm" aria-label="Remove this quote" onClick={() => onRemove(false)}>
+          <IconX size={14} />
+        </button>
+      </div>
+      <textarea
+        ref={ref}
+        rows={1}
+        value={quote.reply}
+        aria-label={`Your reply to “${oneLine.slice(0, 80)}”`}
+        placeholder="Your reply to this…"
+        onChange={(e) => onReply(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            onSend();
+          } else if (e.key === "Backspace" && !quote.reply) {
+            e.preventDefault();
+            onRemove(true);
+          }
+        }}
+        spellCheck
+      />
     </div>
   );
 }
