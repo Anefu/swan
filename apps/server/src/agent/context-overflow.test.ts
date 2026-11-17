@@ -89,7 +89,7 @@ async function send(x: Internals, text: string) {
   await x.agentTurns(text);
 }
 
-const textOf = (m: MessageParam) => (typeof m.content === "string" ? m.content : m.content.map((b) => (b.type === "text" ? b.text : "")).join(""));
+const textOf = (m: MessageParam) => (typeof m.content === "string" ? m.content : (m.content ?? []).map((b) => (b.type === "text" ? b.text : "")).join(""));
 
 describe("the size of the next request", () => {
   it("counts what was added since the last measured request, so one large tool output rolls over", async () => {

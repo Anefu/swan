@@ -28,7 +28,7 @@ function blockChars(b: ContentBlockParam | string): number {
 /** Characters of model-visible content in messages, with images at their token cost rather than their base64 length. */
 export function messageChars(messages: MessageParam[]): number {
   let n = 0;
-  for (const m of messages) n += typeof m.content === "string" ? m.content.length : m.content.reduce((s, b) => s + blockChars(b), 0);
+  for (const m of messages) n += typeof m.content === "string" ? m.content.length : (m.content ?? []).reduce((s, b) => s + blockChars(b), 0);
   return n;
 }
 
