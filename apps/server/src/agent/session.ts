@@ -27,6 +27,7 @@ import { CLEAR_DIFFS, diffTools, permissionView } from "./diff-tools.js";
 import { CONVERSATIONS, conversationAsks, conversationTools, type ConversationAccess } from "./conversation-tools.js";
 import { hasTools } from "../sandbox/image.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
+import { IMAGE_CHARS, isContextOverflow, messageChars } from "./context-size.js";
 import { ProviderError, systemText, type ContentBlockParam, type MessageParam, type ProviderRegistry, type SystemPrompt, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
 import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
@@ -87,6 +88,7 @@ interface Epoch {
   messages: MessageParam[];
   startedAt: string;
   contextTokens?: number; // input context of the latest request in this epoch
+  measuredAt?: number; // how many messages that request carried; later ones are not in contextTokens yet
 }
 
 interface Persisted {
@@ -101,6 +103,8 @@ interface Persisted {
 }
 
 const MAX_TURNS_PER_MESSAGE = 200;
+/** Share of contextLimitTokens past which the next request would likely be refused, so the context rolls over now. */
+const HARD_ROLLOVER = 0.95;
 const DREAM_EVENT_CHARS = 80_000; // events one /dream reads; later ones wait for the next run
 const DREAM_RECHECK = 8; // saved memories one /dream rereads against their sources
 export const IDLE_DREAM_MS = 10 * 60_000; // a conversation the user wrote in dreams once it has been quiet this long
@@ -819,7 +823,7 @@ export class Session {
   }
 
   /** Why the next request needs a new epoch, or null. */
-  private rolloverReason(): string | null {
+  private rolloverReason(incoming = 0): string | null {
     const e = this.epoch;
     if (!e || !e.messages.length) return null;
     const m = this.currentModel();
@@ -827,12 +831,32 @@ export class Session {
     // Tools added since this context began (a new skill, MCP server or Swan version) reach the model only in a fresh one.
     const added = [...this.liveTools.keys()].filter((n) => !e.frozen.tools.some((t) => t.name === n));
     if (added.length) return `new tools: ${added.slice(0, 5).join(", ")}${added.length > 5 ? "…" : ""}`;
+    const used = this.projectedTokens(e, incoming);
+    const limit = this.deps.settings.contextLimitTokens;
+    const share = `${Math.round((used / limit) * 100)}% of ${Math.round(limit / 1000)}k tokens`;
+    // Past this the provider would refuse the request, so it rolls over however young the context is
+    // (a context with no reply yet holds only what a new one would carry, so that would not help).
+    const replied = e.messages.some((x) => x.role === "assistant");
+    if (replied && used > limit * HARD_ROLLOVER) return `the next request would be ${share}`;
     // A fresh epoch must do some work before it can roll over again, or an oversized carry-over thrashes.
     if (e.messages.filter((x) => x.role === "assistant").length < 2) return null;
-    const used = e.contextTokens ?? Math.ceil(JSON.stringify(e.messages).length / 4);
-    const limit = this.deps.settings.contextLimitTokens;
-    if (used > limit * this.deps.settings.rolloverAt) return `context reached ${Math.round((used / limit) * 100)}% of ${Math.round(limit / 1000)}k tokens`;
+    if (used > limit * this.deps.settings.rolloverAt) return `context reached ${share}`;
     return null;
+  }
+
+  /**
+   * Tokens the next request in this epoch would carry: what the provider measured for the last one,
+   * plus an estimate of everything appended since (the reply, tool results, new messages). Measuring
+   * only the last request misses a turn whose tool output alone fills the context.
+   */
+  private projectedTokens(e: Epoch, incoming = 0): number {
+    const fixed = systemText(e.frozen.system).length + JSON.stringify(e.frozen.tools).length;
+    if (e.contextTokens === undefined) return Math.ceil((fixed + messageChars(e.messages) + incoming) / 3.5);
+    // Epochs saved before measuredAt was kept: assume nothing measured, but never less than the last request.
+    if (e.measuredAt === undefined) return Math.max(e.contextTokens, Math.ceil((fixed + messageChars(e.messages) + incoming) / 3.5));
+    const before = messageChars(e.messages.slice(0, e.measuredAt));
+    const perToken = Math.min(5, Math.max(2.5, (fixed + before) / Math.max(1, e.contextTokens)));
+    return e.contextTokens + Math.ceil((messageChars(e.messages.slice(e.measuredAt)) + incoming) / perToken);
   }
 
   /** One model call outside the conversation (checkpoint, /dream), not cached: nothing reads it back. Usage is recorded under its purpose. */
@@ -1007,9 +1031,10 @@ export class Session {
     } else e.messages.push({ role: "user", content });
   }
 
-  private async prepareEpoch() {
+  /** Opens or rolls over the epoch before a user message of `incoming` characters is added. */
+  private async prepareEpoch(incoming = 0) {
     if (!this.epoch) await this.openEpoch();
-    const reason = this.rolloverReason();
+    const reason = this.rolloverReason(incoming);
     if (reason) await this.rollover(reason);
   }
 
@@ -1202,7 +1227,7 @@ export class Session {
         const q = this.queue.shift()!;
         if (q.receiptId) this.finishReceipt(q.receiptId, "Read before the next step", "done");
         this.touch();
-        await this.prepareEpoch();
+        await this.prepareEpoch(typeof q.text === "string" ? q.text.length : messageChars([{ role: "user", content: q.text }]));
         await this.placeFiles(q.files);
         this.warnIfSharingFolders();
         this.pushUser(q.text);
@@ -1214,7 +1239,7 @@ export class Session {
           this.notice("info", "Temporary allowances were cleared: a message from another conversation started a turn here.");
         }
         try {
-          await this.agentTurns();
+          await this.agentTurns(q.text);
         } finally {
           this.unattended = this.deliveredTurn = false;
         }
@@ -1257,9 +1282,11 @@ export class Session {
     return this.unattended || [...this.agents.values()].some((a) => a.sub.active && a.origin.unattended);
   }
 
-  private async agentTurns() {
+  /** `message` is the user message that started these turns, sent again if an overflow forces a new context before any reply. */
+  private async agentTurns(message: string | ContentBlockParam[]) {
     const ac = new AbortController();
     this.abort = ac;
+    let recovered = false;
 
     for (let turn = 0; turn < MAX_TURNS_PER_MESSAGE; turn++) {
       if (ac.signal.aborted) return;
@@ -1335,6 +1362,21 @@ export class Session {
           this.notice("info", "Interrupted.");
           return;
         }
+        if (isContextOverflow(err)) {
+          const limit = Math.round(this.deps.settings.contextLimitTokens / 1000);
+          if (recovered || !e.messages.some((m) => m.role === "assistant")) {
+            throw new ProviderError(
+              `The request is too long for the model even in a fresh context, so the latest message or tool output alone is too large. Send a shorter message, or ask for smaller pieces of output. If the model's context is smaller than ${limit}k tokens, lower contextLimitTokens in config.yaml. (${errMsg(err)})`,
+            );
+          }
+          recovered = true;
+          // Nothing the model can act on came back, so the request goes again from a fresh context.
+          this.notice("warn", `The provider refused the request as longer than the model's context, so Swan started a new context and is trying again.`);
+          await this.rollover("the provider said the request was too long");
+          this.pushUser(turn === 0 ? message : "Continue from the next action in the checkpoint above.");
+          turn--;
+          continue;
+        }
         throw err;
       }
       finalizeStreams();
@@ -1345,7 +1387,8 @@ export class Session {
       const reported = this.providerType(e.model.provider) === "anthropic" ? u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens : u.inputTokens;
       // Providers that report no usage (some local servers) fall back to a conservative estimate.
       const estimated = reported <= 0;
-      e.contextTokens = estimated ? Math.ceil((systemText(e.frozen.system).length + JSON.stringify(e.messages).length) / 3.5) : reported;
+      e.contextTokens = estimated ? Math.ceil((systemText(e.frozen.system).length + JSON.stringify(e.frozen.tools).length + messageChars(e.messages)) / 3.5) : reported;
+      e.measuredAt = e.messages.length;
       this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: this.deps.settings.contextLimitTokens, estimated, epoch: e.n });
       this.deps.broadcast({ type: "usage.updated", personaId: this.personaId });
 
