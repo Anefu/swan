@@ -87,8 +87,8 @@ export function conversationTools(o: {
       name: CONVERSATIONS,
       description: [
         "Manage this persona's conversations and message other ones. Each run of a schedule or watcher has its own, so use this to pass a result on and to tidy up.",
-        "list shows this persona's conversations, or another persona's with persona. send gives a conversation a message and starts a turn there: it is told the message came from this tool, not the user, and that turn runs unattended, so anything needing approval is refused. A turn started by send can't send further.",
-        "To reach another persona, give persona (its id or name): with a conversation it goes there, without one it starts a new conversation in that persona. Sending to another persona asks the user first.",
+        "list shows this persona's conversations, or another persona's with persona. send gives a conversation a message and starts a turn there: it is told the message came from this tool, not the user, and that turn runs unattended, so anything needing approval is refused. A turn started by send can reply or pass it on, up to 3 sends in one chain.",
+        "To reach another persona, give persona (its id or name): with a conversation it goes there, without one it starts a new conversation in that persona. Sending to another persona asks the user first when they are here; unattended runs may send without asking.",
         "rename and delete act on one conversation of this persona. A run that found nothing worth keeping should delete itself as its last step: it goes when the turn ends. Changing a conversation the user started asks them first, except renaming the one you are in.",
         "To have a result come back here, give this conversation's id (from list) in the message or in the schedule's or watcher's prompt.",
       ].join(" "),
@@ -107,7 +107,7 @@ export function conversationTools(o: {
         }
         if (other && i.action !== "send") return { text: "rename and delete work on this persona's conversations only.", isError: true };
         if (i.action === "send") {
-          if (!o.canSend()) return { text: "This turn was started by a message from another conversation, so it can't send further. Say what you found here.", isError: true };
+          if (!o.canSend()) return { text: "This exchange between conversations has made all the sends it may, so this turn can't send further. Say what you found here.", isError: true };
           if (!i.text) return { text: "Give the text to send.", isError: true };
           if (!i.conversation && !other) return { text: "Give the conversation to send to, or a persona to start a new conversation in.", isError: true };
           let to: { id: string } | { personaId: string };

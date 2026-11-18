@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { TOOL_HOST } from "../agent/script-tools.js";
 import dns from "node:dns/promises";
 import { promises as fs } from "node:fs";
 import http from "node:http";
@@ -19,6 +20,14 @@ import { TypedEmitter, errMsg, hostMatches, hostMatchesAny, log, nowIso, randomI
 import type { CertAuthority } from "./ca.js";
 
 /** What the proxy knows about a running session. Registered by the session, never by the sandbox. */
+/** A request a sandbox command makes to TOOL_HOST, with the bash call it runs in. */
+export interface ToolRequest {
+  method: string;
+  path: string;
+  callId: string;
+  body: string;
+}
+
 export interface ProxySession {
   sessionId: string;
   personaId: string;
@@ -358,6 +367,8 @@ export class EgressProxy extends TypedEmitter<Events> {
   onDenied: ((s: ProxySession, ref: string, v: Verdict) => void) | null = null;
   /** A request to a credential host carried a credential not from Swan, and was refused. */
   onForeignCredential: ((s: ProxySession, host: string, field: string) => void) | null = null;
+  /** Requests to TOOL_HOST: a command in the sandbox calling one of Swan's tools. Set by the session manager. */
+  toolCaller: ((s: ProxySession, req: ToolRequest) => Promise<{ status: number; body: string }>) | null = null;
 
   constructor(
     private connections: ConnectionManager,
@@ -952,6 +963,28 @@ export class EgressProxy extends TypedEmitter<Events> {
     upstream.end();
   }
 
+  /** A sandbox command calling a tool: answered here, never sent anywhere. Bodies over 4 MB are refused. */
+  private async onToolRequest(session: ProxySession, req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const c of req as AsyncIterable<Buffer>) {
+      size += c.length;
+      if (size > 4 * 1024 * 1024) {
+        res.writeHead(413, { "content-type": "text/plain" }).end("swan-tool input is larger than 4 MB\n");
+        return;
+      }
+      chunks.push(c);
+    }
+    try {
+      const r = this.toolCaller
+        ? await this.toolCaller(session, { method: req.method ?? "GET", path: url.pathname, callId: first(req.headers["x-swan-call"]) ?? "", body: Buffer.concat(chunks).toString("utf8") })
+        : { status: 503, body: "Swan can't take tool calls right now.\n" };
+      res.writeHead(r.status, { "content-type": "text/plain; charset=utf-8" }).end(r.body);
+    } catch (e) {
+      res.writeHead(500, { "content-type": "text/plain" }).end(`swan-tool: ${errMsg(e)}\n`);
+    }
+  }
+
   /** Absolute-URI requests (plain http:// through the proxy). Never carries credentials. */
   private async onPlainHttp(req: http.IncomingMessage, res: http.ServerResponse) {
     const started = Date.now();
@@ -971,6 +1004,7 @@ export class EgressProxy extends TypedEmitter<Events> {
       this.record({ sessionId: null, personaId: null, method: req.method ?? "GET", host, port, path: url.pathname, decision: "blocked", credentials: [], reason: "missing or invalid proxy credentials" });
       return;
     }
+    if (host === TOOL_HOST) return this.onToolRequest(session, req, res, url);
     const base = { sessionId: session.sessionId, personaId: session.personaId, method: req.method ?? "GET", host, port, path: url.pathname };
     const d = await this.decideOrAsk(session, host, port);
     const reason = !d.ok ? d.reason : d.creds.length ? "credential hosts require https" : null;

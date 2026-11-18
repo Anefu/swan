@@ -34,6 +34,29 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "bash /skills/repo-tour/scripts/summarize.sh /workspace/demo" } },
     { text: "That is the repo tour." },
   ],
+  // swan-tool: a command chains Swan's tools; only what it prints comes back.
+  // A call from a command that needs approval: the command waits for the card.
+  swanask: [
+    { tool: "bash", args: { command: "swan-tool write_file '{\"path\":\"/tmp/from-script.txt\",\"content\":\"hi\\\\n\"}'; echo \"write exit $?\"; cat /tmp/from-script.txt" } },
+    { text: "Done." },
+  ],
+  swantool: [
+    {
+      text: "Chaining tool calls from a script.",
+      tool: "bash",
+      args: {
+        command: [
+          'echo "on PATH: $(command -v swan-tool)"',
+          "swan-tool --list | head -3",
+          'for q in pnpm tabs; do printf "%s -> " "$q"; swan-tool memory_search "{\\"query\\":\\"$q\\"}" | head -1; done',
+          "echo '{\"query\":\"chain\"}' | swan-tool history_search >/dev/null; echo \"history_search exit $?\"",
+          "swan-tool bash '{\"command\":\"ls\"}'; echo \"bash from a command exit $?\"",
+          "swan-tool memory_search 'not json'; echo \"bad input exit $?\"",
+        ].join("\n"),
+      },
+    },
+    { text: "Chained the calls; only the summary above came back." },
+  ],
   remember: [
     { tool: "memory_propose", args: { content: "Use pnpm in this repository.", type: "preference", origin: "user", sources: [] } },
     { tool: "memory_search", args: { query: "pnpm" } },

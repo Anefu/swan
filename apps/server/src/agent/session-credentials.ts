@@ -12,6 +12,7 @@ import type { ProxySession } from "../proxy/egress.js";
 import type { PodmanRuntime } from "../sandbox/podman.js";
 import { errMsg, nowIso, randomId } from "../util.js";
 import { zodTool, type ToolDef } from "./tools.js";
+import { SWAN_TOOL_PATH, SWAN_TOOL_SCRIPT } from "./script-tools.js";
 
 const HOME = "/home/agent";
 export const ENV_FILE = `${HOME}/.swan/env.sh`;
@@ -189,6 +190,14 @@ export class SessionCredentials {
       }
       for (const [k, v] of Object.entries(vars)) env.push(`export ${k}=${shellQuote(this.host.connections.render(conn, v, ph))}`);
     }
+    if (this.written.get(SWAN_TOOL_PATH) !== sha(SWAN_TOOL_SCRIPT)) {
+      const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1" && chmod 755 "$1"', "sh", SWAN_TOOL_PATH], { input: SWAN_TOOL_SCRIPT, timeoutMs: 30_000 });
+      if (r.code === 0) this.written.set(SWAN_TOOL_PATH, sha(SWAN_TOOL_SCRIPT));
+      else problems.push(`Could not add swan-tool to the sandbox: ${r.stderr.trim()}`);
+    }
+    // swan-tool on every shell's PATH, once.
+    const bin = SWAN_TOOL_PATH.slice(0, SWAN_TOOL_PATH.lastIndexOf("/"));
+    env.unshift(`case ":$PATH:" in *":${bin}:"*) ;; *) export PATH="${bin}:$PATH" ;; esac`);
     const envText = `# Written by Swan from connection wrappers; placeholders only.\n${env.join("\n")}\n`;
     if (this.written.get(ENV_FILE) !== sha(envText)) {
       const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1"', "sh", ENV_FILE], { input: envText, timeoutMs: 30_000 });

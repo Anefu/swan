@@ -419,6 +419,7 @@ export const ToolLine = memo(function ToolLine({
   const isAsk = isNet || isCred || isQuestion;
   const meta: string[] = [];
   if (isAsk && !isQuestion && item.output && !pending) meta.push(item.output);
+  if (item.via) meta.push("from a command");
   if (d.result) meta.push(d.result);
   if (item.durationMs !== undefined && !isAsk && !AGENT_CONTROL_TOOLS.has(item.name)) meta.push(fmtDuration(item.durationMs));
   const showPrompt = pending && (promptOpen || open);
@@ -472,6 +473,12 @@ function Facts({ item }: { item: ToolItem }) {
     <dl className="facts small">
       <dt>Tool</dt>
       <dd className="mono">{item.name}</dd>
+      {item.via && (
+        <>
+          <dt>Called by</dt>
+          <dd>a command, with swan-tool; its result went to the command, not the model</dd>
+        </>
+      )}
       {item.durationMs !== undefined && (
         <>
           <dt>Duration</dt>

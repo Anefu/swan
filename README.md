@@ -100,6 +100,11 @@ to use one of the persona's skills.
   restart it by themselves between turns; the conversation carries on.
 - **Sub-agents**: the agent can hand parts of a task to focused helpers that work in parallel or in
   the background, with the same sandbox and rules.
+- **Chaining tools**: a command the agent runs can call Swan's other tools with `swan-tool <tool>
+  '<json>'`, so a script can loop over results and pass one tool's output to the next. Only what the
+  script prints goes back to the model, which saves tokens on work over many items. Each call is
+  checked and shown in the conversation like a direct one (marked "from a command"), and asks you
+  when it would anyway.
 - **Sharing a persona**: **Export…** at the bottom of a persona's settings saves a
   `.swan-persona.yaml` file with its settings, the connections it uses and, if you choose, its skills;
   never secret values. **Import persona…** in the persona menu shows what the persona may reach before
@@ -119,7 +124,8 @@ to use one of the persona's skills.
   Agents can manage them with the `conversations` tool: list, rename and delete them, and send a
   result to another one, in the same persona or another (a new conversation there, or one you
   name). A run that found nothing can delete itself. Changing a conversation you started, and
-  sending to another persona, ask you first, so an unattended run can't.
+  sending to another persona, ask you first; an unattended run may still send, but can't rename or
+  delete what you started.
 - **Questions**: when the agent needs you to choose, it shows options in the conversation and waits.
   Pick one (or several, then Send), answer in the message box instead, or skip. Unattended runs
   can't ask.
@@ -138,7 +144,7 @@ what it has seen (the first check only records), and starts one turn for everyth
 
 A run keeps its own conversation unless the agent passes the result on. Sending to another
 conversation starts a turn there, once it is free. That agent is told the message came from the
-tool, not from you; the turn runs under the same unattended rules, can't send further, counts toward
+tool, not from you; the turn runs under the same unattended rules, can reply or pass it on (up to 3 sends in one chain), counts toward
 `maxTurnsPerDay`, and clears anything you had allowed there "until stopped". To route results, say so in
 the prompt ("if this affects the release, send it to the conversation called Release work").
 
@@ -165,6 +171,7 @@ watchers:
     prompt: "New comment on {{tracker.title}} from {{item.author.username}}: {{item.body}}"
 
 unattended:                    # what a triggered turn may do; anything else that would ask is refused
+                               # (always allowed: watch, and conversations(send); permissions.deny still wins)
   allow: [read, "bash(git *)"]
   credentials:
     gitlab/GITLAB_TOKEN: ["POST /api/v4/projects/*/merge_requests/*/notes"]   # ask rules allowed unattended

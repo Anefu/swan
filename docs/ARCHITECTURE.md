@@ -140,8 +140,11 @@ starts a new one there, labelled as a run of "a message from" the sender, and th
 the receiving persona's limit. A message may quote outside text, so the agent there is told it isn't from the user, and it never
 joins a running turn: it waits for its own turn, which is unattended and refuses what would ask,
 and which first clears the conversation's temporary allowances so what the user allowed for their
-own turns can't be used. It can't send further, so conversations can't keep waking each other, and
-each one spends a turn of `unattended.maxTurnsPerDay`. Renaming or deleting a conversation the user
+own turns can't be used. It may reply or pass the message on, but each message carries a hop count
+and a chain stops after `MAX_SEND_HOPS` (3) sends, so conversations can't keep waking each other, and
+each turn spends one of `unattended.maxTurnsPerDay`. Every unattended run may also manage watchers and
+send (`UNATTENDED_DEFAULTS`: `watch`, `conversations(send)`) though both ask when the user is present;
+a persona's deny rules still apply. Renaming or deleting a conversation the user
 started asks first (renaming the one the agent is in doesn't). Sub-agents don't get the tool.
 
 Forking copies a conversation in its persona: the events with their ids (so what its context cites can
@@ -299,6 +302,14 @@ effort: command rules decide what asks, the sandbox and credential rules are the
 - Interrupt aborts the stream, kills running execs, and closes open tool calls with
   "interrupted" results so the transcript stays valid.
 - Tool output is truncated (head + tail) before it enters the transcript, never edited later.
+- Tool calls from commands (`swan-tool`): each `bash` exec gets `SWAN_CALL=<its tool_use id>`, and
+  Swan writes `~/.swan/bin/swan-tool` (sh + curl) into the sandbox and puts it on PATH through
+  `BASH_ENV`. It sends `http://tools.swan.internal/...` through the session's egress proxy, which
+  answers that name itself (never forwarded) for the session its proxy credentials identify. Swan
+  runs the call only while that bash call is still running, under that call's policy, unattended
+  flag and sub-agent, as a normal tool call with `via` set. Its result goes to the command, not the
+  transcript. `bash`, `ask_user` and the sub-agent tools can't be called this way. Calls still
+  waiting for approval when the command ends are interrupted.
 - Memory: the agent saves, corrects and retires a persona's memory records with `memory_propose`,
   `memory_update` and `memory_archive` (it can't archive what the user said, or pinned records).
   `/dream` consolidates: it reads the conversation's events since its last run in that

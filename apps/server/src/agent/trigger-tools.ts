@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { PersonaStore } from "../personas.js";
 import { zodTool, type ToolDef } from "./tools.js";
 
-/** Reminders and schedules only start turns that run under the unattended rules: allowed by default. Watchers ask. */
+/** Reminders and schedules only start turns that run under the unattended rules: allowed by default. Watchers ask the user when they are here; unattended runs may manage them (UNATTENDED_DEFAULTS). */
 export const SCHEDULE_TOOLS = new Set(["schedule"]);
 
 const name = z.string().regex(/^[a-z0-9][a-z0-9-]{0,40}$/).describe("Lowercase letters, digits and dashes; unique in this persona");

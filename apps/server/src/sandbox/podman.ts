@@ -412,7 +412,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
    * Run a shell command so it can be killed as a unit: setsid makes it a session leader that
    * records its pid; `timeout` bounds it inside the container; abort kills the whole session.
    */
-  async execShell(container: string, command: string, opts: { cwd?: string; timeoutMs: number; signal?: AbortSignal; maxOutput?: number }) {
+  async execShell(container: string, command: string, opts: { cwd?: string; timeoutMs: number; signal?: AbortSignal; maxOutput?: number; env?: Record<string, string> }) {
     const id = randomId("", 6);
     const pidFile = `/tmp/.ph-exec-${id}.pid`;
     const secs = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
@@ -421,7 +421,7 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     const kill = () => void this.exec(container, ["sh", "-c", `p=$(cat ${pidFile} 2>/dev/null) && pkill -KILL -s "$p"; rm -f ${pidFile}`]);
     opts.signal?.addEventListener("abort", kill, { once: true });
     try {
-      const r = await this.exec(container, argv, { cwd: opts.cwd, timeoutMs: opts.timeoutMs + 15_000, maxOutput: opts.maxOutput });
+      const r = await this.exec(container, argv, { cwd: opts.cwd, env: opts.env, timeoutMs: opts.timeoutMs + 15_000, maxOutput: opts.maxOutput });
       return { ...r, timedOut: r.timedOut || r.code === 124 };
     } finally {
       opts.signal?.removeEventListener("abort", kill);

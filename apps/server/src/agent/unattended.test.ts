@@ -97,3 +97,51 @@ describe("unattended runs", () => {
     for (const x of m.list()) await m.remove(x.id);
   });
 });
+
+describe("what every unattended run may do", () => {
+  const stand = (name: string) => zodTool({ name, description: "d", schema: z.object({ action: z.string() }), preview: () => name, primaryArg: (i) => i.action, run: async () => ({ text: "" }) });
+  it("manages watchers and sends to other conversations, but doesn't rename or delete them", () => {
+    const { s } = setup();
+    const p = s.unattendedPolicy();
+    expect(p.evaluate(stand("watch"), { action: "add" }).mode).toBe("allow");
+    expect(p.evaluate(stand("conversations"), { action: "send" }).mode).toBe("allow");
+    expect(p.evaluate(stand("conversations"), { action: "delete" }).mode).not.toBe("allow");
+    expect(p.evaluate(stand("conversations"), { action: "rename" }).mode).not.toBe("allow");
+  });
+});
+
+describe("a chain of conversations", () => {
+  it("lets a delivered turn reply, and stops after the last send it may make", async () => {
+    const { m, s } = setup();
+    s.runLoop = vi.fn();
+    const from = m.create("p", "from");
+    s.deliver(from.summary, "first", undefined, 1);
+    expect(s.queue.at(-1)).toMatchObject({ delivered: true, hops: 1 });
+    expect(s.queue.at(-1).text).toContain(`To reply, send to conversation ${from.id}`);
+    s.deliver(from.summary, "last", undefined, 3);
+    expect(s.queue.at(-1).text).toContain("can't send to other conversations");
+    s.queue = [];
+    vi.spyOn(from, "deliver").mockImplementation(() => {});
+    s.deps.personas.list = () => [];
+    const [tool] = s.conversationTools();
+    for (const [hops, ok] of [[0, true], [2, true], [3, false]] as const) {
+      s.turnHops = hops;
+      expect((await tool.run({ action: "send", conversation: from.id, text: "hi" })).isError ?? false).toBe(!ok);
+    }
+    s.turnHops = 0;
+    for (const x of m.list()) await m.remove(x.id);
+  });
+
+  it("counts each send: a turn started at hop n sends at hop n + 1", async () => {
+    const { m } = setup();
+    const deps = (m as unknown as { deps: SessionDeps }).deps;
+    m.spendTurn = async () => null;
+    const a = m.create("p", "A");
+    const b = m.create("p", "B");
+    const toB = vi.spyOn(b, "deliver").mockImplementation(() => {});
+    (a as unknown as { turnHops: number }).turnHops = 2;
+    expect(await deps.conversations!.deliver(a.id, { id: b.id }, "reply")).toBeNull();
+    expect(toB).toHaveBeenCalledWith(a.summary, "reply", undefined, 3);
+    for (const x of m.list()) await m.remove(x.id);
+  });
+});

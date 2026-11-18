@@ -176,7 +176,7 @@ describe("a message from another conversation", () => {
     expect(deliver).not.toHaveBeenCalled();
     m.spendTurn = async () => null;
     expect(await deps.conversations!.deliver(a.id, { id: c.id }, "hi")).toBeNull();
-    expect(deliver).toHaveBeenCalledWith(a.summary, "hi", undefined);
+    expect(deliver).toHaveBeenCalledWith(a.summary, "hi", undefined, 1);
     expect(spent).toEqual(["p"]);
     for (const s of m.list()) await m.remove(s.id);
   });
@@ -189,12 +189,12 @@ describe("a message from another conversation", () => {
     m.spendTurn = async (pid) => (spent.push(pid), null);
     const toB = vi.spyOn(b, "deliver").mockImplementation(() => {});
     expect(await deps.conversations!.deliver(a.id, { id: b.id }, "hi")).toBeNull();
-    expect(toB).toHaveBeenCalledWith(a.summary, "hi", "P");
+    expect(toB).toHaveBeenCalledWith(a.summary, "hi", "P", 1);
     const proto = vi.spyOn(Object.getPrototypeOf(b), "deliver").mockImplementation(() => {});
     expect(await deps.conversations!.deliver(a.id, { personaId: "q" }, "review this")).toBeNull();
     const made = m.list("q").find((s) => s.id !== b.id)!;
     expect(made).toMatchObject({ title: "From P: A", trigger: "a message from P" });
-    expect(proto).toHaveBeenLastCalledWith(a.summary, "review this", "P");
+    expect(proto).toHaveBeenLastCalledWith(a.summary, "review this", "P", 1);
     expect(spent).toEqual(["q", "q"]);
     expect(await deps.conversations!.deliver(a.id, { personaId: "nobody" }, "hi")).toContain("can't run");
     proto.mockRestore();

@@ -262,6 +262,33 @@ describe("EgressProxy through a company proxy", () => {
     expect(await lastEvent(checked, "s2", "public.test")).toMatchObject({ method: "GET", decision: "inspected", via: "proxy" });
   });
 
+  it("answers tools.swan.internal itself, for the session it authenticated, and sends nothing on", async () => {
+    const seen: { sessionId: string; callId: string; path: string; body: string }[] = [];
+    checked.toolCaller = async (s, r) => (seen.push({ sessionId: s.sessionId, callId: r.callId, path: r.path, body: r.body }), { status: 200, body: "found\n" });
+    const ask = (auth?: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const headers: Record<string, string> = { host: "tools.swan.internal", "x-swan-call": "tu_1" };
+        if (auth) headers["proxy-authorization"] = `Basic ${Buffer.from(auth).toString("base64")}`;
+        const req = http.request({ host: "127.0.0.1", port: checkedPort, method: "POST", path: "http://tools.swan.internal/call/lookup", headers }, (r) => {
+          let body = "";
+          r.on("data", (c) => (body += c));
+          r.on("end", () => resolve({ status: r.statusCode ?? 0, body }));
+        });
+        req.on("error", reject);
+        req.end('{"q":"x"}');
+      });
+    try {
+      expect(await ask("s2:t0ken")).toEqual({ status: 200, body: "found\n" });
+      expect(seen).toEqual([{ sessionId: "s2", callId: "tu_1", path: "/call/lookup", body: '{"q":"x"}' }]);
+      expect((await ask()).status).toBe(407);
+      expect((await ask("s2:wrong")).status).toBe(407);
+      expect(seen).toHaveLength(1);
+      expect(company.seen.join("\n")).not.toContain("tools.swan.internal");
+    } finally {
+      checked.toolCaller = null;
+    }
+  });
+
   it("connects directly to noProxy hosts", async () => {
     const direct = await tunnel(hookedPort, "a.direct.test:443", "s3:t0ken");
     expect(direct.status).toBe(200);

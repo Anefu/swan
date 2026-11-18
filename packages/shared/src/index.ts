@@ -196,6 +196,7 @@ export type ChatItem =
       allowPatterns?: string[]; // while pending: "npm test *", what "until stopped" and "always" would allow
       denyReason?: string;
       parentId?: string; // set on calls made by a sub-agent: the id of its `agent` call
+      via?: string; // set on calls a command made with swan-tool: the id of its `bash` call
       agent?: AgentRun; // on `agent` calls: the sub-agent it started, kept current while it runs
     }
   | { kind: "notice"; id: string; ts: string; level: "info" | "warn" | "error"; text: string }

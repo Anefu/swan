@@ -98,7 +98,10 @@ export function builtinTools(): ToolDef[] {
       description:
         "Run a shell command (bash -lc) inside the sandbox container and return stdout, stderr and the exit code. " +
         "Use for builds, tests, git, package managers and anything without a dedicated tool. Network goes through the " +
-        "egress proxy and only allowlisted hosts are reachable. Commands are killed after the timeout.",
+        "egress proxy and only allowlisted hosts are reachable. Commands are killed after the timeout. " +
+        "A command can call Swan's other tools with `swan-tool <tool> '<json input>'` (the result on stdout; exit 1 when the tool reports an error, 2 when the call is refused; " +
+        "`swan-tool --list` lists them, `swan-tool --help <tool>` shows one's input). Use it to chain calls and loop over results in a script, so only what the script prints " +
+        "comes back to you instead of every intermediate result. Each call is checked and shown to the user like a direct one.",
       schema: z.object({
         command: z.string().min(1).describe("The command to run"),
         cwd: z.string().optional().describe("Working directory (default: the persona's working directory)"),
@@ -114,6 +117,7 @@ export function builtinTools(): ToolDef[] {
           timeoutMs,
           signal: ctx.signal,
           maxOutput: ctx.outputLimit * 4,
+          env: { SWAN_CALL: ctx.toolUseId },
         });
         const parts: string[] = [];
         if (r.stdout) parts.push(r.stdout.trimEnd());
