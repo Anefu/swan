@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeMessage, splitQuotes, toQuote } from "./quote";
+import { composeMessage, diffQuote, splitQuotes, toQuote } from "./quote";
 
 describe("toQuote", () => {
   it("quotes each line and keeps one blank between paragraphs", () => {
@@ -47,5 +47,28 @@ describe("splitQuotes", () => {
   });
   it("does not treat >= or >> as a quote", () => {
     expect(splitQuotes(">= 3")).toEqual([{ quote: false, text: ">= 3" }]);
+  });
+});
+
+describe("diff comments", () => {
+  const on = (label: string) => ({ diffId: "d", path: "src/a.ts", hunk: 0, from: 0, to: 0, label });
+  it("names the file and the new line numbers, and marks added and removed lines", () => {
+    const r = diffQuote("src/a.ts", [
+      { kind: "del", old: 4, text: "  old()" },
+      { kind: "add", new: 4, text: "  next()" },
+      { kind: "ctx", old: 5, new: 5, text: "}" },
+    ]);
+    expect(r.label).toBe("src/a.ts lines 4–5");
+    expect(r.text).toBe("-   old()\n+   next()\n  }");
+  });
+  it("uses the old numbers for lines that were only removed", () => {
+    expect(diffQuote("a", [{ kind: "del", old: 9, text: "x" }]).label).toBe("a line 9 (removed)");
+  });
+  it("sends the lines with their indentation, then the comment", () => {
+    const c = { id: "1", text: "+   next()", reply: " rename this ", on: on("src/a.ts line 4") };
+    expect(composeMessage([c], "thanks")).toBe("On src/a.ts line 4:\n> +   next()\n\nrename this\n\nthanks");
+  });
+  it("leaves out a comment with nothing written", () => {
+    expect(composeMessage([{ id: "1", text: "+ x", reply: "  ", on: on("a line 1") }], "hi")).toBe("hi");
   });
 });

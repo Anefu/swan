@@ -5,7 +5,7 @@ import { usePendingApprovals, useStore, type DraftAttachment } from "../store";
 import { isWorking, plural } from "../status";
 import { ALL_EFFORTS, cls, EFFORT_LABEL, fmtBytes } from "../util";
 import { composeMessage, type DraftQuote } from "../quote";
-import { IconArrowRight, IconArrowUp, IconFile, IconPaperclip, IconReply, IconStop, IconX } from "./icons";
+import { IconArrowRight, IconArrowUp, IconFile, IconMessage, IconPaperclip, IconReply, IconStop, IconX } from "./icons";
 import { MOD, Spinner } from "./ui";
 
 const SWAN_COMMANDS: SlashCommand[] = [
@@ -111,13 +111,17 @@ export function Composer({
   const ready = atts.filter((a) => a.status === "done" && a.meta);
   const quotes = state.quotes[persona.id] ?? [];
   const setQuotes = (q: DraftQuote[]) => actions.setQuotes(persona.id, q);
-  const canSend = (!!text.trim() || ready.length > 0 || quotes.length > 0) && !uploading && !failed && !sending;
+  // A comment on a diff with nothing written isn't sent, so on its own it is no message.
+  const sendable = quotes.filter((q) => !q.on || q.reply.trim());
+  const canSend = (!!text.trim() || ready.length > 0 || sendable.length > 0) && !uploading && !failed && !sending;
 
-  // A quote added from the conversation gets the cursor in its reply box.
+  // A quote added from the conversation gets the cursor in its reply box. A comment on a diff is
+  // written in the Changes pane, so it keeps the cursor there.
   const quotesRef = useRef<HTMLDivElement>(null);
   const quoteCount = useRef(quotes.length);
   useEffect(() => {
-    if (quotes.length > quoteCount.current) quotesRef.current?.querySelector<HTMLTextAreaElement>(".quote-card:last-child textarea")?.focus();
+    if (quotes.length > quoteCount.current && !quotes[quotes.length - 1]?.on)
+      quotesRef.current?.querySelector<HTMLTextAreaElement>(".quote-card:last-child textarea")?.focus();
     quoteCount.current = quotes.length;
   }, [quotes.length]);
   const blockReason = uploading ? "Waiting for uploads to finish" : failed ? "Remove the attachments that failed first" : null;
@@ -335,14 +339,15 @@ function QuoteCard({
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => fitHeight(ref.current), [quote.reply]);
   const oneLine = quote.text.replace(/\s+/g, " ").trim();
+  const where = quote.on?.label;
   return (
     <div className="quote-card">
       <div className="quote-head">
-        <IconReply size={14} className="quote-icon" />
-        <span className="quote-text" title={quote.text}>
-          “{oneLine}”
+        {where ? <IconMessage size={14} className="quote-icon" /> : <IconReply size={14} className="quote-icon" />}
+        <span className="quote-text" title={where ? `${where}\n${quote.text}` : quote.text}>
+          {where ? <span className="quote-where">{where}</span> : `“${oneLine}”`}
         </span>
-        <button type="button" className="icon-btn sm" aria-label="Remove this quote" onClick={() => onRemove(false)}>
+        <button type="button" className="icon-btn sm" aria-label={where ? `Remove the comment on ${where}` : "Remove this quote"} onClick={() => onRemove(false)}>
           <IconX size={14} />
         </button>
       </div>
@@ -350,8 +355,8 @@ function QuoteCard({
         ref={ref}
         rows={1}
         value={quote.reply}
-        aria-label={`Your reply to “${oneLine.slice(0, 80)}”`}
-        placeholder="Your reply to this…"
+        aria-label={where ? `Your comment on ${where}` : `Your reply to “${oneLine.slice(0, 80)}”`}
+        placeholder={where ? "Your comment…" : "Your reply to this…"}
         onChange={(e) => onReply(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
