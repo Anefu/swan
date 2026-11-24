@@ -9,13 +9,12 @@ import { newPlaceholder, placeholderKeys } from "../connections/placeholders.js"
 import { ruleKey, type Verdict } from "../connections/rules.js";
 import type { PersonaConfig, PersonaStore } from "../personas.js";
 import type { ProxySession } from "../proxy/egress.js";
-import type { PodmanRuntime } from "../sandbox/podman.js";
+import type { SandboxRuntime } from "../sandbox/runtime.js";
 import { errMsg, nowIso, randomId } from "../util.js";
 import { zodTool, type ToolDef } from "./tools.js";
-import { SWAN_TOOL_PATH, SWAN_TOOL_SCRIPT } from "./script-tools.js";
+import { agentHome, envFile, swanToolPath } from "../sandbox/layout.js";
+import { SWAN_TOOL_SCRIPT } from "./script-tools.js";
 
-const HOME = "/home/agent";
-export const ENV_FILE = `${HOME}/.swan/env.sh`;
 export const CONNECTION_TOOLS = new Set(["connection_status", "connection_login"]);
 
 type SignInItem = Extract<ChatItem, { kind: "sign_in" }>;
@@ -27,7 +26,7 @@ export interface CredentialHost {
   personaId: string;
   connections: ConnectionManager;
   personas: PersonaStore;
-  runtime: PodmanRuntime;
+  runtime: SandboxRuntime;
   container(): string | null;
   addItem(it: ChatItem): void;
   syncItem(it: ChatItem): void;
@@ -173,16 +172,19 @@ export class SessionCredentials {
     if (!container) return [];
     const problems: string[] = [];
     const env: string[] = [];
+    const home = agentHome(this.host.id);
+    const toolPath = swanToolPath(this.host.id);
+    const envPath = envFile(this.host.id);
     for (const conn of this.commandConnections()) {
       const { files, env: vars } = this.host.connections.materials(conn);
       const ph = (ref: string, field?: string) => this.placeholderFor(ref, field);
       for (const f of files) {
-        const target = `${HOME}/${f.path.slice(2)}`;
+        const target = `${home}/${f.path.slice(2)}`;
         const content = this.host.connections.render(conn, f.content, ph);
         if (this.written.get(target) === sha(content)) continue;
         const r = await this.host.runtime.exec(
           container,
-          ["sh", "-c", 'd=$(dirname -- "$1") && mkdir -p -- "$d" && r=$(realpath -m -- "$1") && case "$r" in /home/agent/*) ;; *) echo "resolves outside the home directory" >&2; exit 3;; esac && umask 077 && cat > "$r" && chmod "$2" "$r"', "sh", target, f.mode ?? "0600"],
+          ["sh", "-c", 'd=$(dirname -- "$1") && mkdir -p -- "$d" && r=$(realpath -m -- "$1") && case "$r" in "$3"/*) ;; *) echo "resolves outside the home directory" >&2; exit 3;; esac && umask 077 && cat > "$r" && chmod "$2" "$r"', "sh", target, f.mode ?? "0600", home],
           { input: content, timeoutMs: 30_000 },
         );
         if (r.code === 0) this.written.set(target, sha(content));
@@ -190,18 +192,18 @@ export class SessionCredentials {
       }
       for (const [k, v] of Object.entries(vars)) env.push(`export ${k}=${shellQuote(this.host.connections.render(conn, v, ph))}`);
     }
-    if (this.written.get(SWAN_TOOL_PATH) !== sha(SWAN_TOOL_SCRIPT)) {
-      const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1" && chmod 755 "$1"', "sh", SWAN_TOOL_PATH], { input: SWAN_TOOL_SCRIPT, timeoutMs: 30_000 });
-      if (r.code === 0) this.written.set(SWAN_TOOL_PATH, sha(SWAN_TOOL_SCRIPT));
+    if (this.written.get(toolPath) !== sha(SWAN_TOOL_SCRIPT)) {
+      const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1" && chmod 755 "$1"', "sh", toolPath], { input: SWAN_TOOL_SCRIPT, timeoutMs: 30_000 });
+      if (r.code === 0) this.written.set(toolPath, sha(SWAN_TOOL_SCRIPT));
       else problems.push(`Could not add swan-tool to the sandbox: ${r.stderr.trim()}`);
     }
     // swan-tool on every shell's PATH, once.
-    const bin = SWAN_TOOL_PATH.slice(0, SWAN_TOOL_PATH.lastIndexOf("/"));
+    const bin = toolPath.slice(0, toolPath.lastIndexOf("/"));
     env.unshift(`case ":$PATH:" in *":${bin}:"*) ;; *) export PATH="${bin}:$PATH" ;; esac`);
     const envText = `# Written by Swan from connection wrappers; placeholders only.\n${env.join("\n")}\n`;
-    if (this.written.get(ENV_FILE) !== sha(envText)) {
-      const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1"', "sh", ENV_FILE], { input: envText, timeoutMs: 30_000 });
-      if (r.code === 0) this.written.set(ENV_FILE, sha(envText));
+    if (this.written.get(envPath) !== sha(envText)) {
+      const r = await this.host.runtime.exec(container, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1"', "sh", envPath], { input: envText, timeoutMs: 30_000 });
+      if (r.code === 0) this.written.set(envPath, sha(envText));
       else problems.push(`Could not write the connection environment: ${r.stderr.trim()}`);
     }
     return problems;

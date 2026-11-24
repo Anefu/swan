@@ -24,6 +24,7 @@ function setup() {
     runtime: { stopSession: vi.fn(async () => {}) },
     diffs: { removeSession: vi.fn(async () => {}) },
     attachments: { removeSession: vi.fn(async () => {}) },
+    presence: { away: false },
   } as unknown as SessionDeps;
   const m = new SessionManager(deps);
   const s = m.create("p") as unknown as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -142,6 +143,56 @@ describe("a chain of conversations", () => {
     (a as unknown as { turnHops: number }).turnHops = 2;
     expect(await deps.conversations!.deliver(a.id, { id: b.id }, "reply")).toBeNull();
     expect(toB).toHaveBeenCalledWith(a.summary, "reply", undefined, 3);
+    for (const x of m.list()) await m.remove(x.id);
+  });
+});
+
+describe("when the user is away (no Swan window connected)", () => {
+  it("follows the unattended rules for what would ask", async () => {
+    const { m, s } = setup();
+    m.setAway(true);
+    expect(text(await call(s))).toContain("Not allowed in an unattended run");
+    expect(s.pendingApprovals()).toEqual([]);
+    expect(await s.requestNetwork("example.com", 443)).toBe(false);
+    s.deps.personas.get("p").config.unattended.allow = ["deploy"];
+    await call(s);
+    expect(ran).toHaveBeenCalledOnce();
+    ran.mockClear();
+    s.deps.personas.get("p").config.unattended.allow = [];
+    m.setAway(false);
+    for (const x of m.list()) await m.remove(x.id);
+  });
+
+  it("decides what was already waiting when the user leaves", async () => {
+    const { m, s } = setup();
+    s.notice = vi.fn();
+    const refused = call(s);
+    await vi.waitFor(() => expect(s.pendingApprovals()).toHaveLength(1));
+    m.setAway(true);
+    expect(text(await refused)).toContain("left Swan before approving");
+    expect(ran).not.toHaveBeenCalled();
+    m.setAway(false);
+
+    s.deps.personas.get("p").config.unattended.allow = ["deploy"];
+    const allowed = call(s);
+    await vi.waitFor(() => expect(s.pendingApprovals()).toHaveLength(1));
+    m.setAway(true);
+    expect(text(await allowed)).toContain("deployed");
+    expect(s.pendingApprovals()).toEqual([]);
+    ran.mockClear();
+    s.deps.personas.get("p").config.unattended.allow = [];
+    m.setAway(false);
+    for (const x of m.list()) await m.remove(x.id);
+  });
+
+  it("asks the user again once a window is back", async () => {
+    const { m, s } = setup();
+    m.setAway(true);
+    m.setAway(false);
+    const waiting = call(s);
+    await vi.waitFor(() => expect(s.pendingApprovals()).toHaveLength(1));
+    for (const a of s.approvals.values()) a.resolve({ decision: "deny" });
+    expect(text(await waiting)).toContain("The user denied");
     for (const x of m.list()) await m.remove(x.id);
   });
 });

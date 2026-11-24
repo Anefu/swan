@@ -230,6 +230,37 @@ example), see [docs/DESKTOP.md](docs/DESKTOP.md#behind-a-proxy-or-internal-mirro
 goes through the proxy too. Agents reach internal hosts (private addresses) only when you list them
 in the persona's Settings under Allowed hosts → On your company network.
 
+## In a cloud workspace
+
+Swan can run in a Linux cloud workspace (a Coder workspace, say) so its agents keep working after
+you close your laptop. Install the server there, start it, and connect the Mac app to it over SSH
+(see [docs/DESKTOP.md](docs/DESKTOP.md)). In the workspace's `~/.swan/config.yaml`:
+
+```yaml
+runtime:
+  type: workspace        # run commands directly in the workspace instead of a Podman container each
+  passEnv: [GOPATH]      # extra variables commands get from Swan's environment (never tokens or keys)
+proxy: { url: http://proxy.internal:3128 }   # your workspace's proxy, if it has one
+awayAfterSeconds: 60     # no Swan window for this long: you're away
+```
+
+- **The workspace is the sandbox.** Commands run as the workspace's user, with persona folders at
+  their real paths and each conversation's own files under `~/.swan/agents/<id>`. Read-only folders
+  aren't enforced, and nothing stops a command from ignoring the proxy or reading Swan's files: the
+  workspace's own network policy is the boundary, and Swan should hold no secrets there beyond the
+  model sign-in it needs.
+- **Swan's proxy still applies.** Commands get `HTTPS_PROXY` pointing at Swan's proxy, which
+  forwards to the `proxy` above. Website approvals, per-site rules, connections and swan-tool work
+  as on the Mac, and commands trust Swan's certificate through `SSL_CERT_FILE` and friends.
+- **While you're away**, anything that would ask you follows each persona's `unattended` rules, as
+  in a scheduled run, including asks that were waiting when you left. Allowed calls go ahead; the
+  rest are refused and the agent works around them. When a window connects again, Swan asks you.
+- **Coder may stop the workspace on its schedule** while an agent works: Coder counts only open
+  sessions (SSH, terminals, IDEs) as activity, and nothing inside the workspace can extend it
+  without your Coder token. Turn autostop off for that workspace from your Mac with
+  `coder schedule stop <workspace> manual` (it applies from the next start), or ask your Coder admin
+  to raise the template's activity bump.
+
 ## Your data
 
 Everything is in `~/.swan`:

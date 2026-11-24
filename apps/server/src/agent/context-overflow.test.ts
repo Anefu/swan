@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatItem } from "@ph/shared";
 import { MemoryStore } from "../memory.js";
 import { nowIso } from "../util.js";
-import { isContextOverflow, messageChars } from "./context-size.js";
+import { isContextOverflow, messageChars, overflowLimit, promptBudget } from "./context-size.js";
 import { ProviderError, systemText, type ContentBlockParam, type MessageParam, type SystemPrompt } from "./providers.js";
 import { Session, SessionManager, type SessionDeps } from "./session.js";
 
@@ -11,7 +11,7 @@ let personas = 0;
 const OVERFLOW = "Anthropic rejected the request: 400 prompt is too long: 205000 tokens > 200000 maximum";
 
 /** A session over a fake model. `answer` decides each conversation request; checkpoint requests always succeed. */
-function setup(answer: (messages: MessageParam[]) => { error?: string; tokens?: number } = () => ({})) {
+function setup(answer: (messages: MessageParam[]) => { error?: string; tokens?: number } = () => ({}), budget?: number) {
   const pid = `po${++personas}`;
   const persona = {
     id: pid,
@@ -44,6 +44,7 @@ function setup(answer: (messages: MessageParam[]) => { error?: string; tokens?: 
     onApprovalsChanged: vi.fn(),
     providers: {
       releaseSession: vi.fn(),
+      contextBudget: vi.fn(async () => budget),
       runTurn: vi.fn(async (_provider: string, r: { system: SystemPrompt; messages: MessageParam[] }) => {
         const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 });
         if (systemText(r.system).includes("You write checkpoints")) {
@@ -78,6 +79,8 @@ type Internals = {
   pushUser(c: string | ContentBlockParam[]): void;
   agentTurns(message: string | ContentBlockParam[]): Promise<void>;
   rolloverReason(incoming?: number): string | null;
+  prepareEpoch(incoming?: number): Promise<void>;
+  contextLimit(): number;
   addItem(it: ChatItem): void;
   epoch: { n: number; messages: MessageParam[]; contextTokens?: number; measuredAt?: number };
 };
@@ -169,5 +172,47 @@ describe("a request the provider refuses as too long", () => {
     expect(isContextOverflow(new Error("prompt token count of 210000 exceeds the limit of 200000"))).toBe(true);
     expect(isContextOverflow(new Error("Rate limited after retries: 429"))).toBe(false);
     expect(isContextOverflow(new Error("Anthropic rejected the request: invalid tool_use id"))).toBe(false);
+  });
+});
+
+const SDK_BUDGET = "Request exceeds the model's prompt budget after reserving output (130500 tokens; limit 128000). Reduce context or compact before continuing.";
+
+describe("the model's own prompt limit", () => {
+  it("recognises the Copilot SDK's check and reads the limit from refusals", () => {
+    expect(isContextOverflow(new Error(SDK_BUDGET))).toBe(true);
+    expect(overflowLimit(new Error(SDK_BUDGET))).toBe(128_000);
+    expect(overflowLimit(new Error(OVERFLOW))).toBe(200_000);
+    expect(overflowLimit(new Error("prompt token count of 210000 exceeds the limit of 200000"))).toBe(200_000);
+    expect(overflowLimit(new Error("This model's maximum context length is 128,000 tokens."))).toBe(128_000);
+    expect(overflowLimit(new Error("prompt is too long"))).toBeUndefined();
+  });
+
+  it("takes a Copilot model's prompt limit, and no more than its window less its output", () => {
+    expect(promptBudget({ maxPromptTokens: 128_000, maxOutputTokens: 16_000, maxContextWindowTokens: 200_000 })).toBe(128_000);
+    expect(promptBudget({ maxPromptTokens: 190_000, maxOutputTokens: 64_000, maxContextWindowTokens: 200_000 })).toBe(136_000);
+    expect(promptBudget({})).toBeUndefined();
+  });
+
+  it("rolls over before the limit the provider reports for the model", async () => {
+    const { x, done } = setup(() => ({ tokens: 100_000 }), 128_000);
+    await x.prepareEpoch();
+    expect(x.contextLimit()).toBe(128_000);
+    await send(x, "first");
+    await send(x, "second");
+    // 100k of 128k is past rolloverAt (0.75), though far from contextLimitTokens (200k).
+    expect(x.rolloverReason()).toMatch(/context reached 78% of 128k/);
+    await done();
+  });
+
+  it("recovers from the SDK's refusal and keeps to the limit it gave", async () => {
+    let calls = 0;
+    const { x, notices, done } = setup(() => (++calls === 2 ? { error: SDK_BUDGET } : {}));
+    await x.openEpoch();
+    await send(x, "first");
+    await send(x, "the message that overflowed");
+    expect(x.epoch.n).toBe(2);
+    expect(notices.some((n) => n.includes("started a new context"))).toBe(true);
+    expect(x.contextLimit()).toBe(128_000);
+    await done();
   });
 });

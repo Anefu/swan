@@ -8,6 +8,7 @@
     "build": "pnpm --filter @ph/desktop build",
     "start": "pnpm --filter @ph/desktop start",
     "package": "pnpm --filter @ph/desktop package",
+    "package-server": "pnpm --filter @ph/desktop package-server",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "aws-stub": "pnpm --filter @ph/aws-stub start"

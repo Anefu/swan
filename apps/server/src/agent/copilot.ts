@@ -297,6 +297,7 @@ export class CopilotProvider {
       reasoningEfforts: (m.supportedReasoningEfforts ?? []) as Effort[],
       maxPromptTokens: m.capabilities?.limits?.max_prompt_tokens,
       maxOutputTokens: m.capabilities?.limits?.max_output_tokens,
+      maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens,
     }));
   }
 

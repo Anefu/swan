@@ -6,7 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ResolvedCredential } from "../connections/manager.js";
 import { isHttpMcp, type McpHttpConfig, type McpStdioConfig } from "../personas.js";
 import { Redactor } from "../proxy/egress.js";
-import type { PodmanRuntime } from "../sandbox/podman.js";
+import type { SandboxRuntime } from "../sandbox/runtime.js";
 import type { Settings } from "../settings.js";
 import { errMsg, hostMatches, log, truncateMiddle } from "../util.js";
 import { mcpTool, type ToolDef, type ToolOutput } from "./tools.js";
@@ -71,7 +71,7 @@ export class SessionMcp {
   private conns = new Map<string, Conn>();
 
   constructor(
-    private runtime: PodmanRuntime,
+    private runtime: SandboxRuntime,
     private creds: McpCredentials,
     private settings: Settings,
     private container: string,
@@ -121,12 +121,8 @@ export class SessionMcp {
     } else {
       const env: Record<string, string> = {};
       for (const [k, v] of Object.entries(conn.cfg.env)) env[k] = this.renderPlaceholders(v);
-      const args = this.runtime.execArgs(this.container, [conn.cfg.command, ...conn.cfg.args], {
-        interactive: true,
-        env,
-        cwd: conn.cfg.cwd ?? this.workdir,
-      });
-      const stdio = new StdioClientTransport({ command: this.settings.runtime.binary, args, stderr: "pipe" });
+      const cmd = this.runtime.stdioCommand(this.container, [conn.cfg.command, ...conn.cfg.args], { env, cwd: conn.cfg.cwd ?? this.workdir });
+      const stdio = new StdioClientTransport({ command: cmd.command, args: cmd.args, env: cmd.env, cwd: cmd.cwd, stderr: "pipe" });
       let stderrTail = "";
       stdio.stderr?.on("data", (c: Buffer) => (stderrTail = (stderrTail + c.toString("utf8")).slice(-2000)));
       transport = stdio;

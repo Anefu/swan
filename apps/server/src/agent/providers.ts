@@ -4,6 +4,7 @@ import type { Effort, ProviderModel, ProviderStatus, Usage } from "@ph/shared";
 import type { SecretStore } from "../secrets.js";
 import type { ProviderConfig, Settings } from "../settings.js";
 import { errMsg } from "../util.js";
+import { promptBudget } from "./context-size.js";
 import { CopilotProvider } from "./copilot.js";
 import type { ToolDef } from "./tools.js";
 
@@ -337,6 +338,17 @@ export class ProviderRegistry {
 
   listModels(name: string): Promise<ProviderModel[]> {
     return this.copilotProvider(name).listModels();
+  }
+
+  /** The prompt tokens a model takes, where its provider says (Copilot); undefined otherwise or on error. */
+  async contextBudget(name: string, modelId: string): Promise<number | undefined> {
+    if (this.settings.providers[name]?.type !== "copilot") return undefined;
+    try {
+      const m = (await this.listModels(name)).find((x) => x.id === modelId);
+      return m ? promptBudget(m) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Free per-session provider state (the copilot runtime session). */

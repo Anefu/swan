@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { AttachmentMeta } from "@ph/shared";
+import { attachmentsDir } from "./sandbox/layout.js";
 import { paths } from "./settings.js";
 import { exists, randomId, writeFileAtomic } from "./util.js";
 
@@ -23,7 +24,7 @@ export class AttachmentStore {
     const id = randomId("att_", 6);
     const mediaType = (a.mediaType || "application/octet-stream").toLowerCase();
     const kind = IMAGE_TYPES.has(mediaType) && buf.length <= MAX_IMAGE_BYTES ? "image" : mediaType === "application/pdf" ? "pdf" : "file";
-    const meta: AttachmentMeta = { id, name: base, mediaType, size: buf.length, kind, sandboxPath: `/home/agent/attachments/${id.slice(4)}-${base}` };
+    const meta: AttachmentMeta = { id, name: base, mediaType, size: buf.length, kind, sandboxPath: `${attachmentsDir(sessionId)}/${id.slice(4)}-${base}` };
     await fs.mkdir(this.dir(sessionId), { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(this.dir(sessionId), id), buf, { mode: 0o600 });
     await writeFileAtomic(path.join(this.dir(sessionId), `${id}.json`), JSON.stringify(meta), 0o600);

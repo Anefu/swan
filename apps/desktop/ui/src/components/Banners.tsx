@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RuntimeStatus } from "@ph/shared";
+import { remoteHost } from "../api";
 import { useStore } from "../store";
 import { cls, runtimeLevel, runtimeProblems } from "../util";
 import { IconAlert, IconCheck, IconInfo, IconUnplug, IconWarning, IconX } from "./icons";
@@ -25,7 +26,7 @@ export function ConnectionLine() {
     <div className="line-banner warn" role="status">
       <IconUnplug size={16} />
       <span>
-        <strong>{state.server === "unreachable" ? "Cannot reach the Swan server." : "Reconnecting."}</strong>{" "}
+        <strong>{state.server === "unreachable" ? `Cannot reach the Swan server${remoteHost() ? ` on ${remoteHost()}` : ""}.` : "Reconnecting."}</strong>{" "}
         {state.ws.status === "connecting" ? "Trying now…" : secs !== null ? `Next try in ${secs} s.` : ""} What you see may be out of
         date; nothing is replayed automatically.
       </span>
@@ -39,6 +40,8 @@ export function ConnectionLine() {
 type PodmanNeed = NonNullable<RuntimeStatus["needs"]>;
 
 export function PodmanNeedText({ needs }: { needs: PodmanNeed }) {
+  const host = remoteHost();
+  if (host && needs === "install") return <>Podman is not installed on {host}. Install it there, then check again.</>;
   return needs === "install" ? (
     <>
       Podman is not installed. Install it with <code>brew install podman</code> or{" "}
@@ -56,7 +59,7 @@ export function PodmanActions({ needs }: { needs: PodmanNeed }) {
   const { actions } = useStore();
   return needs === "install" ? (
     <>
-      <CopyButton text="brew install podman" label="Copy command" showLabel />
+      {!remoteHost() && <CopyButton text="brew install podman" label="Copy command" showLabel />}
       <button type="button" className="btn sm" onClick={() => void actions.prepareRuntime("retry")}>
         Check again
       </button>

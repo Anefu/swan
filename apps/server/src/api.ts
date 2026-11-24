@@ -16,7 +16,8 @@ import type { ProviderRegistry } from "./agent/providers.js";
 import type { SessionManager } from "./agent/session.js";
 import { PERSONA_ID, type PersonaStore } from "./personas.js";
 import type { EgressProxy } from "./proxy/egress.js";
-import type { PodmanRuntime } from "./sandbox/podman.js";
+import { inWorkspace } from "./sandbox/layout.js";
+import type { SandboxRuntime } from "./sandbox/runtime.js";
 import type { SecretStore } from "./secrets.js";
 import type { Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
@@ -36,7 +37,7 @@ export interface ApiDeps {
   connections: ConnectionManager;
   personas: PersonaStore;
   skills: SkillRegistry;
-  runtime: PodmanRuntime;
+  runtime: SandboxRuntime;
   proxy: EgressProxy;
   providers: ProviderRegistry;
   sessions: SessionManager;
@@ -92,10 +93,16 @@ export function requestGuard(token: string) {
 /** Fans server events out to WebSocket clients; item-level events only to subscribers. */
 export class Hub {
   private clients = new Set<{ ws: WebSocket; subs: Set<string> }>();
+  /** Called with the number of connected windows whenever it changes. */
+  onPresence?: (windows: number) => void;
   add(ws: WebSocket) {
     const c = { ws, subs: new Set<string>() };
     this.clients.add(c);
-    ws.on("close", () => this.clients.delete(c));
+    this.onPresence?.(this.clients.size);
+    ws.on("close", () => {
+      this.clients.delete(c);
+      this.onPresence?.(this.clients.size);
+    });
     return c;
   }
   broadcast = (ev: ServerEvent) => {
@@ -285,7 +292,8 @@ export async function startApi(d: ApiDeps, hub: Hub) {
     const { p, norm, host } = resolveSandboxPath(req.params.id, req.query.path ?? "/workspace");
     if (!host) {
       const entries: FileEntry[] = p.folders
-        .filter((f) => path.posix.dirname(f.mountPath) === norm || (norm === "/workspace" && f.mountPath.startsWith("/workspace/")))
+        // The top level lists every folder; in a workspace they are at their real paths, not under /workspace.
+        .filter((f) => path.posix.dirname(f.mountPath) === norm || (norm === "/workspace" && (inWorkspace() || f.mountPath.startsWith("/workspace/"))))
         .map((f) => ({ name: path.posix.basename(f.mountPath), path: f.mountPath, type: "dir" as const, size: 0 }));
       return { path: norm, entries };
     }

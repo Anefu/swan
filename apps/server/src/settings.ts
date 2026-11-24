@@ -68,6 +68,12 @@ export const SettingsSchema = z.object({
   proxyPort: z.number().int().default(4318),
   runtime: z
     .object({
+      // podman: each conversation in its own container (the default). workspace: commands run directly
+      // on this machine, for a cloud workspace that is itself the sandbox (Swan's proxy still applies).
+      type: z.enum(["podman", "workspace"]).default("podman"),
+      // workspace: variables from Swan's own environment that commands also get (PATH, HOME, USER,
+      // LANG, TERM, TZ, SHELL, TMPDIR and LC_* always do; nothing named like a token, key or secret ever does).
+      passEnv: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
       binary: z.string().default("podman"),
       image: z.string().default("localhost/persona-harness-sandbox"),
       network: z.string().default("ph-internal"),
@@ -108,6 +114,9 @@ export const SettingsSchema = z.object({
   connections: z.unknown().optional(), // validated and hot-reloaded by the ConnectionManager
   toolOutputLimit: z.number().int().default(30_000),
   bashTimeoutMs: z.number().int().default(120_000),
+  // With no Swan window connected for this long, the user is away: what would ask follows each
+  // persona's unattended rules, including asks already waiting. 0: never.
+  awayAfterSeconds: z.number().int().min(0).default(60),
   contextLimitTokens: z.number().int().default(200_000), // assumed model context when the provider does not say
   rolloverAt: z.number().min(0.3).max(0.95).default(0.75), // share of the context that triggers a new epoch
   // What opens a new epoch: "full" structured checkpoint + recent events, "minimal" continuity

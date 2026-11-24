@@ -6,7 +6,6 @@ import type { ToolDef } from "./tools.js";
  * it never reaches the internet.
  */
 export const TOOL_HOST = "tools.swan.internal";
-export const SWAN_TOOL_PATH = "/home/agent/.swan/bin/swan-tool";
 
 /** Tools a script can't call: the shell it runs in, and what only the agent itself can do. */
 export const NOT_FROM_SCRIPTS = new Set(["bash", "ask_user", "ask_parent", "agent", "agent_message", "agent_status", "agent_stop"]);

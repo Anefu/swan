@@ -1,4 +1,5 @@
-# A tag vX.Y.Z on main builds Swan for Apple silicon and attaches it to a GitHub pre-release.
+# A tag vX.Y.Z on main builds Swan for Apple silicon and the headless server for Linux (x64 and
+# arm64), and attaches them to a GitHub pre-release with one SHA256SUMS.txt for all of them.
 # The build is unsigned (ad-hoc); install.sh installs it without macOS blocking it, and
 # docs/DESKTOP.md explains what signing will add.
 name: Release
@@ -42,10 +43,10 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
-      - name: Install script (shellcheck, ASCII only for macOS's bash 3.2)
+      - name: Install scripts (shellcheck, ASCII only for macOS's bash 3.2)
         run: |
-          shellcheck install.sh
-          perl -ne 'if (/[^\x00-\x7F]/) { print "install.sh:$.: $_"; $bad = 1 } END { exit $bad }' install.sh
+          shellcheck install.sh install-server.sh
+          perl -ne 'if (/[^\x00-\x7F]/) { print "$ARGV:$.: $_"; $bad = 1 } close ARGV if eof; END { exit $bad }' install.sh install-server.sh
 
   build:
     name: Build Swan for macOS
@@ -78,17 +79,57 @@ jobs:
             apps/desktop/release/SHA256SUMS.txt
           if-no-files-found: error
 
+  # The server alone, for Linux machines the app reaches over SSH (install-server.sh). Each arch is
+  # built and started on its own runner.
+  server-linux:
+    name: Build the server for Linux (${{ matrix.arch }})
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # nothing here starts Electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package-server --arch ${{ matrix.arch }}
+      - name: The package starts from its own launcher
+        run: |
+          mkdir "$RUNNER_TEMP/swan-server"
+          tar -xzf apps/desktop/release/swan-server-*-linux-${{ matrix.arch }}.tar.gz -C "$RUNNER_TEMP/swan-server" --strip-components=1
+          node apps/desktop/scripts/smoke-server.mjs --launcher "$RUNNER_TEMP/swan-server/bin/swan-server"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swan-server-linux-${{ matrix.arch }}
+          path: apps/desktop/release/swan-server-*.tar.gz
+          if-no-files-found: error
+
   publish:
     name: Publish the pre-release
-    needs: build
+    needs: [build, server-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: swan-macos
+          pattern: swan-*
+          merge-multiple: true
           path: dist
+      - name: One checksum file for every asset
+        working-directory: dist
+        run: |
+          sha256sum -c SHA256SUMS.txt # the DMG is the one the Mac job checked
+          sha256sum Swan-*.dmg swan-server-*.tar.gz | tee SHA256SUMS.txt
       - name: Create the GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,6 +144,12 @@ jobs:
           Or download the DMG below. It isn't signed by Apple, so macOS blocks the first open: allow it in
           System Settings → Privacy & Security → Open Anyway (or run `xattr -dr com.apple.quarantine /Applications/Swan.app`).
           Podman is required (`brew install podman`); Swan offers to set up its machine on first start.
+
+          Swan's server on its own, for a Linux machine (x86_64 or arm64) you reach over SSH:
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/Anefu/swan/main/install-server.sh | bash
+          ```
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease \
             --title "Swan ${GITHUB_REF_NAME#v}" --notes-file notes.md --generate-notes
@@ -125,3 +172,28 @@ jobs:
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
           [ "$version" = "${GITHUB_REF_NAME#v}" ] || { echo "::error::installed $version, expected ${GITHUB_REF_NAME#v}"; exit 1; }
           if xattr -p com.apple.quarantine "$app" 2>/dev/null; then echo "::error::the installed app is quarantined"; exit 1; fi
+
+  install-server:
+    name: Server install script installs the release (Linux)
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install, start and stop the server
+        env:
+          PH_HOME: ${{ runner.temp }}/swan-home
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          bash install-server.sh "$GITHUB_REF_NAME"
+          bin="$HOME/.local/bin/swan-server"
+          case "$(readlink -f "$bin")" in
+            */swan-server/"$version"/bin/swan-server) ;;
+            *) echo "::error::$bin does not point at $version"; exit 1 ;;
+          esac
+          "$bin" & pid=$!
+          for _ in $(seq 1 60); do grep -Eqs '"port": [0-9]' "$PH_HOME/server.json" && break; sleep 1; done
+          grep -q "\"version\": \"$version\"" "$PH_HOME/server.json" || { echo "::error::the server did not start as $version"; exit 1; }
+          curl -fsS "http://127.0.0.1:$(jq .port "$PH_HOME/server.json")/" >/dev/null
+          kill -TERM "$pid"
+          wait "$pid"

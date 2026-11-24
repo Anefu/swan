@@ -12,6 +12,7 @@ import { patternError } from "./connections/rules.js";
 import { PH_HOME, paths, SandboxToolsSchema, type Settings } from "./settings.js";
 import type { SkillRegistry } from "./skills.js";
 import { TypedEmitter, debounce, errMsg, exists, expandHome, log, writeFileAtomic } from "./util.js";
+import { defaultMount, inWorkspace } from "./sandbox/layout.js";
 
 export const PERSONA_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -202,12 +203,13 @@ function resolveFolders(cfg: PersonaConfig, errors: string[]): FolderMount[] {
       errors.push(`folder ${f.path} overlaps the harness home (${PH_HOME}), which holds secrets`);
       continue;
     }
-    if (!isInside(real, home)) {
+    if (!inWorkspace() && !isInside(real, home)) {
       errors.push(`folder ${f.path} is outside your home directory; Podman on macOS only shares $HOME by default`);
       continue;
     }
-    const mountPath = f.mount ?? `/workspace/${path.basename(real)}`;
-    if (!MOUNT_PATH.test(mountPath)) {
+    // In a workspace, commands see folders where they are.
+    const mountPath = inWorkspace() ? defaultMount(real) : (f.mount ?? defaultMount(real));
+    if (!inWorkspace() && !MOUNT_PATH.test(mountPath)) {
       errors.push(`mount ${mountPath} must look like /workspace/<name>`);
       continue;
     }

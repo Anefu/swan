@@ -28,6 +28,42 @@ offers to create one (a one-time download of about 1 GB); a stopped machine is s
 When a persona uses folders in Documents, Desktop or Downloads, macOS asks once whether Swan may
 access them. An unsigned build is a new app to macOS each time, so it asks again after an update.
 
+## The server on Linux
+
+Swan's server also runs on its own on a Linux machine (x86_64 or arm64, glibc), such as a cloud
+workspace you reach over SSH; the app on your Mac shows its UI. Install or update it there, without
+root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anefu/swan/main/install-server.sh | bash
+```
+
+[install-server.sh](../install-server.sh) downloads the release's
+`swan-server-<version>-linux-<arch>.tar.gz`, checks it against `SHA256SUMS.txt`, unpacks it into
+`~/.local/share/swan-server/<version>`, points `current` at it and links
+`~/.local/bin/swan-server`. It keeps the previous version and removes older ones. A version after
+`bash -s --` installs that one; `SWAN_SERVER_DIR` and `SWAN_BIN_DIR` install somewhere else.
+
+```bash
+swan-server                              # in the foreground; Ctrl-C stops it
+tmux new-session -d -s swan swan-server  # or in the background
+```
+
+The package holds the same server, Copilot SDK, examples and Containerfile as the app, with its own
+Node (the version in `apps/desktop/node-runtime.json`); nothing else needs installing. Data lives
+in `~/.swan` (`PH_HOME` for another folder) and the API listens on 127.0.0.1 only, on the port in
+`config.yaml` (4317 by default). The app connects over SSH: it reads `~/.swan/api-token` and
+reaches the port through a tunnel, so nothing is exposed on the network. A running server keeps
+its version after an update until you restart it. Agents' tools run with the runtime in
+`config.yaml`, as on the Mac; Podman's sandbox network on Linux is not checked yet (Not yet, below).
+
+Build the package from a checkout (on any OS; the Linux Node and native packages are downloaded
+and checked against `node-runtime.json` and `pnpm-lock.yaml`):
+
+```bash
+pnpm package-server --arch x64   # or arm64: apps/desktop/release/swan-server-<version>-linux-<arch>.tar.gz
+```
+
 ## Behind a proxy or internal mirrors
 
 On a network that reaches the internet only through a proxy and internal mirrors (an Artifactory,
@@ -124,6 +160,36 @@ coreutils; Swan says what is missing if not. Build for `arm64` (Apple silicon), 
 emulated. The sandbox's limits are the same as with Swan's image: they come from how Swan runs the
 container, not from the image. The relay always runs Swan's own image.
 
+## Connect to a remote Swan
+
+The app can use a Swan server on another machine, such as a Linux cloud workspace, instead of the
+one it starts on this Mac. Agents then work there: submit a task, close the laptop, and reconnect
+later to see the result.
+
+1. On the remote machine, start Swan with `swan-server`. It listens on its own `127.0.0.1` only
+   (`port:` in its `~/.swan/config.yaml`, 4317 by default).
+2. On the Mac, make sure `ssh <host>` works in Terminal without a password prompt (keys or an
+   agent). For a Coder workspace, run `coder config-ssh` once; the host is then
+   `coder.<workspace>`.
+3. Choose Swan › Connect to Remote Swan…, enter the SSH host (and the port and Swan's home there if
+   they aren't the defaults), and press Connect.
+
+The app runs the system `ssh` with `BatchMode=yes`: it reads the server's API token from
+`<home>/api-token` with one `ssh <host> cat …`, then keeps `ssh -N -L 127.0.0.1:<local port>:127.0.0.1:<port>`
+open and loads its UI through it, as with a local server. Nothing listens beyond loopback on either
+machine. When the tunnel drops (sleep, a network change) it reconnects with backoff on the same
+local port, and right away when the Mac wakes; the window shows "Reconnecting" meanwhile. Quitting
+the app closes the tunnel; the remote Swan keeps running.
+
+The choice is kept in the app's own settings (not in `config.yaml`) and applies at the next start
+too; Swan › Use This Mac switches back and starts the local server again. Swan settings and the
+window title name the host the window is on. Folder paths in a persona's settings are paths on the
+remote machine, and Help › Open Data Folder and Show Server Log are off, since both are there.
+Connecting from this Mac stops the local server, as quitting does.
+
+If the connection fails the app says why (unknown host, SSH login refused, Swan not running there)
+with ssh's own message, and offers to try again, change the server or use this Mac.
+
 ## Build and run from a checkout
 
 ```bash
@@ -188,11 +254,14 @@ folder, from the app or a checkout, does not start; the app offers to open the o
 2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
 `.github/workflows/release.yml` checks that the tag is on `main` and matches the version, runs the
-same checks as CI on Linux, builds the app on macOS, starts it once as a check, and publishes a
-GitHub pre-release with the DMG and `SHA256SUMS.txt`. Then it runs `install.sh` for that version on
-macOS and checks that the installed app is the new version and isn't quarantined.
+same checks as CI on Linux, builds the app on macOS, starts it once as a check, builds and starts
+the Linux server package on x64 and arm64 runners, and publishes a GitHub pre-release with the DMG,
+the two server tarballs and one `SHA256SUMS.txt` for all of them. Then it runs `install.sh` for that
+version on macOS and checks that the installed app is the new version and isn't quarantined, and
+runs `install-server.sh` on Linux and starts the installed server.
 
-CI on every pull request builds the server bundle and starts it the way the app does (Linux). It
+CI on every pull request builds the server bundle and starts it the way the app does (Linux), and
+builds the Linux x64 server package and starts it from its launcher. It
 builds and starts the packaged app on macOS only when `apps/desktop/`, the workflows or the lockfile
 change.
 
@@ -205,5 +274,5 @@ change.
   on the hardened runtime, makes the asar integrity check binding, and lets the bundled Node be
   limited to starting from Swan (a launch constraint).
 - **Updates.** Download the new DMG for now; auto-update needs signed builds.
-- **Intel Macs, Linux, Windows.** Linux needs the sandbox's route to the proxy checked without
+- **Intel Macs, a Linux app, Windows.** (The server alone runs on Linux, above.) A Linux app needs the sandbox's route to the proxy checked without
   Podman's macOS VM; Windows also needs its own file permissions, path handling and shutdown.

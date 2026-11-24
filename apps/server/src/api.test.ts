@@ -8,6 +8,12 @@ describe("API guards", () => {
     for (const h of [undefined, "", "evil.example", "evil.example:4317", "127.0.0.1.evil.example", "localhost.evil.example:4317"]) expect(hostAllowed(h)).toBe(false);
   });
 
+  it("accepts loopback on another port (the app's end of an ssh tunnel), still only loopback", () => {
+    for (const h of ["127.0.0.1:53211", "localhost:61000", "[::1]:50000"]) expect(hostAllowed(h)).toBe(true);
+    for (const h of ["10.0.0.5:53211", "192.168.1.2:4317", "coder.myworkspace:4317", "0.0.0.0:53211", "127.0.0.2:53211", "[::ffff:127.0.0.1]:53211"])
+      expect(hostAllowed(h)).toBe(false);
+  });
+
   it("accepts the app's pages and local development pages, nothing else (CSRF)", () => {
     for (const o of [undefined, "swan://app", "http://127.0.0.1:4317", "http://localhost:5173"]) expect(originAllowed(o)).toBe(true);
     for (const o of ["null", "https://evil.example", "http://127.0.0.1.evil.example", "swan://app.evil", "swan://other", "file://", "chrome-extension://abc"])

@@ -2,7 +2,8 @@ import path from "node:path";
 import { Ajv, type ValidateFunction } from "ajv";
 import { z } from "zod";
 import type { ChatItem } from "@ph/shared";
-import type { PodmanRuntime } from "../sandbox/podman.js";
+import { skillPath } from "../sandbox/layout.js";
+import type { SandboxRuntime } from "../sandbox/runtime.js";
 import type { SkillRegistry } from "../skills.js";
 import { truncateMiddle } from "../util.js";
 
@@ -15,7 +16,7 @@ export interface ToolOutput {
 }
 
 export interface ToolContext {
-  runtime: PodmanRuntime;
+  runtime: SandboxRuntime;
   container: string;
   workdir: string;
   signal: AbortSignal;
@@ -263,16 +264,17 @@ export function skillTool(): ToolDef {
     source: "skill",
     description:
       "Load a skill's full instructions (SKILL.md) and list its files. Call this as soon as a task matches a skill " +
-      "description from the system prompt, before doing the task. Skill files live read-only at /skills/<name>.",
+      "description from the system prompt, before doing the task. It says where the skill's files are; they are read-only.",
     schema: z.object({ name: z.string().min(1) }),
     preview: (i) => i.name,
     primaryArg: (i) => i.name,
     async run(i, ctx) {
       const skill = ctx.personaSkills.includes(i.name) ? ctx.skills.get(i.name) : undefined;
       if (!skill) return { text: `Unknown skill "${i.name}". Available: ${ctx.personaSkills.join(", ") || "none"}`, isError: true };
-      const r = await ctx.runtime.exec(ctx.container, ["find", `/skills/${i.name}`, "-maxdepth", "3", "-type", "f"], { timeoutMs: 15_000, signal: ctx.signal });
+      const where = skillPath(skill.name, skill.hostPath);
+      const r = await ctx.runtime.exec(ctx.container, ["find", where, "-maxdepth", "3", "-type", "f"], { timeoutMs: 15_000, signal: ctx.signal });
       const files = r.stdout.split("\n").filter(Boolean).slice(0, 100).join("\n");
-      return { text: `# Skill: ${skill.name}\nLocation: /skills/${skill.name}\n\n${skill.body.trim()}\n\n## Files\n${files}` };
+      return { text: `# Skill: ${skill.name}\nLocation: ${where}\n\n${skill.body.trim()}\n\n## Files\n${files}` };
     },
   });
 }

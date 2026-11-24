@@ -7,6 +7,7 @@ import type { CertAuthority } from "../proxy/ca.js";
 import { paths, type Settings } from "../settings.js";
 import { adoptFiles, adoptKey, buildArgs, hasTools, proxyEnv, buildFiles, buildKey } from "./image.js";
 import { TypedEmitter, errMsg, log, randomId } from "../util.js";
+import type { SandboxRuntime } from "./runtime.js";
 
 export interface RunResult {
   code: number;
@@ -43,7 +44,7 @@ export interface SessionContainerSpec {
  * Thin wrapper over the podman CLI. Everything the agent does goes through `podman exec`
  * into a per-session container that sits on an --internal network.
  */
-export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
+export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> implements SandboxRuntime {
   status: RuntimeStatus;
   private rt: Settings["runtime"];
 
@@ -401,6 +402,10 @@ export class PodmanRuntime extends TypedEmitter<{ status: [RuntimeStatus] }> {
     for (const [k, v] of Object.entries(opts.env ?? {})) args.push("-e", `${k}=${v}`);
     args.push(container, ...argv);
     return args;
+  }
+
+  stdioCommand(container: string, argv: string[], opts: { env?: Record<string, string>; cwd?: string }) {
+    return { command: this.rt.binary, args: this.execArgs(container, argv, { ...opts, interactive: true }) };
   }
 
   /** Run argv in the session container. Arguments are passed as argv, never through a host shell. */

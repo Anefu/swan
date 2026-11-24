@@ -330,6 +330,7 @@ export interface ProviderModel {
   reasoningEfforts: Effort[];
   maxPromptTokens?: number;
   maxOutputTokens?: number;
+  maxContextWindowTokens?: number;
 }
 
 // ---------- REST endpoints ----------
