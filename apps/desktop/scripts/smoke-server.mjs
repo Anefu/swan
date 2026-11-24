@@ -1,6 +1,7 @@
 // Starts the bundled server the way the app does (plain Node, IPC channel, PH_RESOURCES) against
 // a throwaway home, and checks the launcher protocol, the home lock and the API guards. Needs
 // `pnpm build` first; no Podman (the runtime points at a binary that does not exist).
+// With --launcher <path>, starts the Linux package's bin/swan-server instead (its own Node and files).
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "build", "resources");
+const flag = process.argv.indexOf("--launcher");
+const launcher = flag > 0 ? path.resolve(process.argv[flag + 1]) : null;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "swan-smoke-"));
 fs.writeFileSync(
   path.join(home, "config.yaml"),
@@ -28,8 +31,9 @@ fs.writeFileSync(
 
 /** The server and its first IPC message. */
 function start() {
-  const child = spawn(process.execPath, [path.join(resources, "server", "index.mjs")], {
-    env: { PATH: process.env.PATH, HOME: home, PH_HOME: home, PH_RESOURCES: resources, SWAN_VERSION: "smoke" },
+  const [cmd, args, files] = launcher ? [launcher, [], {}] : [process.execPath, [path.join(resources, "server", "index.mjs")], { PH_RESOURCES: resources }];
+  const child = spawn(cmd, args, {
+    env: { PATH: process.env.PATH, HOME: home, PH_HOME: home, SWAN_VERSION: "smoke", ...files },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let out = "";

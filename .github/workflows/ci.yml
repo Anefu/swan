@@ -33,10 +33,16 @@ jobs:
       - run: pnpm build
       - name: Bundled server starts the way the app starts it
         run: pnpm --filter @ph/desktop smoke-server
-      - name: Install script (shellcheck, ASCII only for macOS's bash 3.2)
+      - name: Linux server package starts from its own launcher
         run: |
-          shellcheck install.sh
-          perl -ne 'if (/[^\x00-\x7F]/) { print "install.sh:$.: $_"; $bad = 1 } END { exit $bad }' install.sh
+          pnpm package-server --arch x64
+          mkdir "$RUNNER_TEMP/swan-server"
+          tar -xzf apps/desktop/release/swan-server-*-linux-x64.tar.gz -C "$RUNNER_TEMP/swan-server" --strip-components=1
+          node apps/desktop/scripts/smoke-server.mjs --launcher "$RUNNER_TEMP/swan-server/bin/swan-server"
+      - name: Install scripts (shellcheck, ASCII only for macOS's bash 3.2)
+        run: |
+          shellcheck install.sh install-server.sh
+          perl -ne 'if (/[^\x00-\x7F]/) { print "$ARGV:$.: $_"; $bad = 1 } close ARGV if eof; END { exit $bad }' install.sh install-server.sh
 
   sandbox-image:
     name: Sandbox image

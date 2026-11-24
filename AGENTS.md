@@ -24,6 +24,7 @@ tools/aws-stub    Local AWS + Kubernetes stand-in and a reference connection wra
 sandbox/          Containerfile for the session image
 examples/         Seed personas, skills, secrets template, demo workspace
 install.sh        Installs or updates Swan from the newest release (curl … | bash; bash 3.2, shellcheck clean)
+install-server.sh Installs or updates the headless server on Linux (no root; shellcheck clean, ASCII only)
 ```
 
 ## Commands
@@ -35,6 +36,7 @@ pnpm test             # unit and integration tests (no network, Podman or API ke
 pnpm build            # the app's main process, UI and server bundle (apps/desktop/build)
 pnpm start            # build and open the app (needs Podman)
 pnpm package          # unsigned Swan.app and DMG in apps/desktop/release
+pnpm package-server --arch x64   # the server for Linux (x64|arm64) as a tarball in apps/desktop/release
 pnpm dev              # server with restart + the UI with hot reload in the app window
 pnpm aws-stub         # local AWS/Kubernetes stub, see tools/aws-stub/README.md
 ```
