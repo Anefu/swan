@@ -53,6 +53,12 @@ const tokenFromDocument = (doc: Document) => metaFrom(doc, "ph-token");
 /** A value the app filled into the page (ph-token, ph-ws); null when it is still the placeholder. */
 export const pageMeta = (name: string) => metaFrom(document, name);
 
+/** The SSH host of a remote Swan the app connected to; null when the server runs on this Mac. */
+export const remoteHost = () => pageMeta("ph-server");
+
+/** Where the server's folders and commands are: "this Mac" or the remote host. */
+export const serverMachine = () => remoteHost() ?? "this Mac";
+
 export function readToken(): string | null {
   return tokenFromDocument(document);
 }

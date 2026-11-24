@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PersonaImportPreview } from "@ph/shared";
-import { api } from "../api";
+import { api, serverMachine } from "../api";
 import { useStore } from "../store";
 import { errorMessage } from "../util";
 import { PaneHead } from "./Cards";
@@ -42,7 +42,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
 
   const taken = !!preview && state.personas.some((p) => p.id === id);
   const idError = !ID_RE.test(id) ? "Use lowercase letters, digits and dashes." : taken ? "A persona already has this id." : null;
-  const folderError = folders.some((f) => f.keep && !f.path.trim()) ? "Enter a folder on this Mac, or leave it out." : null;
+  const folderError = folders.some((f) => f.keep && !f.path.trim()) ? `Enter a folder on ${serverMachine()}, or leave it out.` : null;
 
   const doImport = async () => {
     if (!file || !preview || idError || folderError || !name.trim()) return;
@@ -113,7 +113,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
                       {f.keep && (
                         <input
                           className="input mono"
-                          aria-label={`Folder on this Mac for ${orig.mount ?? orig.path}`}
+                          aria-label={`Folder on ${serverMachine()} for ${orig.mount ?? orig.path}`}
                           value={f.path}
                           onChange={(e) => setFolders((x) => x.map((y, j) => (j === i ? { ...y, path: e.target.value } : y)))}
                         />
@@ -173,7 +173,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
                   ),
                 )}
                 {preview.skillsNotIncluded.length > 0 && (
-                  <p className="hint">Not in the file, and not on this Mac: {preview.skillsNotIncluded.join(", ")}.</p>
+                  <p className="hint">Not in the file, and not on {serverMachine()}: {preview.skillsNotIncluded.join(", ")}.</p>
                 )}
               </section>
             )}
@@ -200,7 +200,7 @@ export function ImportPane({ onClose }: { onClose: () => void }) {
                 <h3>Also needed</h3>
                 {preview.needs.commands.length > 0 && (
                   <p className="small">
-                    Sign-in tools on this Mac: <span className="mono">{preview.needs.commands.join(", ")}</span>
+                    Sign-in tools on {serverMachine()}: <span className="mono">{preview.needs.commands.join(", ")}</span>
                   </p>
                 )}
                 {preview.needs.sandboxTools && <p className="small">The sandbox it came from had extra tools (sandboxTools in config.yaml); its tasks may need them.</p>}

@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, type WebPreferences, app, dialog, protocol, session, shell } from "electron";
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, type WebPreferences, app, dialog, powerMonitor, protocol, session, shell } from "electron";
 import type { LauncherMessage } from "@ph/shared";
 import { appCsp, resolveUiFile, uiContentType } from "./app-protocol.js";
+import { connectPage, readConnectUrl } from "./remote-page.js";
+import { type RemoteServer, type ServerChoice, SshTunnel, freePort, loadChoice, readRemoteToken, saveChoice, tunnelArgs, waitForServer } from "./remote.js";
 import { ServerProcess } from "./server.js";
 import { loginShellEnv, serverEnv } from "./shell-env.js";
 import { loadWindowState, trackWindowState } from "./window-state.js";
@@ -48,6 +50,13 @@ let home = homeOverride ?? path.join(os.homedir(), ".swan");
 let shellEnv: Record<string, string> | null | undefined;
 let quitting = false;
 const crashes: number[] = [];
+// A Swan on another machine, through `ssh -L` on a local port that stays the same for the app's lifetime.
+let tunnel: SshTunnel | null = null;
+let tunnelPort: number | null = null;
+let remoteHost: string | null = null; // the host the window is on, null for this Mac
+let generation = 0; // bumped on every (re)launch and switch, so a stale attempt stops quietly
+let connectWin: BrowserWindow | null = null;
+const choiceFile = () => path.join(app.getPath("userData"), "server.json");
 
 const tildify = (p: string) => (p.startsWith(os.homedir() + path.sep) ? `~${p.slice(os.homedir().length)}` : p);
 
@@ -79,7 +88,8 @@ async function handleApp(req: Request): Promise<Response> {
   if (!api) return new Response(null, { status: 503 });
   const html = (await fs.readFile(path.join(uiDir, "index.html"), "utf8"))
     .replace("__PH_TOKEN__", escapeAttr(api.token))
-    .replace("__PH_WS__", escapeAttr(`ws://127.0.0.1:${api.port}/api/ws`));
+    .replace("__PH_WS__", escapeAttr(`ws://127.0.0.1:${api.port}/api/ws`))
+    .replace("__PH_SERVER__", escapeAttr(remoteHost ?? ""));
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": appCsp(api.port) } });
 }
 
@@ -141,6 +151,12 @@ function createWindow(): BrowserWindow {
     webPreferences: SAFE_PREFS,
   });
   if (state.maximized) w.maximize();
+  // The title (Window menu, Mission Control) says which machine the window is on.
+  w.on("page-title-updated", (e, title) => {
+    if (!remoteHost) return;
+    e.preventDefault();
+    w.setTitle(`${title} — ${remoteHost}`);
+  });
   trackWindowState(w, stateFile);
   // The page leaves room for the window buttons, except in full screen where macOS hides them.
   const markButtons = () => {
@@ -167,10 +183,14 @@ function showStatus(text: string) {
 }
 
 async function connect(serverUrl: string, serverHome: string) {
-  const u = new URL(serverUrl);
   const token = (await fs.readFile(path.join(serverHome, "api-token"), "utf8")).trim();
-  api = { origin: u.origin, port: u.port, token };
   home = serverHome;
+  return openUi(serverUrl, token);
+}
+
+async function openUi(serverUrl: string, token: string) {
+  const u = new URL(serverUrl);
+  api = { origin: u.origin, port: u.port, token };
   win ??= createWindow();
   await win.loadURL(APP_URL);
   if (SMOKE) await smokeCheck();
@@ -181,6 +201,12 @@ async function launch(): Promise<void> {
     win ??= createWindow();
     return void win.loadURL(DEV_URL);
   }
+  const gen = ++generation;
+  const choice = await loadChoice(choiceFile());
+  if (gen !== generation) return;
+  if (choice.use === "remote" && choice.remote) return launchRemote(choice.remote, gen);
+  remoteHost = null;
+  buildMenu();
   showStatus("Starting Swan…");
   shellEnv ??= await loginShellEnv();
   const env = serverEnv(shellEnv ?? process.env, {
@@ -193,6 +219,7 @@ async function launch(): Promise<void> {
   proc.on("exit", (code, signal) => void onServerExit(proc, code, signal));
   server = proc;
   const msg = await proc.start();
+  if (gen !== generation) return; // switched to another server meanwhile
   await handle(proc, msg);
 }
 
@@ -245,9 +272,140 @@ async function onServerExit(proc: ServerProcess, code: number | null, signal: No
   return failed(`The server stopped ${crashes.length} times in a minute (last: ${signal ?? `exit code ${code}`}).`, proc.logTail());
 }
 
+/** The UI on a remote Swan: read its token, open the tunnel, wait for the API, then load as usual. */
+async function launchRemote(r: RemoteServer, gen: number): Promise<void> {
+  remoteHost = r.host;
+  buildMenu();
+  showStatus(`Connecting to ${r.host}…`);
+  const read = await readRemoteToken(r);
+  if (gen !== generation) return;
+  if ("error" in read) return remoteFailed(r, gen, read.error, read.detail);
+  tunnelPort ??= await freePort();
+  const origin = `http://127.0.0.1:${tunnelPort}`;
+  const t = new SshTunnel({ args: tunnelArgs(r, tunnelPort) });
+  tunnel = t;
+  t.start();
+  const problem = await waitForServer({ origin, token: read.token, tunnel: t, host: r.host });
+  if (gen !== generation) return t.stop();
+  if (problem) {
+    t.stop();
+    tunnel = null;
+    return remoteFailed(r, gen, problem.error, problem.detail);
+  }
+  // From here a dropped ssh comes back by itself; tell the page as soon as the API answers again.
+  t.on("spawn", () => void nudgeWhenUp(t, origin, read.token));
+  return openUi(origin, read.token);
+}
+
+/** The page's WebSocket retries with backoff up to 15 s; an "online" event makes it retry now. */
+async function nudgeWhenUp(t: SshTunnel, origin: string, token: string) {
+  const exits = t.exits;
+  for (let i = 0; i < 60 && t === tunnel && t.exits === exits; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const ok = await fetch(`${origin}/api/runtime`, { headers: { "x-ph-token": token }, signal: AbortSignal.timeout(3000) }).then(
+      (res) => res.ok,
+      () => false,
+    );
+    if (ok) return void win?.webContents.executeJavaScript(`window.dispatchEvent(new Event("online"))`).catch(() => {});
+  }
+}
+
+async function remoteFailed(r: RemoteServer, gen: number, message: string, detail: string): Promise<void> {
+  showStatus(`Not connected to ${r.host}`);
+  const { response } = await dialog.showMessageBox({
+    type: "error",
+    message: `Couldn't connect to ${r.host}`,
+    detail: `${message}${detail ? `\n\nssh said:\n${detail}` : ""}`,
+    buttons: ["Try Again", "Change Server…", "Use This Mac", "Quit"],
+    defaultId: 0,
+    cancelId: 3,
+  });
+  if (gen !== generation) return;
+  if (response === 0) return launch();
+  if (response === 1) return openConnectWindow();
+  if (response === 2) return switchServer({ use: "local", remote: r });
+  app.quit();
+}
+
+/** Save the choice and start over on that server. Leaving this Mac stops its server (and its sandboxes). */
+async function switchServer(choice: ServerChoice): Promise<void> {
+  await saveChoice(choiceFile(), choice);
+  generation++;
+  tunnel?.stop();
+  tunnel = null;
+  api = null;
+  const s = server;
+  server = null;
+  if (s?.running) {
+    showStatus("Stopping Swan…");
+    await s.stop();
+  }
+  await launch();
+}
+
+/** "Connect to Remote Swan…": a small form; submitting it navigates to a URL the window catches. */
+async function openConnectWindow() {
+  if (connectWin) return connectWin.focus();
+  const choice = await loadChoice(choiceFile());
+  const w = new BrowserWindow({
+    width: 460,
+    height: 430,
+    resizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    show: false,
+    title: "Connect to Remote Swan",
+    backgroundColor: BACKGROUND,
+    ...(win ? { parent: win, modal: true } : {}),
+    webPreferences: SAFE_PREFS,
+  });
+  connectWin = w;
+  const load = (html: string) => void w.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  w.webContents.on("will-navigate", (e, url) => {
+    const answer = readConnectUrl(url);
+    if (!answer) return;
+    e.preventDefault();
+    if (answer.use === "invalid") return load(connectPage(choice, answer.error, answer.values));
+    w.close();
+    if (answer.use === "remote") void switchServer({ use: "remote", remote: answer.remote });
+    else if (answer.use === "local" && choice.use === "remote") void switchServer({ use: "local", ...(choice.remote ? { remote: choice.remote } : {}) });
+  });
+  w.webContents.on("before-input-event", (e, input) => {
+    if (input.type === "keyDown" && input.key === "Escape") {
+      e.preventDefault();
+      w.close();
+    }
+  });
+  w.once("ready-to-show", () => w.show());
+  w.on("closed", () => {
+    if (connectWin === w) connectWin = null;
+  });
+  load(connectPage(choice));
+}
+
 function buildMenu() {
   const template: MenuItemConstructorOptions[] = [
-    { role: "appMenu" },
+    {
+      role: "appMenu",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { label: "Connect to Remote Swan…", click: () => void openConnectWindow() },
+        {
+          label: "Use This Mac",
+          enabled: !!remoteHost,
+          click: () => void loadChoice(choiceFile()).then((c) => switchServer({ use: "local", ...(c.remote ? { remote: c.remote } : {}) })),
+        },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
     { role: "editMenu" },
     {
       label: "View",
@@ -266,8 +424,9 @@ function buildMenu() {
     {
       role: "help",
       submenu: [
-        { label: "Open Data Folder", click: () => void shell.openPath(home) },
-        { label: "Show Server Log", click: () => void shell.openPath(logFile) },
+        // On a remote Swan both are on the other machine.
+        { label: "Open Data Folder", enabled: !remoteHost, click: () => void shell.openPath(home) },
+        { label: "Show Server Log", enabled: !remoteHost, click: () => void shell.openPath(logFile) },
         { type: "separator" },
         { label: "Swan on GitHub", click: () => void shell.openExternal(REPO_URL) },
       ],
@@ -323,6 +482,7 @@ if (!app.requestSingleInstanceLock()) {
 
   // Quit stops the server first, so its session containers stop and conversations stay resumable.
   app.on("before-quit", (e) => {
+    tunnel?.stop(); // a remote Swan keeps running; only the tunnel goes
     if (!server?.running) return;
     e.preventDefault();
     if (quitting) return;
@@ -333,6 +493,7 @@ if (!app.requestSingleInstanceLock()) {
 
   // A signal (logout, `kill`, Ctrl+C in development) quits the same way as Cmd+Q.
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => app.quit());
+  process.on("exit", () => tunnel?.stop());
 
   // macOS: closing the window keeps Swan running; the Dock icon brings it back.
   app.on("window-all-closed", () => {
@@ -349,6 +510,8 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     buildMenu();
     hardenSession();
+    // After sleep the ssh connection is usually dead: reconnect now instead of after the keepalives fail.
+    powerMonitor.on("resume", () => tunnel?.wake());
     if (SMOKE) {
       setTimeout(() => void finishSmoke(1, "timed out after 120 s"), 120_000).unref();
       app.on("web-contents-created", (_e, contents) =>
