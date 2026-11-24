@@ -40,6 +40,24 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "bash", args: { command: "swan-tool write_file '{\"path\":\"/tmp/from-script.txt\",\"content\":\"hi\\\\n\"}'; echo \"write exit $?\"; cat /tmp/from-script.txt" } },
     { text: "Done." },
   ],
+  workspace: [
+    {
+      text: "Checking the workspace runtime.",
+      tool: "bash",
+      args: {
+        command: [
+          "pwd",
+          'echo "agent home: $SWAN_AGENT_HOME"',
+          'echo "proxy: ${HTTPS_PROXY##*@}"',
+          'echo "swan-tool: $(command -v swan-tool)"',
+          "swan-tool --list | head -2",
+          'curl -sS -m 20 -o /dev/null -w "example.com through the proxy: %{http_code}\\n" https://example.com',
+          "echo made-by-the-agent > from-agent.txt && ls",
+        ].join("; "),
+      },
+    },
+    { text: "Workspace checks done." },
+  ],
   swantool: [
     {
       text: "Chaining tool calls from a script.",
