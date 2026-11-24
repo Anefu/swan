@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import type { ConnectionCredentialStatus, ConnectionStatus, ProviderStatus } from "@ph/shared";
-import type { ConnectionAction } from "../api";
+import { type ConnectionAction, remoteHost } from "../api";
 import { useStore } from "../store";
 import { CONNECTION_STATE } from "../status";
 import { cls, errorMessage, parseList, relTime, runtimeLevel, runtimeProblems, useNow } from "../util";
@@ -15,6 +15,11 @@ export function SwanSettingsPane({ onClose }: { onClose: () => void }) {
     <div className="pane">
       <PaneHead title="Swan settings" onClose={onClose} closeLabel="Close Swan settings" />
       <div className="pane-body">
+        {remoteHost() && (
+          <p className="muted small">
+            On {remoteHost()}, over SSH. To switch, choose Swan › Connect to Remote Swan… or Use This Mac.
+          </p>
+        )}
         <SecretsProblem />
         <Providers />
         <Connections />

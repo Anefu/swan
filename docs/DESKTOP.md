@@ -124,6 +124,36 @@ coreutils; Swan says what is missing if not. Build for `arm64` (Apple silicon), 
 emulated. The sandbox's limits are the same as with Swan's image: they come from how Swan runs the
 container, not from the image. The relay always runs Swan's own image.
 
+## Connect to a remote Swan
+
+The app can use a Swan server on another machine, such as a Linux cloud workspace, instead of the
+one it starts on this Mac. Agents then work there: submit a task, close the laptop, and reconnect
+later to see the result.
+
+1. On the remote machine, start Swan with `swan-server`. It listens on its own `127.0.0.1` only
+   (`port:` in its `~/.swan/config.yaml`, 4317 by default).
+2. On the Mac, make sure `ssh <host>` works in Terminal without a password prompt (keys or an
+   agent). For a Coder workspace, run `coder config-ssh` once; the host is then
+   `coder.<workspace>`.
+3. Choose Swan › Connect to Remote Swan…, enter the SSH host (and the port and Swan's home there if
+   they aren't the defaults), and press Connect.
+
+The app runs the system `ssh` with `BatchMode=yes`: it reads the server's API token from
+`<home>/api-token` with one `ssh <host> cat …`, then keeps `ssh -N -L 127.0.0.1:<local port>:127.0.0.1:<port>`
+open and loads its UI through it, as with a local server. Nothing listens beyond loopback on either
+machine. When the tunnel drops (sleep, a network change) it reconnects with backoff on the same
+local port, and right away when the Mac wakes; the window shows "Reconnecting" meanwhile. Quitting
+the app closes the tunnel; the remote Swan keeps running.
+
+The choice is kept in the app's own settings (not in `config.yaml`) and applies at the next start
+too; Swan › Use This Mac switches back and starts the local server again. Swan settings and the
+window title name the host the window is on. Folder paths in a persona's settings are paths on the
+remote machine, and Help › Open Data Folder and Show Server Log are off, since both are there.
+Connecting from this Mac stops the local server, as quitting does.
+
+If the connection fails the app says why (unknown host, SSH login refused, Swan not running there)
+with ssh's own message, and offers to try again, change the server or use this Mac.
+
 ## Build and run from a checkout
 
 ```bash

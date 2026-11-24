@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ConnectionStatus, CredentialRule, FolderMode, ModelOption, PermissionMode, PersonaConfigView, PersonaSummary, RuleApi, SubagentsConfig } from "@ph/shared";
-import { api, personaExportUrl } from "../api";
+import { api, personaExportUrl, serverMachine } from "../api";
 import { conversationSession, NEW_PERSONA, useSelectedPersona, useStore, type SettingsDraft } from "../store";
 import { allowanceLabel, CONNECTION_STATE, isCredentialAllowance, RULE_API_LABEL, RULE_APIS, RULE_PRESETS } from "../status";
 import { clone, cls, errorMessage, isMissingEndpoint, sameJson } from "../util";
@@ -193,7 +193,7 @@ function validate(d: PersonaConfigView, isNew: boolean, newId: string, taken: bo
   }
   if (!d.name.trim()) e.name = "Name is required.";
   d.folders.forEach((f, i) => {
-    if (!f.path.trim()) e[`folder${i}`] = "Enter a folder path on this Mac.";
+    if (!f.path.trim()) e[`folder${i}`] = `Enter a folder path on ${serverMachine()}.`;
     else if (f.mount && !/^\/workspace\/[^/]+$/.test(f.mount)) e[`folder${i}`] = "Mount must look like /workspace/<name>.";
   });
   for (const [list, key] of [["networkAllow", "host"], ["networkInternal", "internal"], ["networkOtherCredentials", "other"]] as const)
@@ -1365,7 +1365,7 @@ function FolderEditor({
         onDone();
       }}
     >
-      <Field label="Path on this Mac" id={pathId} error={pathError}>
+      <Field label={`Path on ${serverMachine()}`} id={pathId} error={pathError}>
         {(id) => (
           <input
             id={id}
