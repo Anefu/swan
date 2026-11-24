@@ -12,6 +12,7 @@
     "start": "node scripts/build.mjs && electron .",
     "dev": "node scripts/dev.mjs",
     "package": "node scripts/build.mjs --node && electron-builder --mac --arm64 --publish never",
+    "package-server": "node scripts/build-server-linux.mjs",
     "smoke-server": "node scripts/smoke-server.mjs",
     "typecheck": "tsc -p . && tsc -p ui"
   },
