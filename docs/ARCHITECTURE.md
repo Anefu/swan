@@ -125,6 +125,29 @@ What runs where:
 | Egress proxy | host (harness) | yes — substitutes at egress |
 | Relay | Podman VM | no — dumb TCP forwarder |
 
+### Workspace runtime (`runtime.type: workspace`)
+
+For a Linux cloud workspace that is already isolated by its platform. `sandbox/workspace.ts`
+replaces Podman: commands run as the server's user in their own process group (a timeout or Stop
+kills the group), with an environment built from a short allowlist of Swan's own variables plus
+`runtime.passEnv` (nothing named like a token, key or secret ever passes), the persona's env, and
+`HTTP(S)_PROXY` pointing at Swan's egress proxy on 127.0.0.1 with the session's proxy credentials.
+A CA bundle (the system's, Swan's and `caFiles`) is written to `PH_HOME/ca-bundle.pem` and named in
+`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`
+and `AWS_CA_BUNDLE`. `sandbox/layout.ts` maps what used to be container paths: folders at their
+real paths, skills at their host paths, and `/home/agent` to `PH_HOME/agents/<session>`.
+
+What this gives up, by design: commands can bypass the proxy and read the server's files, and
+read-only folders aren't enforced. The workspace's network policy is the boundary, and Swan there
+holds no secrets beyond its model sign-in. Invariants 1, 6 and 8 hold only for the Podman runtime.
+
+### Away mode
+
+The hub counts connected windows. When none has been connected for `awayAfterSeconds`, the
+session manager marks the user away: tool calls, questions, new hosts and asking credentials follow
+the persona's unattended rules, and approvals already waiting are decided the same way
+(`whenAway` on each pending approval). A connecting window ends it at once.
+
 ### Changes pane: diffs from the sandbox
 
 An unattended turn's rules outlast it: a background agent it starts keeps them (its tool calls are

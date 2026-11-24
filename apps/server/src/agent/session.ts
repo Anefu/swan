@@ -7,7 +7,7 @@ import type { MemoryStore } from "../memory.js";
 import type { PersonaStore } from "../personas.js";
 import type { EgressProxy, ToolRequest } from "../proxy/egress.js";
 import { scriptable, toolHelp, toolList } from "./script-tools.js";
-import type { PodmanRuntime } from "../sandbox/podman.js";
+import type { SandboxRuntime } from "../sandbox/runtime.js";
 import type { ConnectionManager } from "../connections/manager.js";
 import type { Verdict } from "../connections/rules.js";
 import { paths, type Settings } from "../settings.js";
@@ -17,7 +17,8 @@ import { debounce, errMsg, exists, log, nowIso, randomId, truncateMiddle, writeF
 import type { ModelCatalog } from "../catalog.js";
 import { SessionMcp, credentialValues, scrubValues, type McpCredentials } from "./mcp.js";
 import { PREAMBLE, SubAgent, forkMessages, refusedTool, type Outcome } from "./subagents.js";
-import { CONNECTION_TOOLS, ENV_FILE, SessionCredentials } from "./session-credentials.js";
+import { CONNECTION_TOOLS, SessionCredentials } from "./session-credentials.js";
+import { envFile, fallbackWorkdir } from "../sandbox/layout.js";
 import { MEMORY_READ_TOOLS, memoryTools } from "./memory-tools.js";
 import { TRACKER_TOOLS, trackerTools } from "./tracker-tools.js";
 import { SCHEDULE_TOOLS, triggerTools } from "./trigger-tools.js";
@@ -55,9 +56,13 @@ interface AgentEntry {
   origin: Origin;
 }
 
+/** Whether anyone is at Swan: no window connected for a while means the user is away. */
+export type Presence = { away: boolean };
+
 export interface SessionDeps {
   settings: Settings;
-  runtime: PodmanRuntime;
+  presence?: Presence; // away: what would ask follows the unattended rules
+  runtime: SandboxRuntime;
   proxy: EgressProxy;
   connections: ConnectionManager;
   personas: PersonaStore;
@@ -109,6 +114,9 @@ interface Persisted {
 }
 
 const MAX_TURNS_PER_MESSAGE = 200;
+/** Marks a refusal made because the user left, not one they made. */
+const AWAY_REASON = "\u0000away";
+
 /** Share of contextLimitTokens past which the next request would likely be refused, so the context rolls over now. */
 const HARD_ROLLOVER = 0.95;
 const DREAM_EVENT_CHARS = 80_000; // events one /dream reads; later ones wait for the next run
@@ -167,7 +175,7 @@ function systemPrompt(o: {
     lines.push(
       "",
       "# Skills",
-      "Skills are folders of instructions and scripts mounted read-only at /skills/<name>. When a task matches a skill, call load_skill with its name before starting, then follow it.",
+      "Skills are read-only folders of instructions and scripts. When a task matches a skill, call load_skill with its name before starting, then follow it.",
       ...o.skills.map((s) => `- ${s.name}: ${s.description}`),
     );
   }
@@ -250,7 +258,7 @@ export class Session {
   private dreaming = false;
   private idleDream: ReturnType<typeof setTimeout> | null = null;
   private abort: AbortController | null = null;
-  private approvals = new Map<string, { resolve: (d: ApprovalBody) => void; info: PendingApproval }>();
+  private approvals = new Map<string, { resolve: (d: ApprovalBody) => void; info: PendingApproval; whenAway?: () => ApprovalBody }>();
   private netPending = new Map<string, Promise<boolean>>(); // host -> decision in flight
   private netDenied = new Set<string>(); // until stopped
   private foreignNoticed = new Set<string>(); // hosts already named in a notice this run
@@ -517,6 +525,7 @@ export class Session {
       const timer = setTimeout(() => done(false, "interrupted", "No decision within 10 minutes; the request was blocked."), 10 * 60_000);
       this.approvals.set(id, {
         info: { sessionId: this.id, personaId: this.personaId, toolUseId: id, name: "network_access", inputPreview: target, rule: "network: ask", since: item.ts },
+        whenAway: () => ({ decision: "deny", reason: "the user left Swan before deciding, and new hosts are never allowed while they're away" }),
         resolve: (d) => {
           if (d.decision === "deny") {
             this.netDenied.add(host);
@@ -546,6 +555,8 @@ export class Session {
       }, timeoutMs);
       this.approvals.set(id, {
         info,
+        // A credential the rules say to ask about goes without it once the user has left.
+        whenAway: () => ({ decision: "deny", reason: "the user left Swan before deciding" }),
         resolve: (d) => {
           clearTimeout(timer);
           this.approvals.delete(id);
@@ -672,9 +683,9 @@ export class Session {
     this.setStatus("starting", "starting sandbox container");
     this.deps.proxy.register(this.proxyRegistration());
 
-    this.workdir = cfg.sandbox.workdir ?? persona.folders[0]?.mountPath ?? "/workspace";
+    this.workdir = cfg.sandbox.workdir ?? persona.folders[0]?.mountPath ?? fallbackWorkdir(this.id);
     // Connection wrappers' variables live in a file every bash shell reads, so a later sign-in applies to new shells.
-    const env: Record<string, string> = { ...this.creds.staticEnv(), BASH_ENV: ENV_FILE };
+    const env: Record<string, string> = { ...this.creds.staticEnv(), BASH_ENV: envFile(this.id) };
     for (const [k, v] of Object.entries(cfg.env)) env[k] = this.renderPlaceholders(v);
     const connectionSkills = this.creds.commandConnections().flatMap((c) => {
       const cc = connections.configOf(c);
@@ -1314,7 +1325,7 @@ export class Session {
    * get the unattended rules while the turn is unattended or any unattended run's agent is at work.
    */
   private unattendedNow() {
-    return this.unattended || [...this.agents.values()].some((a) => a.sub.active && a.origin.unattended);
+    return this.unattended || this.away() || [...this.agents.values()].some((a) => a.sub.active && a.origin.unattended);
   }
 
   /** `message` is the user message that started these turns, sent again if an overflow forces a new context before any reply. */
@@ -1933,8 +1944,18 @@ export class Session {
     if (added.length) this.setAllowances([...this.summary.allowances, ...added]);
   }
 
+  /** No Swan window is connected: the user submitted work and left. */
+  private away() {
+    return !!this.deps.presence?.away;
+  }
+
+  /** The user just left: what waits for them is decided by the unattended rules instead. */
+  goneAway() {
+    for (const a of [...this.approvals.values()]) if (a.whenAway) a.resolve(a.whenAway());
+  }
+
   private runTools(toolUses: ToolUse[], signal: AbortSignal, parentId?: string, tools?: Map<string, ToolDef>, origin?: Origin) {
-    const unattended = origin ? origin.unattended : this.unattended;
+    const unattended = (origin ? origin.unattended : this.unattended) || this.away();
     // What the user allowed "until stopped" is for their own turns.
     const policy = this.policy(!unattended);
     return Promise.all(toolUses.map((tu) => this.runOne(tu, policy, signal, unattended, parentId, tools)));
@@ -2010,12 +2031,13 @@ export class Session {
     if (perm.mode === "deny") return finish("denied", { text: `Denied by the persona's permission policy (${perm.rule}).`, isError: true }, { denyReason: perm.rule });
     // A question pauses the turn like an approval, and the card is the answer. Sub-agents get a refusal instead.
     if (tool.name === ASK_USER && !parentId) {
-      if (unattended) return finish("error", { text: "The user isn't here in an unattended run, so nobody can answer. Choose what you reasonably can, or leave the question in your report.", isError: true });
+      if (unattended) return finish("error", { text: "The user isn't here (an unattended run, or they are away from Swan), so nobody can answer. Choose what you reasonably can, or leave the question in your report.", isError: true });
       item.status = "pending_approval";
       show();
-      const d = await this.waitForApproval(tu.id, signal, { sessionId: this.id, personaId: this.personaId, toolUseId: tu.id, name: tool.name, inputPreview: item.inputPreview, rule: "question", since: nowIso() });
+      const d = await this.waitForApproval(tu.id, signal, { sessionId: this.id, personaId: this.personaId, toolUseId: tu.id, name: tool.name, inputPreview: item.inputPreview, rule: "question", since: nowIso() }, () => ({ decision: "deny", reason: AWAY_REASON }));
       this.refreshStatus();
       if (!d) return finish("interrupted", { text: "Interrupted by the user before they answered.", isError: true });
+      if (d.reason === AWAY_REASON) return finish("error", { text: "The user left before answering, so nobody can answer now. Choose what you reasonably can, or leave the question in your report.", isError: true });
       const r = questionResult(v.value as AskInput, d.decision === "deny" ? undefined : d.answer);
       return finish("done", { text: r.text }, { answer: r.answer });
     }
@@ -2040,11 +2062,17 @@ export class Session {
         inputPreview: item.inputPreview,
         rule: perm.rule,
         since: nowIso(),
+      }, () => {
+        // The user left with this waiting: it goes ahead only if the persona allows it unattended.
+        const u = this.unattendedPolicy().evaluate(gated, v.value);
+        return u.mode === "allow" ? { decision: "allow" } : { decision: "deny", reason: AWAY_REASON };
       });
       this.refreshStatus();
       item.uncoveredCommands = undefined;
       item.allowPatterns = undefined;
       if (!decision) return finish("interrupted", { text: "Interrupted by the user before approval.", isError: true });
+      if (decision.decision === "deny" && decision.reason === AWAY_REASON)
+        return finish("denied", { text: `The user left Swan before approving this, and it isn't allowed in unattended runs (${perm.rule}). Don't retry: leave it for the user and say what you would do and why.`, isError: true }, { denyReason: `away: ${perm.rule}` });
       if (decision.decision === "deny") {
         const why = decision.reason?.trim();
         return finish("denied", { text: `The user denied this tool call${why ? `: ${why}` : "."}`, isError: true }, { denyReason: why || "denied by user" });
@@ -2119,7 +2147,7 @@ export class Session {
     return { status: status === "done" ? 200 : status === "error" ? 422 : 403, body };
   }
 
-  private waitForApproval(id: string, signal: AbortSignal, info: PendingApproval): Promise<ApprovalBody | null> {
+  private waitForApproval(id: string, signal: AbortSignal, info: PendingApproval, whenAway?: () => ApprovalBody): Promise<ApprovalBody | null> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve(null);
       const onAbort = () => {
@@ -2130,6 +2158,7 @@ export class Session {
       signal.addEventListener("abort", onAbort, { once: true });
       this.approvals.set(id, {
         info,
+        whenAway,
         resolve: (d) => {
           signal.removeEventListener("abort", onAbort);
           this.approvals.delete(id);
@@ -2187,6 +2216,14 @@ export class Session {
 export class SessionManager {
   private sessions = new Map<string, Session>();
   spendTurn?: (personaId: string) => Promise<string | null>; // set once triggers exist; says why a turn can't start
+  /** No window connected: from now on what would ask follows the unattended rules, including what waits now. */
+  setAway(away: boolean) {
+    if (!this.deps.presence || this.deps.presence.away === away) return;
+    this.deps.presence.away = away;
+    log.info("session", away ? "no Swan window connected: asks follow the unattended rules" : "a Swan window connected: asks wait for the user again");
+    if (away) for (const s of this.sessions.values()) s.goneAway();
+  }
+
   constructor(private deps: SessionDeps) {
     deps.conversations = {
       list: (personaId) => this.list(personaId),

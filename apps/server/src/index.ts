@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import type { LauncherMessage } from "@ph/shared";
 import { ProviderRegistry } from "./agent/providers.js";
-import { SessionManager } from "./agent/session.js";
+import { SessionManager, type Presence } from "./agent/session.js";
 import { Hub, startApi } from "./api.js";
 import { AttachmentStore } from "./attachments.js";
 import { ConnectionManager } from "./connections/manager.js";
@@ -17,7 +17,10 @@ import { PersonaStore } from "./personas.js";
 import { UsageLedger } from "./usage.js";
 import { CertAuthority } from "./proxy/ca.js";
 import { EgressProxy } from "./proxy/egress.js";
+import { useWorkspaceLayout } from "./sandbox/layout.js";
 import { PodmanRuntime } from "./sandbox/podman.js";
+import type { SandboxRuntime } from "./sandbox/runtime.js";
+import { WorkspaceRuntime } from "./sandbox/workspace.js";
 import { SecretStore } from "./secrets.js";
 import { HOME_FROM_ENV, LEGACY_HOME, ensureHome, loadSettings, paths } from "./settings.js";
 import { SkillRegistry } from "./skills.js";
@@ -46,6 +49,8 @@ async function main() {
   if (!HOME_FROM_ENV) await moveLegacyHome(LEGACY_HOME, paths.home);
   await ensureHome();
   const settings = await loadSettings();
+  // Before personas load: where their folders appear depends on it.
+  useWorkspaceLayout(settings.runtime.type === "workspace");
   const token = await apiToken();
   const lock = await HomeLock.claim({ home: paths.home, file: paths.serverLock, token, configPort: settings.port, version: VERSION });
   process.on("exit", () => lock.releaseSync());
@@ -81,7 +86,7 @@ async function main() {
   });
   settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));
 
-  const runtime = new PodmanRuntime(settings, ca, extraCas);
+  const runtime: SandboxRuntime = settings.runtime.type === "workspace" ? new WorkspaceRuntime(settings, ca, extraCas) : new PodmanRuntime(settings, ca, extraCas);
   const providers = new ProviderRegistry(settings, secrets);
   const hub = new Hub();
   const memory = new MemoryStore();
@@ -93,8 +98,9 @@ async function main() {
   const attachments = new AttachmentStore();
   // eslint-disable-next-line prefer-const
   let sessions: SessionManager;
+  const presence: Presence = { away: false };
   sessions = new SessionManager({
-    settings, runtime, proxy, connections, personas, skills, providers, memory, tracker, diffs, usage, attachments, catalog,
+    settings, runtime, presence, proxy, connections, personas, skills, providers, memory, tracker, diffs, usage, attachments, catalog,
     broadcast: hub.broadcast,
     onApprovalsChanged: () => hub.broadcast({ type: "approvals.updated", approvals: sessions.pendingApprovals() }),
   });
@@ -126,6 +132,15 @@ async function main() {
   });
   skills.on("changed", () => personas.revalidate());
   runtime.on("status", (s) => hub.broadcast({ type: "runtime.status", runtime: s }));
+  // Away once no window has been connected for awayAfterSeconds (a tunnel's blip isn't leaving).
+  let awayTimer: NodeJS.Timeout | undefined;
+  const presenceChanged = (windows: number) => {
+    clearTimeout(awayTimer);
+    if (windows > 0) sessions.setAway(false);
+    else if (settings.awayAfterSeconds > 0) awayTimer = setTimeout(() => sessions.setAway(true), settings.awayAfterSeconds * 1000);
+  };
+  hub.onPresence = presenceChanged;
+  presenceChanged(0);
   proxy.on("event", (e) => hub.broadcast({ type: "egress", event: e }));
 
   settings.port = await choosePort(settings.port, portFallback);
