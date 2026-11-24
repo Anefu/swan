@@ -71,7 +71,7 @@ jobs:
       - name: Checksums
         working-directory: apps/desktop/release
         run: shasum -a 256 Swan-*.dmg | tee SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swan-macos
           path: |
@@ -107,7 +107,7 @@ jobs:
           mkdir "$RUNNER_TEMP/swan-server"
           tar -xzf apps/desktop/release/swan-server-*-linux-${{ matrix.arch }}.tar.gz -C "$RUNNER_TEMP/swan-server" --strip-components=1
           node apps/desktop/scripts/smoke-server.mjs --launcher "$RUNNER_TEMP/swan-server/bin/swan-server"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swan-server-linux-${{ matrix.arch }}
           path: apps/desktop/release/swan-server-*.tar.gz
