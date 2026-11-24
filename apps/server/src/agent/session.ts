@@ -28,7 +28,7 @@ import { CLEAR_DIFFS, diffTools, permissionView } from "./diff-tools.js";
 import { CONVERSATIONS, conversationAsks, conversationTools, type ConversationAccess } from "./conversation-tools.js";
 import { hasTools } from "../sandbox/image.js";
 import { PermissionPolicy, type Evaluation } from "./permissions.js";
-import { IMAGE_CHARS, isContextOverflow, messageChars } from "./context-size.js";
+import { IMAGE_CHARS, isContextOverflow, messageChars, overflowLimit } from "./context-size.js";
 import { ProviderError, systemText, type ContentBlockParam, type MessageParam, type ProviderRegistry, type SystemPrompt, type ToolUse, type TurnResult } from "./providers.js";
 import { z } from "zod";
 import { builtinTools, skillTool, zodTool, type ToolContext, type ToolDef, type ToolOutput } from "./tools.js";
@@ -832,6 +832,25 @@ export class Session {
   }
 
   /** Why the next request needs a new epoch, or null. */
+  /** The model's prompt limit where known (from its provider, or learned from a refusal); budget.key is "provider/model". */
+  private budget: { key: string; tokens: number } | undefined;
+
+  /** Tokens a request may carry: contextLimitTokens, or less where the current model takes less. */
+  private contextLimit(): number {
+    const m = this.epoch?.model ?? this.currentModel();
+    const known = this.budget?.key === `${m.provider}/${m.id}` ? this.budget.tokens : Infinity;
+    return Math.min(this.deps.settings.contextLimitTokens, known);
+  }
+
+  /** Ask the provider for the current model's prompt limit (Copilot reports one per model). */
+  private async learnBudget() {
+    const m = this.currentModel();
+    const key = `${m.provider}/${m.id}`;
+    if (this.budget?.key === key) return;
+    const tokens = await this.deps.providers.contextBudget?.(m.provider, m.id).catch(() => undefined);
+    if (tokens) this.budget = { key, tokens };
+  }
+
   private rolloverReason(incoming = 0): string | null {
     const e = this.epoch;
     if (!e || !e.messages.length) return null;
@@ -841,7 +860,7 @@ export class Session {
     const added = [...this.liveTools.keys()].filter((n) => !e.frozen.tools.some((t) => t.name === n));
     if (added.length) return `new tools: ${added.slice(0, 5).join(", ")}${added.length > 5 ? "…" : ""}`;
     const used = this.projectedTokens(e, incoming);
-    const limit = this.deps.settings.contextLimitTokens;
+    const limit = this.contextLimit();
     const share = `${Math.round((used / limit) * 100)}% of ${Math.round(limit / 1000)}k tokens`;
     // Past this the provider would refuse the request, so it rolls over however young the context is
     // (a context with no reply yet holds only what a new one would carry, so that would not help).
@@ -1025,8 +1044,8 @@ export class Session {
     const fixed = (e: Epoch) => systemText(e.frozen.system).length + JSON.stringify(e.frozen.tools).length;
     const measured = old.contextTokens ? (fixed(old) + JSON.stringify(old.messages).length) / old.contextTokens : 3.5;
     const perToken = Math.min(6, Math.max(2, measured));
-    const { contextLimitTokens, rolloverAt } = this.deps.settings;
-    const room = contextLimitTokens * rolloverAt - (fixed(next) + carriedChars) / perToken;
+    const { rolloverAt } = this.deps.settings;
+    const room = this.contextLimit() * rolloverAt - (fixed(next) + carriedChars) / perToken;
     return Math.max(0, Math.floor((room / 2) * perToken));
   }
 
@@ -1042,6 +1061,7 @@ export class Session {
 
   /** Opens or rolls over the epoch before a user message of `incoming` characters is added. */
   private async prepareEpoch(incoming = 0) {
+    await this.learnBudget();
     if (!this.epoch) await this.openEpoch();
     const reason = this.rolloverReason(incoming);
     if (reason) await this.rollover(reason);
@@ -1378,7 +1398,11 @@ export class Session {
           return;
         }
         if (isContextOverflow(err)) {
-          const limit = Math.round(this.deps.settings.contextLimitTokens / 1000);
+          // The refusal may say the real limit; later contexts roll over before it.
+          const said = overflowLimit(err);
+          const key = `${e.model.provider}/${e.model.id}`;
+          if (said && said < this.contextLimit()) this.budget = { key, tokens: said };
+          const limit = Math.round(this.contextLimit() / 1000);
           if (recovered || !e.messages.some((m) => m.role === "assistant")) {
             throw new ProviderError(
               `The request is too long for the model even in a fresh context, so the latest message or tool output alone is too large. Send a shorter message, or ask for smaller pieces of output. If the model's context is smaller than ${limit}k tokens, lower contextLimitTokens in config.yaml. (${errMsg(err)})`,
@@ -1404,7 +1428,7 @@ export class Session {
       const estimated = reported <= 0;
       e.contextTokens = estimated ? Math.ceil((systemText(e.frozen.system).length + JSON.stringify(e.frozen.tools).length + messageChars(e.messages)) / 3.5) : reported;
       e.measuredAt = e.messages.length;
-      this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: this.deps.settings.contextLimitTokens, estimated, epoch: e.n });
+      this.deps.usage.setContext(this.personaId, { usedTokens: e.contextTokens, limitTokens: this.contextLimit(), estimated, epoch: e.n });
       this.deps.broadcast({ type: "usage.updated", personaId: this.personaId });
 
       if (result.notice) this.notice(result.stopReason === "refusal" ? "warn" : "info", result.notice);
