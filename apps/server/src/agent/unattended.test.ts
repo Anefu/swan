@@ -196,3 +196,44 @@ describe("when the user is away (no Swan window connected)", () => {
     for (const x of m.list()) await m.remove(x.id);
   });
 });
+
+describe("sub-agent handoff", () => {
+  const fake = () => {
+    let emit!: (o: unknown) => void;
+    const run = { id: "ag_9", state: "running", background: false, startedAt: new Date().toISOString() };
+    const sub = {
+      run,
+      active: true,
+      next: () => new Promise((r) => (emit = r)),
+      toBackground: () => (run.background ? false : ((run.background = true), true)),
+      describe: (o: { text: string }) => o.text,
+      stop: () => {},
+    };
+    return { sub, run, emit: (o: unknown) => emit(o), entry: { sub, toolUseId: "tu_agent", description: "long job", origin: { unattended: false, delivered: false } } };
+  };
+
+  it("returns a quick agent's report as the call's result", async () => {
+    const { m, s } = setup();
+    const f = fake();
+    s.agents.set("ag_9", f.entry);
+    s.handoffMs = 1_000;
+    const waiting = s.waitForeground(f.entry);
+    f.emit({ kind: "report", text: "quick answer" });
+    expect((await waiting).text).toBe("quick answer");
+    expect(f.run.background).toBe(false);
+    for (const x of m.list()) await m.remove(x.id);
+  });
+
+  it("hands a slow agent off to the background, and its report still reaches the conversation", async () => {
+    const { m, s } = setup();
+    const f = fake();
+    s.agents.set("ag_9", f.entry);
+    s.runLoop = vi.fn(async () => {});
+    s.handoffMs = 20;
+    expect((await s.waitForeground(f.entry)).text).toContain("handed off to the background");
+    expect(f.run.background).toBe(true);
+    f.emit({ kind: "report", text: "all done" });
+    await vi.waitFor(() => expect(JSON.stringify(s.queue)).toContain("all done"));
+    for (const x of m.list()) await m.remove(x.id);
+  });
+});

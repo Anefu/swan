@@ -49,11 +49,15 @@ interface Origin {
   hops?: number; // sends in the chain of conversations that led here; at MAX_SEND_HOPS it can't send further
 }
 
+/** How long an `agent` call waits for the report before handing the agent off to the background. */
+const HANDOFF_MS = 15_000;
+
 interface AgentEntry {
   sub: SubAgent;
   toolUseId: string; // the `agent` call that started it
   description: string;
   origin: Origin;
+  detach?: () => void; // ends the parent's wait on a foreground agent (it moved to the background)
 }
 
 /** Whether anyone is at Swan: no window connected for a while means the user is away. */
@@ -166,7 +170,7 @@ function systemPrompt(o: {
     "",
     "# Working in parallel",
     "You can delegate with the `agent` tool: it starts a sub-agent with your tools, sandbox and permissions, which works on its own and returns a report. When a task splits into independent parts (reading several areas of a codebase, researching several sources, checking separate hypotheses, editing unrelated files), launch several `agent` calls in the same response so they run in parallel, then combine their reports. Give each sub-agent a complete, self-contained brief: it does not see this conversation. Do small or tightly coupled work yourself.",
-    "Keep this conversation for the user: understanding what they want, decisions, and reporting results. Hand off substantial work (multi-step investigation, implementation, long builds or checks) to sub-agents, with background: true when the user may want to talk to you meanwhile, and tell the user what you started.",
+    "Keep this conversation for the user: understanding what they want, decisions, and reporting results. Hand off substantial work (multi-step investigation, implementation, long builds or checks) to sub-agents and tell the user what you started. A sub-agent still working after a few seconds is handed off to the background on its own, so the conversation stays free; its report arrives as a message. When the next step needs several agents' reports, wait for all of their messages before combining them.",
     "",
     "# Memory",
     "The user may have other conversations with this persona; you see only this one, and share memory with them. Older turns may no longer be in your context: use history_search and history_read to recover them, and memory_search / memory_read for this persona's saved memories. Memory is how this persona gets better at its work: a later conversation, and this one after its context rolls over, starts out knowing only what was saved. Save what would help then and can't simply be read again from files or tools, citing event ids, and keep it right: when a saved memory turns out wrong or out of date, fix it with memory_update or retire it with memory_archive.",
@@ -1683,7 +1687,7 @@ export class Session {
           named.length ? `This persona's sub-agents: ${named.join("; ")}.` : "",
           `With agent "auto" (the default) you may pick the model ("provider/model") and effort; ready models: ${models.join(", ") || "your own"}.`,
           'context "brief" (default) gives it only your prompt, so the prompt must contain everything it needs; "fork" gives it this conversation as well.',
-          "background: true returns at once; you get a message when it finishes or asks something, and can keep working. A sub-agent may pause with a question: answer it with agent_message.",
+          `Its report comes back as this call's result when it finishes within ${HANDOFF_MS / 1000} seconds; otherwise it is handed off to the background and you get a message when it finishes or asks something, so you and the user can keep going. background: true hands it off at once. A sub-agent may pause with a question: answer it with agent_message.`,
         ]
           .filter(Boolean)
           .join(" "),
@@ -1695,7 +1699,7 @@ export class Session {
           effort: z.enum(efforts).optional().describe("Auto only; default: your own effort"),
           context: z.enum(["brief", "fork"]).optional().describe('"brief" (default) or "fork"'),
           max_turns: z.number().int().min(1).max(1000).optional().describe(`Most model turns for this task (default ${DEFAULT_SUBAGENT_TURNS})`),
-          background: z.boolean().optional().describe("Run in the background and return at once"),
+          background: z.boolean().optional().describe(`Hand off to the background at once instead of after ${HANDOFF_MS / 1000} seconds`),
         }),
         preview: (i) => i.description,
         primaryArg: (i) => i.description,
@@ -1770,7 +1774,7 @@ export class Session {
     const maxTurns = Math.min(i.max_turns ?? DEFAULT_SUBAGENT_TURNS, limits.maxTurns);
     if (i.background) {
       const running = [...this.agents.values()].filter((a) => a.sub.active && a.sub.run.background).length;
-      if (running >= limits.maxBackground) return fail(`${running} background agents are already running (this persona's limit is ${limits.maxBackground}). Wait for one, stop one, or run this one in the foreground.`);
+      if (running >= limits.maxBackground) return fail(`${running} background agents are already running (this persona's limit is ${limits.maxBackground}). Wait for one, stop one, or start this one without background: true.`);
     }
 
     const id = randomId("ag_", 3);
@@ -1823,9 +1827,51 @@ export class Session {
         itemPatch: { status: "running", agent: { ...sub.run }, durationMs: undefined },
       };
     }
-    const o = await sub.next();
+    return this.waitForeground(entry);
+  }
+
+  /** How long an `agent` call waits for its report before handing the agent off to the background. */
+  handoffMs = HANDOFF_MS;
+
+  /**
+   * The `agent` call's result: the report when the agent finishes within handoffMs, otherwise the
+   * agent is handed off to the background so the conversation is free, and reports by message.
+   */
+  private async waitForeground(entry: AgentEntry): Promise<ToolOutput> {
+    let timer: NodeJS.Timeout | undefined;
+    const handoff = new Promise<null>((res) => (timer = setTimeout(() => res(null), this.handoffMs)));
+    const o = await Promise.race([entry.sub.next(), this.detached(entry), handoff]);
+    clearTimeout(timer);
+    if (!o) {
+      this.backgroundAgent(entry.sub.run.id);
+      return this.movedOutput(entry);
+    }
     this.onAgentOutcome(entry, o);
     return this.outcomeOutput(entry, o);
+  }
+
+  /** Resolves null when the user moves a foreground agent to the background. */
+  private detached(entry: AgentEntry): Promise<null> {
+    return new Promise((res) => (entry.detach = () => res(null)));
+  }
+
+  private movedOutput(entry: AgentEntry): ToolOutput {
+    const id = entry.sub.run.id;
+    return {
+      text: `Agent ${id} ("${entry.description}") is still working, so it was handed off to the background. You'll get a message when it finishes or asks something; carry on meanwhile. agent_status lists agents, agent_message sends one instructions, agent_stop stops one.`,
+      itemPatch: { status: "running", agent: { ...entry.sub.run }, durationMs: undefined },
+    };
+  }
+
+  /** Move a running foreground agent to the background, freeing the turn that waits on it. */
+  backgroundAgent(id: string): boolean {
+    const a = this.agents.get(id);
+    if (!a || !a.sub.toBackground()) return false;
+    const detach = a.detach;
+    a.detach = undefined;
+    detach?.();
+    void this.watchBackground(a);
+    return true;
   }
 
   /** The tool result for an outcome; the `agent` item itself stays running while its agent waits for an answer. */
@@ -1888,7 +1934,14 @@ export class Session {
     if (!asking) return { text: "Sent; it reads it before its next step." };
     // A foreground agent was waiting on this answer: its next report or question is this call's result.
     const aborted = new Promise<null>((res) => signal.addEventListener("abort", () => res(null), { once: true }));
-    const o = await Promise.race([next, aborted]);
+    let timer: NodeJS.Timeout | undefined;
+    const handoff = new Promise<"handoff">((res) => (timer = setTimeout(() => res("handoff"), this.handoffMs)));
+    const o = await Promise.race([next, aborted, this.detached(a), handoff]);
+    clearTimeout(timer);
+    if (o === "handoff" || (o === null && a.sub.run.background)) {
+      this.backgroundAgent(a.sub.run.id);
+      return this.movedOutput(a);
+    }
     if (!o) return { text: "Interrupted while waiting for the agent.", isError: true };
     this.onAgentOutcome(a, o);
     return { text: a.sub.describe(o, a.description), isError: o.kind === "error" || o.kind === "stopped" };

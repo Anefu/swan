@@ -157,3 +157,23 @@ describe("forkMessages", () => {
     expect((f[1].content as ContentBlockParam[]).map((b) => b.type)).toEqual(["text", "tool_use"]);
   });
 });
+
+describe("moving a foreground agent to the background", () => {
+  it("marks it background, tells it so, and refuses once it ended or was already there", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const seen: MessageParam[][] = [];
+    const h = host([{ tool: { name: "echo", input: {} } }, { text: "done" }], seen);
+    const first = h.runTurn;
+    h.runTurn = async (r) => (seen.length === 0 && (await gate), first(r));
+    const a = make(h);
+    a.start();
+    expect(a.toBackground()).toBe(true);
+    expect(a.run.background).toBe(true);
+    expect(a.toBackground()).toBe(false);
+    release();
+    expect(await a.next()).toMatchObject({ kind: "report", text: "done" });
+    expect(JSON.stringify(seen[1])).toContain("You now run in the background");
+    expect(a.toBackground()).toBe(false);
+  });
+});

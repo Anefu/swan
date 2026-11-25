@@ -136,6 +136,14 @@ export class SubAgent {
     return "queued";
   }
 
+  /** The user moved this foreground agent to the background; false when it already ended or was there. */
+  toBackground(): boolean {
+    if (this.ended || this.run.background) return false;
+    this.set({ background: true });
+    this.steering.push("You now run in the background while the other agent continues; it may send you new instructions, which arrive with your tool results.");
+    return true;
+  }
+
   stop() {
     if (this.ended) return;
     this.abort.abort();
