@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandPrefix, PermissionPolicy, splitCommand } from "./permissions.js";
+import { commandPrefix, commandSegments, PermissionPolicy, splitCommand } from "./permissions.js";
 import type { ToolDef } from "./tools.js";
 
 const tool = (name: string, primary?: string): ToolDef =>
@@ -22,6 +22,24 @@ describe("PermissionPolicy", () => {
     expect(p.evaluate(bash, { command: "git status --short" }).mode).toBe("allow");
     for (const cmd of ["git status; rm -rf /", "git status && curl x", "git status | sh", "git status $(id)", "git status `id`", "git status\nrm x"])
       expect(p.evaluate(bash, { command: cmd }).mode).toBe("ask");
+  });
+
+  it("denies a command however it is chained, wrapped or written", () => {
+    const p = policy({ default: "allow", allow: ["bash(set *)"], deny: ["bash(git push*)"] });
+    const lines = [
+      "git push master", "set -euo pipefail; git push master", "set -euo pipefail\ngit push origin master", "git push origin $BRANCH",
+      "bash -c 'git push'", "sh -lc \"cd x && git push\"", "env FOO=1 git push", "FOO=1 git push", "sudo -E git push", "(git push)", "x=$(git push)",
+      "echo `git push`", "{ git push; }", "  git   push origin", "/usr/bin/git push", "git -C repo push", "git --no-pager push", "echo hi | xargs -r git push",
+      "time git push", "nohup git push &", "timeout 30 git push", "if git push; then echo ok; fi", "! git push", "\\git push",
+    ];
+    for (const cmd of lines) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("deny");
+    for (const cmd of ["git status", "set -euo pipefail\ngit status", "echo push", "git pull", "gitpush"]) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("allow");
+  });
+
+  it("asks for a command however it is wrapped", () => {
+    const p = policy({ default: "allow", ask: ["kubectl delete *"] });
+    expect(p.evaluate(bash, { command: "set -e\nkubectl -n prod delete pod x" }).mode).toBe("ask");
+    expect(p.evaluate(bash, { command: "kubectl get pods" }).mode).toBe("allow");
   });
 
   it("still denies chained commands that match a deny rule", () => {
@@ -136,5 +154,14 @@ describe("what an approval card offers for a command", () => {
     for (const cmd of ["ls", "ls src", "npm test", "npm test -- --watch", "cd app && npm test && ls -la"]) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("allow");
     for (const cmd of ["npm install x", "lsof -i", "ls && rm -rf ~", "ls $(rm -rf ~)"]) expect(p.evaluate(bash, { command: cmd }).mode, cmd).toBe("ask");
     expect(policy({ deny: ["ls *"] }, rules).evaluate(bash, { command: "ls src" }).mode).toBe("deny");
+  });
+});
+
+describe("commandSegments", () => {
+  it("finds every command a line could run", () => {
+    expect(commandSegments("set -euo pipefail\nFOO=1 sudo /usr/bin/git -C repo push origin")).toEqual(
+      expect.arrayContaining(["set -euo pipefail", "git -C repo push origin", "git push origin"]),
+    );
+    expect(commandSegments("bash -c 'make && make install'")).toEqual(["make", "make install"]);
   });
 });

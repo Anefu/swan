@@ -55,6 +55,57 @@ const SUBCOMMANDS = new Set([
   ...["aws", "gh", "gcloud", "az", "pip", "pip3", "uv", "poetry", "brew", "apt", "apt-get", "dotnet", "mvn", "gradle"],
 ]);
 
+// Programs that run the command after them (and their own options): deny and ask rules look past them.
+const WRAPPERS = new Set([
+  ...["sudo", "doas", "env", "command", "builtin", "exec", "eval", "time", "nohup", "nice", "ionice", "timeout", "stdbuf", "setsid", "xargs", "watch", "unbuffer"],
+  ...["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"],
+]);
+// Shell words that come before a command: `if git push; then`, `! git push`.
+const KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"]);
+
+/**
+ * Every command a line could run, for deny and ask rules: generous where splitCommand is strict, so
+ * a rule can't be stepped around. Splits at separators, line breaks, subshells and substitutions
+ * even inside quotes; drops quotes and escapes; looks past wrappers (`sudo`, `env`, `bash -c`,
+ * `xargs`, `VAR=1 …`), keywords and paths (`/usr/bin/git`); and adds the command without its
+ * leading options (`git -C repo push` is also `git push`). Over-matching only makes a deny or ask
+ * rule apply more often.
+ */
+export function commandSegments(command: string): string[] {
+  const out = new Set<string>();
+  for (const raw of command.replace(/['"\\]/g, "").split(/\$\(|[;\n\r&|(){}`]/)) {
+    let words = raw.trim().split(/\s+/).filter(Boolean);
+    for (;;) {
+      const w = words[0];
+      if (w === undefined) break;
+      if (KEYWORDS.has(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) words = words.slice(1);
+      else if (WRAPPERS.has(w.replace(/^.*\//, ""))) {
+        words = words.slice(1);
+        // The wrapper's own options, assignments (env) and numbers (timeout 10, nice -n 5).
+        while (words[0] !== undefined && (/^-/.test(words[0]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^\d+(\.\d+)?[smhd]?$/.test(words[0]))) words = words.slice(1);
+      } else break;
+    }
+    if (!words.length) continue;
+    words[0] = words[0]!.replace(/^.*\//, "") || words[0]!;
+    out.add(words.join(" "));
+    // Leading options dropped, alone and with the value after each.
+    let i = 1;
+    const flagsOnly: string[] = [];
+    const withValues: string[] = [];
+    while (i < words.length && words[i]!.startsWith("-")) {
+      flagsOnly.push(words[i]!);
+      withValues.push(words[i]!);
+      if (!words[i]!.includes("=") && i + 1 < words.length && !words[i + 1]!.startsWith("-")) withValues.push(words[++i]!);
+      i++;
+    }
+    if (flagsOnly.length) {
+      out.add([words[0], ...words.slice(1).filter((w, k) => !(k < flagsOnly.length && w === flagsOnly[k]))].join(" "));
+      out.add([words[0], ...words.slice(1 + withValues.length)].join(" "));
+    }
+  }
+  return [...out];
+}
+
 /** The prefix an approval card can allow with any arguments ("ls", "npm test"), or null. */
 export function commandPrefix(part: string): string | null {
   const [program, sub] = part.trim().split(/\s+/);
@@ -94,8 +145,9 @@ function parseRule(raw: string): Rule {
  * Rules: deny > allow > ask > default. A rule is a tool-name glob (`mcp__github__*`),
  * `tool(argGlob)` matched against the tool's primary argument, e.g. `bash(git status*)`, or a
  * command pattern on its own (`cd *`). A command line that joins several commands is allowed only
- * when every part matches an allow rule, and denied when any part matches a deny rule. Allow rules
- * never match a line Swan cannot split safely (see splitCommand).
+ * when every part matches an allow rule, and denied (or asked) when any command it could run matches
+ * a deny (or ask) rule, however it's wrapped or written (see commandSegments). Allow rules never
+ * match a line Swan cannot split safely (see splitCommand).
  */
 export class PermissionPolicy {
   private deny: Rule[];
@@ -124,6 +176,12 @@ export class PermissionPolicy {
     return PermissionPolicy.argMatches(rule, arg) || (!!parts && parts.some((p) => PermissionPolicy.argMatches(rule, p)));
   }
 
+  /** hits() for a command line: also every command it could run (commandSegments). */
+  private hitsCommand(rule: Rule, tool: ToolDef, arg: string | undefined, parts: string[] | null, segments: string[]): boolean {
+    if (this.hits(rule, tool, arg, parts)) return true;
+    return rule.arg !== undefined && !rule.exact && wildcardMatch(tool.name, rule.name) && segments.some((p) => PermissionPolicy.argMatches(rule, p));
+  }
+
   /** allow: rules covering the call, or null. A command line needs a rule for every part. */
   private allowedBy(tool: ToolDef, arg: string | undefined, parts: string[] | null): Rule[] | null {
     const named = this.allow.filter((r) => wildcardMatch(tool.name, r.name));
@@ -149,10 +207,11 @@ export class PermissionPolicy {
   evaluate(tool: ToolDef, input: Record<string, unknown> | null): Evaluation {
     const arg = input ? tool.primaryArg?.(input) : undefined;
     const parts = tool.name === "bash" && arg !== undefined ? splitCommand(arg) : null;
-    for (const r of this.deny) if (this.hits(r, tool, arg, parts)) return { mode: "deny", rule: `deny: ${r.raw}` };
+    const segments = tool.name === "bash" && arg !== undefined ? commandSegments(arg) : [];
+    for (const r of this.deny) if (this.hitsCommand(r, tool, arg, parts, segments)) return { mode: "deny", rule: `deny: ${r.raw}` };
     const allowed = this.allowedBy(tool, arg, parts);
     if (allowed) return { mode: "allow", rule: `allow: ${allowed.map((r) => r.raw).join(", ")}` };
-    for (const r of this.ask) if (this.hits(r, tool, arg, parts)) return { mode: "ask", rule: `ask: ${r.raw}`, ...this.commandHelp(parts) };
+    for (const r of this.ask) if (this.hitsCommand(r, tool, arg, parts, segments)) return { mode: "ask", rule: `ask: ${r.raw}`, ...this.commandHelp(parts) };
     return { mode: this.cfg.default, rule: `default: ${this.cfg.default}`, ...(this.cfg.default === "ask" ? this.commandHelp(parts) : {}) };
   }
 
