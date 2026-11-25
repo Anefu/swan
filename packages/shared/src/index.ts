@@ -284,6 +284,7 @@ export interface EgressEvent {
   denied?: { credential: string; operation: string; rule: string | null }[]; // sent without the credential
   reason?: string; // why blocked
   via?: "proxy"; // through the company proxy (config.yaml `proxy`)
+  dns?: "proxy"; // the name didn't resolve here and the company proxy resolved it (`proxy.remoteDns`): its address wasn't checked
   internal?: boolean; // to an address on a company network (a persona's internal host)
   durationMs?: number;
   bytesUp?: number;

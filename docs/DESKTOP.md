@@ -100,7 +100,12 @@ A complete `config.yaml`, `secrets.yaml` and persona for this setup: [examples/r
 Agents' traffic: Swan's egress proxy applies a persona's hosts and credential rules as usual,
 resolves the name on this Mac and checks the address, then asks the company proxy to connect by
 name. A name that only the company proxy can resolve is refused, since Swan checks every address
-before connecting.
+before connecting, unless you set `remoteDns: true` (`proxy: { url: …, remoteDns: true }`), for
+machines whose only way out is the proxy. Then a name that doesn't resolve here goes to the proxy by
+name and the proxy resolves it. The trade-off: Swan can't check those addresses, so the proxy decides
+where they go, and the audit log marks those requests `dns: proxy`. Names that do resolve here are
+still checked, `noProxy` hosts still need DNS here, and local names (`localhost`, `.local`,
+`.internal`) are still refused.
 
 Internal hosts: agents reach a private address (`10.x`, `172.16–31.x`, `192.168.x`, `fc00::/7`)
 only for hosts the persona lists in Settings → Allowed hosts → On your company network

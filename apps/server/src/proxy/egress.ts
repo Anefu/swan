@@ -110,20 +110,27 @@ export interface Destination {
   address: string;
   port: number;
   internal?: boolean; // on a company range
+  remoteDns?: boolean; // not resolved here: the company proxy resolves it, so its address is unchecked
 }
 
 /**
  * Resolve once on this computer, check every address and pin the first, so a DNS answer cannot
  * change between check and connect. Company ranges only when the persona lists the host as
  * internal; loopback, link-local, CGNAT, reserved space, Swan's and Podman's networks and this
- * computer's own addresses never.
+ * computer's own addresses never. With proxyResolves (`proxy.remoteDns`, and the host goes through
+ * the proxy), a name that doesn't resolve here goes to the proxy by name for it to resolve and
+ * police; a name that does resolve here is still checked.
  */
-export async function resolveChecked(host: string, port: number, opts: { internal: boolean; own?: net.BlockList; lookup?: Lookup }): Promise<Destination> {
+export async function resolveChecked(host: string, port: number, opts: { internal: boolean; own?: net.BlockList; lookup?: Lookup; proxyResolves?: boolean }): Promise<Destination> {
   if (isLocalName(host) || (!opts.internal && (host.endsWith(".internal") || host.endsWith(".local"))))
     throw new Error(`${host} is a local name, not reachable from the sandbox`);
   let addrs: string[] = [host];
   if (!net.isIP(host)) addrs = await (opts.lookup ?? systemLookup)(host).catch(() => []);
-  if (addrs.length === 0) throw new Error(`${host} does not resolve on this computer`);
+  if (addrs.length === 0) {
+    // Behind a proxy that is the only way out, names may resolve only there: it looks them up.
+    if (opts.proxyResolves) return { address: host, port, remoteDns: true, ...(opts.internal ? { internal: true } : {}) };
+    throw new Error(`${host} does not resolve on this computer`);
+  }
   const mine = ownAddresses();
   for (const a of addrs) {
     if (inList(NEVER, a) || inList(mine, a) || (opts.own && inList(opts.own, a))) throw new Error(`${host} resolves to private address ${a}`);
@@ -342,7 +349,7 @@ export interface EgressOptions {
   /** Tests only: DNS answers. The address checks still apply. */
   lookup?: Lookup;
   /** config.yaml `proxy`: agents' traffic goes through it too, except hosts in noProxy. */
-  upstreamProxy?: { url: string; noProxy: string[] };
+  upstreamProxy?: { url: string; noProxy: string[]; remoteDns?: boolean };
   /** Swan's own networks in CIDR notation (runtime.subnet), never reachable. */
   ownSubnets?: string[];
 }
@@ -357,7 +364,7 @@ export class EgressProxy extends TypedEmitter<Events> {
   private resolveHook: EgressOptions["resolve"];
   private lookup: Lookup | undefined;
   private own: net.BlockList;
-  private proxy: { url: URL; noProxy: string[]; agent: TunnelAgent } | null = null;
+  private proxy: { url: URL; noProxy: string[]; remoteDns: boolean; agent: TunnelAgent } | null = null;
 
   /** An unlisted public host on 80/443: resolves true when the person allowed it. */
   asker: ((s: ProxySession, host: string, port: number) => Promise<boolean>) | null = null;
@@ -381,7 +388,7 @@ export class EgressProxy extends TypedEmitter<Events> {
     this.own = subnetList(opts.ownSubnets ?? []);
     if (opts.upstreamProxy) {
       const url = new URL(opts.upstreamProxy.url);
-      this.proxy = { url, noProxy: opts.upstreamProxy.noProxy, agent: new TunnelAgent(url, { keepAlive: true, maxSockets: 64 }) };
+      this.proxy = { url, noProxy: opts.upstreamProxy.noProxy, remoteDns: opts.upstreamProxy.remoteDns ?? false, agent: new TunnelAgent(url, { keepAlive: true, maxSockets: 64 }) };
     }
     this.server.on("connect", (req, socket: net.Socket, head) => void this.onConnect(req, socket, head));
     this.server.on("request", (req, res) => void this.onPlainHttp(req, res));
@@ -454,7 +461,7 @@ export class EgressProxy extends TypedEmitter<Events> {
   private destination(s: ProxySession, host: string, port: number): Promise<Destination> {
     if (this.resolveHook) return this.resolveHook(host, port);
     const internal = s.internalHosts.some((p) => hostMatches(host, p.split(":")[0]!));
-    return resolveChecked(host, port, { internal, own: this.own, lookup: this.lookup });
+    return resolveChecked(host, port, { internal, own: this.own, lookup: this.lookup, proxyResolves: !!this.proxy?.remoteDns && this.via(host, port) !== null });
   }
 
   /** The company proxy to go through for host:port, or null to connect directly. */
@@ -463,8 +470,8 @@ export class EgressProxy extends TypedEmitter<Events> {
   }
 
   /** How a request went out, for its audit event. */
-  private route(host: string, port: number, dest: Destination): Pick<EgressEvent, "via" | "internal"> {
-    return { ...(this.via(host, port) ? { via: "proxy" as const } : {}), ...(dest.internal ? { internal: true } : {}) };
+  private route(host: string, port: number, dest: Destination): Pick<EgressEvent, "via" | "dns" | "internal"> {
+    return { ...(this.via(host, port) ? { via: "proxy" as const } : {}), ...(dest.remoteDns ? { dns: "proxy" as const } : {}), ...(dest.internal ? { internal: true } : {}) };
   }
 
   /** decide(), but an unlisted public host waits for the person instead of failing outright. */

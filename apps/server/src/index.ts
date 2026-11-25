@@ -81,7 +81,7 @@ async function main() {
 
   const ca = await CertAuthority.load();
   const proxy = new EgressProxy(connections, ca, {
-    upstreamProxy: settings.proxy ? { url: settings.proxy.url, noProxy: settings.proxy.noProxy } : undefined,
+    upstreamProxy: settings.proxy ? { url: settings.proxy.url, noProxy: settings.proxy.noProxy, remoteDns: settings.proxy.remoteDns } : undefined,
     ownSubnets: [settings.runtime.subnet],
   });
   settings.proxyPort = await proxy.listen(await choosePort(settings.proxyPort, portFallback));

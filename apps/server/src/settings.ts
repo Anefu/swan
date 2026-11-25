@@ -98,6 +98,8 @@ export const SettingsSchema = z.object({
       // Model calls, http MCP servers, the Copilot runtime, connection wrappers, the image build and agents' traffic use it.
       url: HttpUrl.refine((u) => !/^https?:\/\/[^/]*@/.test(u), "a proxy that needs a username and password is not supported (config.yaml is not for secrets)"),
       noProxy: z.array(z.string().regex(/^[^\s,]+$/, "expected a host or .domain")).default([]), // reached directly; localhost always is
+      // Names that don't resolve here are resolved by the proxy (for machines whose only way out is the proxy).
+      remoteDns: z.boolean().default(false),
     })
     .optional(),
   caFiles: z.array(z.string()).default([]), // extra root certificates (PEM), trusted by Swan and inside the sandbox
@@ -143,7 +145,7 @@ defaultModel: { provider: anthropic, id: claude-opus-5-5 }
 # Extra directories to load skills from (each child dir with a SKILL.md is a skill)
 skillDirs: []
 # Behind a proxy or internal mirrors (e.g. an Artifactory), uncomment and adjust (docs/DESKTOP.md):
-# proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }
+# proxy: { url: http://proxy.example.com:8080, noProxy: [.example.com] }   # remoteDns: true if names resolve only at the proxy
 # caFiles: [~/certs/company-root.pem]
 # mirrors:
 #   baseImage: artifactory.example.com/docker-remote/library/node:22-bookworm-slim

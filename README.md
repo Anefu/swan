@@ -240,7 +240,7 @@ you close your laptop. Install the server there, start it, and connect the Mac a
 runtime:
   type: workspace        # run commands directly in the workspace instead of a Podman container each
   passEnv: [GOPATH]      # extra variables commands get from Swan's environment (never tokens or keys)
-proxy: { url: http://proxy.internal:3128 }   # your workspace's proxy, if it has one
+proxy: { url: http://proxy.internal:3128, remoteDns: true }   # your workspace's proxy, if it has one
 awayAfterSeconds: 60     # no Swan window for this long: you're away
 ```
 
@@ -252,6 +252,8 @@ awayAfterSeconds: 60     # no Swan window for this long: you're away
 - **Swan's proxy still applies.** Commands get `HTTPS_PROXY` pointing at Swan's proxy, which
   forwards to the `proxy` above. Website approvals, per-site rules, connections and swan-tool work
   as on the Mac, and commands trust Swan's certificate through `SSL_CERT_FILE` and friends.
+  If the workspace can't resolve public names itself, `remoteDns: true` lets the proxy resolve them;
+  Swan then can't check those addresses, so the proxy decides where they go.
 - **While you're away**, anything that would ask you follows each persona's `unattended` rules, as
   in a scheduled run, including asks that were waiting when you left. Allowed calls go ahead; the
   rest are refused and the agent works around them. When a window connects again, Swan asks you.

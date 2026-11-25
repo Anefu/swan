@@ -161,6 +161,8 @@ describe("EgressProxy through a company proxy", () => {
   let hooked: EgressProxy; // test resolve hook, to reach the local echo server directly
   let checkedPort: number;
   let hookedPort: number;
+  let remote: EgressProxy; // proxy.remoteDns on
+  let remotePort: number;
   const dnsAnswers: Record<string, string[]> = {
     "public.test": ["93.184.216.34"],
     "refused.test": ["93.184.216.35"],
@@ -180,7 +182,7 @@ describe("EgressProxy through a company proxy", () => {
     echoServer = net.createServer((s) => s.on("error", () => {}).pipe(s));
     await new Promise<void>((r) => echoServer.listen(0, "127.0.0.1", r));
     echoPort = (echoServer.address() as AddressInfo).port;
-    company = await startCompanyProxy({ "public.test:443": echoPort, "jira.corp.test:443": echoPort, "via.test:443": echoPort });
+    company = await startCompanyProxy({ "public.test:443": echoPort, "jira.corp.test:443": echoPort, "via.test:443": echoPort, "nowhere.test:443": echoPort });
     const conns = new ConnectionManager(new SecretStore(), { providers: {} } as unknown as Settings);
     const ca = await CertAuthority.load();
     checked = new EgressProxy(conns, ca, { lookup: async (h) => dnsAnswers[h] ?? [], upstreamProxy: { url: company.url, noProxy: [] } });
@@ -189,10 +191,14 @@ describe("EgressProxy through a company proxy", () => {
     hooked = new EgressProxy(conns, ca, { resolve: async () => ({ address: "127.0.0.1", port: echoPort }), upstreamProxy: { url: company.url, noProxy: [".direct.test"] } });
     hookedPort = await hooked.listen(0);
     hooked.register(session("s3", ["a.direct.test", "via.test"], []));
+    remote = new EgressProxy(conns, ca, { lookup: async (h) => dnsAnswers[h] ?? [], upstreamProxy: { url: company.url, noProxy: [".direct.test"], remoteDns: true } });
+    remotePort = await remote.listen(0);
+    remote.register(session("s4", ["nowhere.test", "sneaky.test", "gone.direct.test", "printer.local"], []));
   });
   afterAll(() => {
     checked?.close();
     hooked?.close();
+    remote?.close();
     company?.close();
     echoServer?.close();
   });
@@ -227,9 +233,25 @@ describe("EgressProxy through a company proxy", () => {
     for (const h of ["sneaky.test", "metadata.corp.test", "tailnet.corp.test"]) expect(company.seen.join("\n")).not.toContain(h);
   });
 
-  it("refuses names that only the proxy could resolve", async () => {
+  it("refuses names that only the proxy could resolve, with remoteDns off", async () => {
     expect(await tunnel(checkedPort, "nowhere.test:443", "s2:t0ken")).toMatchObject({ status: 403, reason: "nowhere.test does not resolve on this computer" });
     expect(company.seen.join("\n")).not.toContain("nowhere.test");
+  });
+
+  it("with remoteDns, lets the proxy resolve names that don't resolve here", async () => {
+    const t = await tunnel(remotePort, "nowhere.test:443", "s4:t0ken");
+    expect(t.status).toBe(200);
+    expect(await echo(t.socket!, "far")).toBe("far");
+    t.socket!.destroy();
+    expect(company.seen).toContain("CONNECT nowhere.test:443");
+    expect(await lastEvent(remote, "s4", "nowhere.test")).toMatchObject({ decision: "tunneled", via: "proxy", dns: "proxy" });
+  });
+
+  it("with remoteDns, still checks names that resolve here and refuses unresolvable noProxy names", async () => {
+    expect(await tunnel(remotePort, "sneaky.test:443", "s4:t0ken")).toMatchObject({ status: 403, reason: expect.stringContaining("On your company network") });
+    expect(await tunnel(remotePort, "gone.direct.test:443", "s4:t0ken")).toMatchObject({ status: 403, reason: "gone.direct.test does not resolve on this computer" });
+    expect(await tunnel(remotePort, "printer.local:443", "s4:t0ken")).toMatchObject({ status: 403, reason: expect.stringContaining("local name") });
+    for (const h of ["sneaky.test", "gone.direct.test", "printer.local"]) expect(company.seen.join("\n")).not.toContain(h);
   });
 
   it("never offers an unlisted host on a private network in an ask card", async () => {

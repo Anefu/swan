@@ -64,13 +64,13 @@ describe("network settings", () => {
   });
 
   it("keeps localhost direct whatever noProxy says", () => {
-    expect(noProxyList({ url: "http://p.example.com:8080", noProxy: [".corp.example.com"] })).toEqual(["localhost", "127.0.0.1", "::1", ".corp.example.com"]);
+    expect(noProxyList({ url: "http://p.example.com:8080", noProxy: [".corp.example.com"], remoteDns: false })).toEqual(["localhost", "127.0.0.1", "::1", ".corp.example.com"]);
   });
 
   it("sends fetch through the proxy, trusting the extra CA, and keeps localhost direct", async () => {
     const extraCaFile = path.join(dir, "extra-roots.pem");
     const proxyUrl = `http://127.0.0.1:${proxyPort}`;
-    await applyNetwork({ proxy: { url: proxyUrl, noProxy: [] } }, await loadExtraCas([caFile]), extraCaFile);
+    await applyNetwork({ proxy: { url: proxyUrl, noProxy: [], remoteDns: false } }, await loadExtraCas([caFile]), extraCaFile);
 
     const res = await fetch("https://upstream.test/");
     expect(await res.text()).toBe("upstream");
